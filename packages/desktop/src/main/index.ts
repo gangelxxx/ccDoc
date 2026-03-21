@@ -1,0 +1,42 @@
+import { app, BrowserWindow } from "electron";
+
+// Suppress Chromium GPU cache errors on Windows
+app.commandLine.appendSwitch("disable-gpu-shader-disk-cache");
+
+import { initServices, setMainWindowGetter, getAppDb, getProjectDbsMap } from "./services";
+import { createWindow, getMainWindow } from "./window";
+import { registerAllIpcHandlers } from "./ipc";
+import { createSettingsService } from "./services/settings.service";
+
+app.whenReady().then(async () => {
+  await initServices();
+  setMainWindowGetter(getMainWindow);
+
+  // Settings service must be created after ready (safeStorage requires it)
+  const settingsService = createSettingsService();
+
+  registerAllIpcHandlers(settingsService);
+  createWindow();
+
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+
+  // Flush settings to disk on quit (idempotent via dirty flags)
+  app.on("before-quit", () => settingsService.flushSync());
+  app.on("will-quit", () => settingsService.flushSync());
+});
+
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") app.quit();
+});
+
+app.on("before-quit", () => {
+  // Close all cached project DB connections
+  const projectDbs = getProjectDbsMap();
+  for (const [, { db }] of projectDbs) {
+    try { db.close(); } catch { /* ignore */ }
+  }
+  projectDbs.clear();
+  try { getAppDb()?.close(); } catch { /* ignore */ }
+});

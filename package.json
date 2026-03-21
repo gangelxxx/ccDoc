@@ -1,0 +1,42 @@
+{
+  "name": "ccdoc",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Desktop documentation app for software projects",
+  "scripts": {
+    "dev": "node scripts/dev.js",
+    "build": "cd packages/core && npx tsup && cd ../mcp-server && npx tsup && cd ../desktop && npx electron-vite build",
+    "build:core": "cd packages/core && npx tsup",
+    "build:mcp": "cd packages/mcp-server && npx tsup",
+    "build:desktop": "cd packages/desktop && npx electron-vite build",
+    "package": "bash scripts/package.sh",
+    "package:build": "bash scripts/package.sh --build",
+    "release": "bash scripts/package.sh --release",
+    "release:win": "bash scripts/package.sh --release --win",
+    "release:mac": "bash scripts/package.sh --release --mac",
+    "release:linux": "bash scripts/package.sh --release --linux",
+    "github": "bash scripts/github-release.sh"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "tree-sitter",
+      "tree-sitter-typescript",
+      "tree-sitter-javascript",
+      "tree-sitter-python",
+      "tree-sitter-rust",
+      "tree-sitter-go",
+      "onnxruntime-node",
+      "protobufjs",
+      "libsql",
+      "electron",
+      "esbuild",
+      "sharp"
+    ]
+  },
+  "devDependencies": {
+    "cross-env": "^10.1.0"
+  }
+}

@@ -1,0 +1,125 @@
+// TreeView utility types, constants and pure functions
+
+export interface TreeNode {
+  id: string;
+  parent_id: string | null;
+  title: string;
+  type: string;
+  icon: string | null;
+  children: TreeNode[];
+}
+
+export type DropPosition = "before" | "inside" | "after";
+
+export interface DragState {
+  id: string;
+  type: string;
+}
+
+export interface DropState {
+  targetId: string;
+  position: DropPosition;
+  valid: boolean;
+}
+
+export interface ContextState {
+  x: number;
+  y: number;
+  nodeId: string;
+  nodeTitle: string;
+  nodeType: string;
+  /** For idea nodes: all messages completed; for plan sections: linked message completed */
+  ideaCompleted?: boolean;
+  /** For plan sections (section children of idea): the parent idea id */
+  ideaParentId?: string;
+}
+
+// Inline hierarchy rules to avoid importing @ccdoc/core (which pulls Node.js modules into renderer)
+export const ALLOWED_CHILDREN: Record<string, string[]> = {
+  folder: ["folder", "file", "idea", "todo", "kanban", "excalidraw"],
+  file: ["section"],
+  section: ["section"],
+  idea: ["section"],
+};
+
+export const canContainChild = (parentType: string, childType: string): boolean =>
+  ALLOWED_CHILDREN[parentType]?.includes(childType) ?? false;
+
+export const canBeRoot = (type: string): boolean => type === "folder";
+
+export function getAncestorIds(nodes: TreeNode[], targetId: string): Set<string> {
+  const path: string[] = [];
+  const search = (items: TreeNode[]): boolean => {
+    for (const n of items) {
+      if (n.id === targetId) return true;
+      if (n.children.length) {
+        path.push(n.id);
+        if (search(n.children)) return true;
+        path.pop();
+      }
+    }
+    return false;
+  };
+  search(nodes);
+  return new Set(path);
+}
+
+export function findNode(nodes: TreeNode[], id: string): TreeNode | null {
+  for (const n of nodes) {
+    if (n.id === id) return n;
+    if (n.children.length) {
+      const found = findNode(n.children, id);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+export function validateDrop(
+  tree: TreeNode[],
+  dragType: string,
+  dragId: string,
+  targetNode: TreeNode,
+  position: DropPosition,
+): boolean {
+  if (dragId === targetNode.id) return false;
+  if (isDescendant(tree, targetNode.id, dragId)) return false;
+  if (position === "inside") {
+    return canContainChild(targetNode.type, dragType);
+  }
+  // before/after = sibling of target
+  if (targetNode.parent_id === null) {
+    return canBeRoot(dragType);
+  }
+  const parent = findNode(tree, targetNode.parent_id);
+  if (!parent) return false;
+  return canContainChild(parent.type, dragType);
+}
+
+export function computeMoveParams(
+  tree: TreeNode[],
+  targetNode: TreeNode,
+  position: DropPosition,
+): { newParentId: string | null; afterId: string | null } {
+  if (position === "inside") {
+    const lastChild = targetNode.children[targetNode.children.length - 1];
+    return { newParentId: targetNode.id, afterId: lastChild?.id ?? null };
+  }
+  const parentId = targetNode.parent_id;
+  const siblings = parentId ? findNode(tree, parentId)!.children : tree;
+  const targetIndex = siblings.findIndex(s => s.id === targetNode.id);
+  if (position === "before") {
+    return { newParentId: parentId, afterId: targetIndex > 0 ? siblings[targetIndex - 1].id : null };
+  }
+  return { newParentId: parentId, afterId: targetNode.id };
+}
+
+function isDescendant(tree: TreeNode[], nodeId: string, potentialAncestorId: string): boolean {
+  const node = findNode(tree, potentialAncestorId);
+  if (!node) return false;
+  const check = (n: TreeNode): boolean => {
+    if (n.id === nodeId) return true;
+    return n.children.some(check);
+  };
+  return check(node);
+}

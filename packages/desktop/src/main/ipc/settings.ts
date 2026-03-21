@@ -1,0 +1,20 @@
+import { ipcMain } from "electron";
+import type { SettingsService } from "../services/settings.service";
+
+export function registerSettingsIpc(service: SettingsService): void {
+  ipcMain.handle("settings:getAll", () => {
+    return service.getAll();
+  });
+
+  ipcMain.handle("settings:patch", (_e, partial: Record<string, any>) => {
+    service.patch(partial);
+  });
+
+  ipcMain.handle("settings:getSessions", () => {
+    return service.getSessions();
+  });
+
+  ipcMain.handle("settings:saveSessions", (_e, sessions: any[]) => {
+    service.saveSessions(sessions);
+  });
+}

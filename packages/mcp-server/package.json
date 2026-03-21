@@ -1,0 +1,22 @@
+{
+  "name": "@ccdoc/mcp-server",
+  "version": "0.2.0",
+  "private": true,
+    "bin": {
+    "ccdoc-mcp": "dist/index.js",
+    "ccdoc-install": "dist/install.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup src/index.ts --format esm --watch"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@ccdoc/core": "workspace:*",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.3.6",
+    "typescript": "^5.7.3"
+  }
+}

@@ -1,0 +1,51 @@
+import type { SliceCreator } from "../types.js";
+
+export interface SearchSlice {
+  searchResults: { id: string; title: string; score: number }[];
+  search: (query: string) => Promise<void>;
+
+  ftsQuery: string;
+  ftsResults: { id: string; title: string; titleHighlighted: string; snippet: string; score: number }[];
+  ftsLoading: boolean;
+  setFtsQuery: (query: string) => void;
+  searchFts: (query: string) => Promise<void>;
+}
+
+export const createSearchSlice: SliceCreator<SearchSlice> = (set, get) => ({
+  searchResults: [],
+  search: async (query) => {
+    const { currentProject } = get();
+    if (!currentProject) return;
+    if (!query.trim()) {
+      set({ searchResults: [] });
+      return;
+    }
+    try {
+      const results = await window.api.search(currentProject.token, query);
+      set({ searchResults: results });
+    } catch (e: any) {
+      get().addToast("error", "Search failed", e.message);
+    }
+  },
+
+  ftsQuery: "",
+  ftsResults: [],
+  ftsLoading: false,
+  setFtsQuery: (query: string) => set({ ftsQuery: query }),
+  searchFts: async (query) => {
+    const { currentProject } = get();
+    if (!currentProject) return;
+    if (!query.trim()) {
+      set({ ftsResults: [], ftsLoading: false });
+      return;
+    }
+    set({ ftsLoading: true });
+    try {
+      const results = await window.api.searchFts(currentProject.token, query);
+      set({ ftsResults: results, ftsLoading: false });
+    } catch (e: any) {
+      set({ ftsLoading: false });
+      get().addToast("error", "Search failed", e.message);
+    }
+  },
+});

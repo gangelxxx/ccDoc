@@ -1,0 +1,295 @@
+import { useState, useRef, useEffect } from "react";
+import type { TreeNode, DragState, DropState, DropPosition } from "./tree-utils.js";
+
+export interface TreeItemProps {
+  node: TreeNode;
+  depth: number;
+  activeId: string | null;
+  editingId: string | null;
+  expandedNodes: Set<string>;
+  onToggleExpanded: (id: string) => void;
+  onExpandNode: (id: string) => void;
+  onSelect: (id: string) => void;
+  onDelete: (id: string, type: string) => void;
+  onRename: (id: string, title: string) => void;
+  onStartEdit: (id: string | null) => void;
+  onCreateChild: (parentId: string, parentType?: string) => void;
+  onContextMenu: (x: number, y: number, node: TreeNode) => void;
+  dragItem: DragState | null;
+  dropTarget: DropState | null;
+  onDragStart: (node: TreeNode) => void;
+  onDragEnd: () => void;
+  onDragOver: (targetId: string, position: DropPosition) => void;
+  onDrop: (targetId: string, position: DropPosition) => void;
+  onFileDrop?: (filePaths: string[], targetFolderId?: string) => void;
+  hasImportableFiles?: (e: React.DragEvent) => boolean;
+  getImportableFilePaths?: (e: React.DragEvent) => string[];
+}
+
+export function TreeItem({
+  node,
+  depth,
+  activeId,
+  editingId,
+  expandedNodes,
+  onToggleExpanded,
+  onExpandNode,
+  onSelect,
+  onDelete,
+  onRename,
+  onStartEdit,
+  onCreateChild,
+  onContextMenu,
+  dragItem,
+  dropTarget,
+  onDragStart,
+  onDragEnd,
+  onDragOver,
+  onDrop,
+  onFileDrop,
+  hasImportableFiles,
+  getImportableFilePaths,
+}: TreeItemProps) {
+  const expanded = expandedNodes.has(node.id);
+  const [editValue, setEditValue] = useState(node.title);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const expandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dragStartPos = useRef<{ x: number; y: number } | null>(null);
+
+  const isActive = node.id === activeId;
+  const isEditing = editingId === node.id;
+  const hasChildren = node.children.length > 0;
+  const isFolder = node.type === "folder";
+  const isFile = node.type === "file";
+  const isContainer = isFolder || isFile;
+  const isSection = node.type === "section";
+  const canAddChild = isContainer || isSection;
+  const canCollapse = isContainer || hasChildren;
+
+  useEffect(() => {
+    if (isEditing) {
+      setEditValue(node.title);
+      setTimeout(() => {
+        inputRef.current?.focus();
+        inputRef.current?.select();
+      }, 0);
+    }
+  }, [isEditing, node.title]);
+
+  const commitRename = () => {
+    const trimmed = editValue.trim();
+    if (trimmed && trimmed !== node.title) {
+      onRename(node.id, trimmed);
+    }
+    onStartEdit(null);
+  };
+
+  const defaultIcon = isFolder ? (expanded ? "\uD83D\uDCC2" : "\uD83D\uDCC1")
+    : isFile ? "\uD83D\uDCC4"
+    : node.type === "section" ? "\u00A7"
+    : node.type === "idea" ? "\uD83D\uDCA1"
+    : node.type === "excalidraw" ? "\u270F\uFE0F"
+    : node.type === "kanban" ? "\uD83D\uDCCA"
+    : node.type === "todo" ? "\u2611\uFE0F"
+    : "\uD83D\uDCC4";
+  const icon = node.icon || defaultIcon;
+
+  const getDropPosition = (e: React.DragEvent): DropPosition => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const ratio = (e.clientY - rect.top) / rect.height;
+    const isContainerType = node.type === "folder" || node.type === "file" || node.type === "section";
+    if (ratio < 0.25) return "before";
+    if (ratio > 0.75) return "after";
+    if (isContainerType) return "inside";
+    return ratio < 0.5 ? "before" : "after";
+  };
+
+  const isDragging = dragItem?.id === node.id;
+  const isDropTarget = dropTarget?.targetId === node.id;
+  const dropClass = isDropTarget
+    ? `tree-item-drop-${dropTarget.position}${!dropTarget.valid ? " tree-item-drop-invalid" : ""}`
+    : "";
+
+  return (
+    <div>
+      <div
+        className={`tree-item ${isActive ? "active" : ""} ${isDragging ? "tree-item-dragging" : ""} ${dropClass}`}
+        style={{ paddingLeft: 6 + depth * 12 }}
+        tabIndex={0}
+        draggable={!isEditing}
+        onDragStart={(e) => {
+          dragStartPos.current = { x: e.clientX, y: e.clientY };
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("text/plain", node.id);
+          // Delay so the element renders before capture
+          setTimeout(() => onDragStart(node), 0);
+        }}
+        onDragEnd={() => {
+          dragStartPos.current = null;
+          if (expandTimerRef.current) { clearTimeout(expandTimerRef.current); expandTimerRef.current = null; }
+          onDragEnd();
+        }}
+        onDragOver={(e) => {
+          // External file drop on folders
+          if (!dragItem && hasImportableFiles?.(e) && isFolder) {
+            e.preventDefault();
+            e.stopPropagation();
+            e.dataTransfer.dropEffect = "copy";
+            onDragOver(node.id, "inside");
+            return;
+          }
+          e.preventDefault();
+          e.stopPropagation();
+          if (!dragItem || dragItem.id === node.id) return;
+          const pos = getDropPosition(e);
+          // Auto-expand collapsed containers on hover
+          if (pos === "inside" && !expanded && canCollapse) {
+            if (!expandTimerRef.current) {
+              expandTimerRef.current = setTimeout(() => { onExpandNode(node.id); expandTimerRef.current = null; }, 600);
+            }
+          } else if (expandTimerRef.current && pos !== "inside") {
+            clearTimeout(expandTimerRef.current);
+            expandTimerRef.current = null;
+          }
+          onDragOver(node.id, pos);
+        }}
+        onDragLeave={() => {
+          if (expandTimerRef.current) { clearTimeout(expandTimerRef.current); expandTimerRef.current = null; }
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          // External file drop on folder
+          if (!dragItem && isFolder && getImportableFilePaths && onFileDrop) {
+            const paths = getImportableFilePaths(e);
+            if (paths.length) {
+              onFileDrop(paths, node.id);
+              return;
+            }
+          }
+          if (!dragItem || dragItem.id === node.id) return;
+          const pos = getDropPosition(e);
+          onDrop(node.id, pos);
+        }}
+        onClick={() => {
+          onSelect(node.id);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Delete" && !isEditing) {
+            e.preventDefault();
+            onDelete(node.id, node.type);
+          } else if (e.key === "F2" && !isEditing) {
+            e.preventDefault();
+            onStartEdit(node.id);
+          }
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onContextMenu(e.clientX, e.clientY, node);
+        }}
+      >
+        {canCollapse && (
+          <span
+            className="tree-item-toggle"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleExpanded(node.id);
+            }}
+          >
+            {expanded ? "\u25BC" : "\u25B6"}
+          </span>
+        )}
+        {!canCollapse && <span style={{ width: 16, flexShrink: 0 }} />}
+
+        <span
+          className={`tree-item-icon${canCollapse ? " clickable" : ""}`}
+          onClick={canCollapse ? (e: React.MouseEvent) => {
+            e.stopPropagation();
+            onToggleExpanded(node.id);
+          } : undefined}
+        >{icon}</span>
+
+        {isEditing ? (
+          <input
+            ref={inputRef}
+            className="tree-item-title-input"
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitRename();
+              if (e.key === "Escape") onStartEdit(null);
+            }}
+            onBlur={commitRename}
+            onClick={(e) => e.stopPropagation()}
+          />
+        ) : (
+          <span className="tree-item-title">{node.title}</span>
+        )}
+        {!isEditing && isFile && (node as any).summary && (
+          <span className="tree-item-summary-badge" title={(node as any).summary}>S</span>
+        )}
+
+        {!isEditing && (
+          <div className="tree-item-actions">
+            <button
+              className="btn-icon"
+              style={{ width: 20, height: 20, fontSize: 11 }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onContextMenu(e.clientX, e.clientY, node);
+              }}
+              title="More"
+            >
+              {"\u2022\u2022\u2022"}
+            </button>
+            {canAddChild && (
+              <button
+                className="btn-icon"
+                style={{ width: 20, height: 20, fontSize: 11 }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onCreateChild(node.id, node.type);
+                }}
+                title={isSection ? "Add subsection" : isFile ? "Add section" : "Add child"}
+              >
+                +
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {hasChildren && (
+        <div className="tree-children" style={expanded ? undefined : { display: "none" }}>
+          {node.children.map((child) => (
+            <TreeItem
+              key={child.id}
+              node={child}
+              depth={depth + 1}
+              activeId={activeId}
+              editingId={editingId}
+              expandedNodes={expandedNodes}
+              onToggleExpanded={onToggleExpanded}
+              onExpandNode={onExpandNode}
+              onSelect={onSelect}
+              onDelete={onDelete}
+              onRename={onRename}
+              onStartEdit={onStartEdit}
+              onCreateChild={onCreateChild}
+              onContextMenu={onContextMenu}
+              dragItem={dragItem}
+              dropTarget={dropTarget}
+              onDragStart={onDragStart}
+              onDragEnd={onDragEnd}
+              onDragOver={onDragOver}
+              onDrop={onDrop}
+              onFileDrop={onFileDrop}
+              hasImportableFiles={hasImportableFiles}
+              getImportableFilePaths={getImportableFilePaths}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
