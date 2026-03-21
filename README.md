@@ -64,9 +64,20 @@ pnpm dev
 Building a distributable:
 
 ```bash
+# Windows (nsis installer + portable)
 cd packages/desktop
-npx electron-builder
+npx electron-builder --win
+
+# macOS (dmg + zip)
+cd packages/desktop
+npx electron-builder --mac
+
+# Linux (AppImage + deb)
+cd packages/desktop
+npx electron-builder --linux
 ```
+
+> macOS builds must be run on macOS. Cross-compilation from Windows/Linux is not supported by Electron Builder for the mac target.
 
 ## Tech Stack
 
