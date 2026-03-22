@@ -22,7 +22,7 @@ function extractText(node: ProseMirrorNode): string {
       return node.content ? node.content.map(extractText).filter(Boolean).join("\n") : "";
     case "table":
       return extractTableText(node);
-    case "excalidraw": {
+    case "drawing": {
       const name = node.attrs?.name as string;
       return name ? `[schema: ${name}]` : "";
     }

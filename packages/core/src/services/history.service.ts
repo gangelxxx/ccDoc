@@ -73,13 +73,13 @@ export class HistoryService {
       const sanitizedTitle = sanitizeFilename(section.title, section.id);
       const prefix = String(sortIndex++).padStart(2, "0");
       let fileName: string;
-      let excalidrawBlocks: ReturnType<typeof extractExcalidrawBlocks> = [];
+      let drawingBlocks: ReturnType<typeof extractDrawingBlocks> = [];
 
       if (section.type === "folder") {
         fileName = `${prefix}-${sanitizedTitle}/`;
         mkdirSync(join(docsDir, `${prefix}-${sanitizedTitle}`), { recursive: true });
-      } else if (section.type === "excalidraw") {
-        fileName = `${prefix}-${sanitizedTitle}.excalidraw`;
+      } else if (section.type === "drawing") {
+        fileName = `${prefix}-${sanitizedTitle}.drawing`;
         const filePath = join(docsDir, fileName);
         mkdirSync(join(docsDir, fileName, ".."), { recursive: true });
         writeFileSync(filePath, section.content, "utf-8");
@@ -106,7 +106,7 @@ export class HistoryService {
         const filePath = join(docsDir, fileName);
         mkdirSync(join(docsDir, fileName, ".."), { recursive: true });
         writeFileSync(filePath, markdown, "utf-8");
-        excalidrawBlocks = extractExcalidrawBlocks(doc);
+        drawingBlocks = extractDrawingBlocks(doc);
       }
 
       structureSections.push({
@@ -118,7 +118,7 @@ export class HistoryService {
         icon: section.icon,
         tags: [],
         file: fileName,
-        excalidraw_blocks: excalidrawBlocks,
+        drawing_blocks: drawingBlocks,
       });
     }
 
@@ -370,7 +370,7 @@ export class HistoryService {
         const prevContent = prevContents.get(s.id) || "";
         let currentMd = "";
         try {
-          if (s.type === "excalidraw") {
+          if (s.type === "drawing") {
             currentMd = s.content;
           } else if (s.type === "kanban") {
             currentMd = kanbanToMarkdown(JSON.parse(s.content));
@@ -442,7 +442,7 @@ export class HistoryService {
       const prevContent = prevContents.get(s.id) || "";
       let currentMd = "";
       try {
-        if (s.type === "excalidraw") currentMd = s.content;
+        if (s.type === "drawing") currentMd = s.content;
         else if (s.type === "kanban") currentMd = kanbanToMarkdown(JSON.parse(s.content));
         else if (s.type === "idea") currentMd = ideaToPlain(s.content);
         else currentMd = prosemirrorToMarkdown(JSON.parse(s.content));
@@ -492,7 +492,7 @@ export class HistoryService {
           });
           const fileContent = new TextDecoder().decode(fileBlob);
 
-          if (sectionMeta.type === "excalidraw") {
+          if (sectionMeta.type === "drawing") {
             content = fileContent;
           } else if (sectionMeta.type === "kanban") {
             content = JSON.stringify(markdownToKanban(fileContent));
@@ -504,13 +504,13 @@ export class HistoryService {
             // ProseMirror-based (file, section, todo)
             const doc = markdownToProsemirror(fileContent);
 
-            // Re-insert excalidraw blocks (reverse order to preserve positions)
-            if (sectionMeta.excalidraw_blocks.length > 0) {
-              const sorted = [...sectionMeta.excalidraw_blocks].sort((a, b) => b.position - a.position);
+            // Re-insert drawing blocks (reverse order to preserve positions)
+            if (sectionMeta.drawing_blocks.length > 0) {
+              const sorted = [...sectionMeta.drawing_blocks].sort((a, b) => b.position - a.position);
               for (const eb of sorted) {
                 if (doc.content && eb.position <= doc.content.length) {
                   doc.content.splice(eb.position, 0, {
-                    type: "excalidraw",
+                    type: "drawing",
                     attrs: {
                       name: eb.name,
                       elements: eb.elements,
@@ -553,12 +553,12 @@ export class HistoryService {
   }
 }
 
-function extractExcalidrawBlocks(doc: ProseMirrorNode) {
+function extractDrawingBlocks(doc: ProseMirrorNode) {
   const blocks: { name: string; position: number; elements: unknown[]; appState: Record<string, unknown> }[] = [];
   if (!doc.content) return blocks;
 
   doc.content.forEach((node, index) => {
-    if (node.type === "excalidraw" && node.attrs) {
+    if (node.type === "drawing" && node.attrs) {
       blocks.push({
         name: (node.attrs.name as string) || "Untitled",
         position: index,

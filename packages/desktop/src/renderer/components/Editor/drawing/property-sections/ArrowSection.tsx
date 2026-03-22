@@ -11,12 +11,12 @@ export function ArrowSection({ firstEl, updateSelectedProps, hasLines, hasArrows
       {/* Line/Arrow type */}
       {hasLines && (
         <>
-          <div className="excalidraw-sidebar-label">Тип линии</div>
-          <div className="excalidraw-sidebar-row">
+          <div className="drawing-sidebar-label">Тип линии</div>
+          <div className="drawing-sidebar-row">
             {(["sharp", "round", "elbow"] as const).map((t) => (
               <button
                 key={t}
-                className={`excalidraw-tool-btn${firstEl?.arrowType === t ? " active" : ""}`}
+                className={`drawing-tool-btn${firstEl?.arrowType === t ? " active" : ""}`}
                 onClick={() => updateSelectedProps({ arrowType: t })}
                 title={t === "sharp" ? "Прямая" : t === "round" ? "Кривая" : "Ломаная"}
               >
@@ -34,12 +34,12 @@ export function ArrowSection({ firstEl, updateSelectedProps, hasLines, hasArrows
       {/* Arrowheads (arrows only) */}
       {hasArrows && (
         <>
-          <div className="excalidraw-sidebar-label">Конец стрелки</div>
-          <div className="excalidraw-sidebar-row">
+          <div className="drawing-sidebar-label">Конец стрелки</div>
+          <div className="drawing-sidebar-row">
             {([null, "arrow"] as const).map((ah) => (
               <button
                 key={String(ah)}
-                className={`excalidraw-tool-btn${firstEl?.arrowhead === ah ? " active" : ""}`}
+                className={`drawing-tool-btn${firstEl?.arrowhead === ah ? " active" : ""}`}
                 onClick={() => updateSelectedProps({ arrowhead: ah })}
                 title={ah ? "Со стрелкой" : "Без стрелки"}
               >
@@ -53,12 +53,12 @@ export function ArrowSection({ firstEl, updateSelectedProps, hasLines, hasArrows
               </button>
             ))}
           </div>
-          <div className="excalidraw-sidebar-label">Начало стрелки</div>
-          <div className="excalidraw-sidebar-row">
+          <div className="drawing-sidebar-label">Начало стрелки</div>
+          <div className="drawing-sidebar-row">
             {([null, "arrow"] as const).map((ah) => (
               <button
                 key={"start-" + String(ah)}
-                className={`excalidraw-tool-btn${firstEl?.startArrowhead === ah ? " active" : ""}`}
+                className={`drawing-tool-btn${firstEl?.startArrowhead === ah ? " active" : ""}`}
                 onClick={() => updateSelectedProps({ startArrowhead: ah })}
                 title={ah ? "Со стрелкой" : "Без стрелки"}
               >

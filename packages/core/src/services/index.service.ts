@@ -188,7 +188,7 @@ export function extractBody(section: Section): string {
       const data: KanbanData = JSON.parse(section.content);
       return kanbanToPlain(data);
     }
-    if (section.type === "excalidraw") {
+    if (section.type === "drawing") {
       return section.title;
     }
     if (section.type === "idea") {

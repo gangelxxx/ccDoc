@@ -179,6 +179,12 @@ const PROJECT_MIGRATIONS = [
       ALTER TABLE sections ADD COLUMN summary TEXT DEFAULT NULL;
     `,
   },
+  {
+    version: 6,
+    sql: `
+      UPDATE sections SET type = 'drawing' WHERE type = 'excalidraw';
+    `,
+  },
 ];
 
 async function getSchemaVersion(db: Client): Promise<number> {

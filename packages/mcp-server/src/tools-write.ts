@@ -15,13 +15,13 @@ export function registerWriteTools(server: McpServer): void {
 
   server.tool(
     "create_section",
-    "Create a new documentation section. IMPORTANT: always provide meaningful, detailed content for file/section/idea types — never create empty documents. For 'file' type with content, the system automatically splits ## headings into child sections and ### into nested sub-sections. Hierarchy: root → only folder; folder → folder/file/idea/todo/kanban/excalidraw; file → section; section → section.",
+    "Create a new documentation section. IMPORTANT: always provide meaningful, detailed content for file/section/idea types — never create empty documents. For 'file' type with content, the system automatically splits ## headings into child sections and ### into nested sub-sections. Hierarchy: root → only folder; folder → folder/file/idea/todo/kanban/drawing; file → section; section → section.",
     {
       project_token: z.string().uuid().describe("Project UUID token"),
       parent_id: z.string().uuid().nullable().describe("Parent section UUID, or null for root level"),
       title: z.string().describe("Section title"),
       content: z.string().describe("Markdown content for the section body (REQUIRED and must be non-empty for file/section/idea types)"),
-      type: z.enum(["folder", "file", "section", "idea", "excalidraw", "kanban", "todo"]).describe("Section type: folder (container), file (document with sub-sections), section (sub-section of a file), idea, excalidraw, kanban, todo"),
+      type: z.enum(["folder", "file", "section", "idea", "drawing", "kanban", "todo"]).describe("Section type: folder (container), file (document with sub-sections), section (sub-section of a file), idea, drawing, kanban, todo"),
     },
     async ({ project_token, parent_id, title, content, type }) => {
       try {
@@ -88,7 +88,7 @@ export function registerWriteTools(server: McpServer): void {
           await sections.update(section_id, finalTitle, content);
         } else if (titleChanged) {
           // Title-only update — use raw content to avoid lossy markdown round-trip
-          // (kanban, idea, excalidraw store JSON that would be corrupted by markdown conversion)
+          // (kanban, idea, drawing store JSON that would be corrupted by markdown conversion)
           await sections.updateRaw(section_id, finalTitle, current.content);
         }
         const updated = await sections.getById(section_id);
@@ -220,14 +220,14 @@ export function registerWriteTools(server: McpServer): void {
 
   server.tool(
     "bulk_create_sections",
-    "Create multiple sections at once — preferred over multiple create_section calls. IMPORTANT: always provide meaningful, detailed content for file/section/idea types — never create empty documents. For 'file' type with content, the system automatically splits ## headings into child sections and ### into nested sub-sections. Use '$N' as parent_id to reference the Nth section from this batch (0-indexed). Hierarchy: root → only folder; folder → folder/file/idea/todo/kanban/excalidraw; file → section; section → section.",
+    "Create multiple sections at once — preferred over multiple create_section calls. IMPORTANT: always provide meaningful, detailed content for file/section/idea types — never create empty documents. For 'file' type with content, the system automatically splits ## headings into child sections and ### into nested sub-sections. Use '$N' as parent_id to reference the Nth section from this batch (0-indexed). Hierarchy: root → only folder; folder → folder/file/idea/todo/kanban/drawing; file → section; section → section.",
     {
       project_token: z.string().uuid().describe("Project UUID token"),
       sections: z.array(z.object({
         parent_id: z.string().nullable().describe("Parent UUID, null for root, or '$N' to reference Nth section in this batch"),
         title: z.string().describe("Section title"),
         content: z.string().optional().describe("Markdown content (REQUIRED for file, section, idea types)"),
-        type: z.enum(["folder", "file", "section", "idea", "excalidraw", "kanban", "todo"]).describe("Section type"),
+        type: z.enum(["folder", "file", "section", "idea", "drawing", "kanban", "todo"]).describe("Section type"),
       }).refine(
         (s) => s.type === "folder" || (s.content && s.content.trim().length > 0),
         { message: "content is required and must be non-empty for non-folder types" }

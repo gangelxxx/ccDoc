@@ -371,7 +371,7 @@ describe("formatCompactTree", () => {
   });
 
   it("uses correct type icons", () => {
-    const types = ["folder", "file", "section", "idea", "todo", "kanban", "excalidraw"];
+    const types = ["folder", "file", "section", "idea", "todo", "kanban", "drawing"];
     const expected = ["📁", "📄", "§", "💡", "✅", "📋", "🎨"];
     for (let i = 0; i < types.length; i++) {
       const nodes: TreeNode[] = [{ id: "12345678-0000-0000-0000-000000000000", title: "Test", type: types[i], children: [] }];

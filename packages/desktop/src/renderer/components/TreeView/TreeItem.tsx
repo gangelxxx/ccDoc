@@ -88,7 +88,7 @@ export function TreeItem({
     : isFile ? "\uD83D\uDCC4"
     : node.type === "section" ? "\u00A7"
     : node.type === "idea" ? "\uD83D\uDCA1"
-    : node.type === "excalidraw" ? "\u270F\uFE0F"
+    : node.type === "drawing" ? "\u270F\uFE0F"
     : node.type === "kanban" ? "\uD83D\uDCCA"
     : node.type === "todo" ? "\u2611\uFE0F"
     : "\uD83D\uDCC4";

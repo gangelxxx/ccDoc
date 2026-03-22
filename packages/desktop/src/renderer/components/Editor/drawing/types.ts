@@ -1,59 +1,63 @@
-// Drawing engine types and interfaces
+import type { DrawElement, ResizeHandle } from "../drawing-engine.js";
 
-export type ToolType = "selection" | "rectangle" | "ellipse" | "diamond" | "line" | "arrow" | "freedraw" | "text" | "image";
+export interface PointerState {
+  isDown: boolean;
+  startX: number;
+  startY: number;
+  startSceneX: number;
+  startSceneY: number;
+  lastX: number;
+  lastY: number;
+  newElement: DrawElement | null;
+  dragElements: DrawElement[] | null;
+  dragOffsets: { id: string; dx: number; dy: number }[];
+  resizeHandle: ResizeHandle | null;
+  resizeElement: DrawElement | null;
+  resizeOriginal: { x: number; y: number; width: number; height: number } | null;
+  endpointIndex: number | null;
+  endpointElement: DrawElement | null;
+  isPanning: boolean;
+  panStartScrollX: number;
+  panStartScrollY: number;
+  isSelecting: boolean;
+  handleDrag: { element: DrawElement; segIndex: number; cpIndex: 0 | 1 } | null;
+}
 
-export interface DrawElement {
-  id: string;
-  type: ToolType;
+export interface TextEditingState {
+  el: DrawElement;
   x: number;
   y: number;
-  width: number;
-  height: number;
-  angle: number;
-  strokeColor: string;
-  backgroundColor: string;
-  strokeWidth: number;
-  strokeStyle: "solid" | "dashed" | "dotted";
-  opacity: number;
-  seed: number;
-  isDeleted: boolean;
-  // freedraw
-  points?: [number, number][];
-  // text
-  text?: string;
-  fontSize?: number;
-  // arrow
-  arrowhead?: "arrow" | null;
-  // bindings (line/arrow endpoints → shape)
-  startBinding?: { elementId: string; anchorX: number; anchorY: number } | null;
-  endBinding?: { elementId: string; anchorX: number; anchorY: number } | null;
-  // text extras
-  fontFamily?: "hand" | "normal" | "code" | "headline";
-  textAlign?: "left" | "center" | "right";
-  // shape extras
-  roundness?: "sharp" | "round";
-  strokeLineStyle?: "round" | "sharp" | "architect";
-  arrowType?: "sharp" | "round" | "elbow";
-  startArrowhead?: "arrow" | null;
-  // Bezier handles: [cp1x, cp1y, cp2x, cp2y] per segment (points.length - 1 entries)
-  // Coordinates relative to el.x/el.y, like points
-  handles?: [number, number, number, number][];
-  // bound text (text inside shapes)
-  boundText?: string;
-  boundTextFontSize?: number;
-  // image
-  imageData?: string;
+  isBoundText?: boolean;
 }
 
-export interface DrawState {
-  elements: DrawElement[];
-  appState: {
-    viewBackgroundColor: string;
-    gridSize: number | null;
-    zoom: number;
-    scrollX: number;
-    scrollY: number;
+export interface SidebarDragState {
+  startX: number;
+  startY: number;
+  origX: number;
+  origY: number;
+}
+
+export function createInitialPointerState(): PointerState {
+  return {
+    isDown: false,
+    startX: 0,
+    startY: 0,
+    startSceneX: 0,
+    startSceneY: 0,
+    lastX: 0,
+    lastY: 0,
+    newElement: null,
+    dragElements: null,
+    dragOffsets: [],
+    resizeHandle: null,
+    resizeElement: null,
+    resizeOriginal: null,
+    endpointIndex: null,
+    endpointElement: null,
+    isPanning: false,
+    panStartScrollX: 0,
+    panStartScrollY: 0,
+    isSelecting: false,
+    handleDrag: null,
   };
 }
-
-export type ResizeHandle = "nw" | "ne" | "sw" | "se" | "n" | "s" | "e" | "w";

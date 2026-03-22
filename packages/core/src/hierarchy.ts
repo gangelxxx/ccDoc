@@ -1,7 +1,7 @@
 import type { SectionType } from "./types.js";
 
 const ALLOWED_CHILDREN: Partial<Record<SectionType, SectionType[]>> = {
-  folder: ["folder", "file", "idea", "todo", "kanban", "excalidraw"],
+  folder: ["folder", "file", "idea", "todo", "kanban", "drawing"],
   file: ["section"],
   section: ["section"],
   idea: ["section"],

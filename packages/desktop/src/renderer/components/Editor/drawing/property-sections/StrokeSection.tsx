@@ -11,19 +11,19 @@ export function StrokeSection({ firstEl, updateSelectedProps, hasStroke, hasStro
       {/* Stroke color */}
       {hasStroke && (
         <>
-          <div className="excalidraw-sidebar-label">Обводка</div>
-          <div className="excalidraw-sidebar-colors">
+          <div className="drawing-sidebar-label">Обводка</div>
+          <div className="drawing-sidebar-colors">
             {STROKE_COLORS.map((c) => (
               <button
                 key={c}
-                className={`excalidraw-color-btn${firstEl?.strokeColor === c ? " active" : ""}`}
+                className={`drawing-color-btn${firstEl?.strokeColor === c ? " active" : ""}`}
                 style={{ backgroundColor: c, border: c === "#ffffff" ? "1px solid var(--border)" : undefined }}
                 onClick={() => updateSelectedProps({ strokeColor: c })}
               />
             ))}
             <input
               type="color"
-              className="excalidraw-color-input"
+              className="drawing-color-input"
               value={firstEl?.strokeColor || "#1a1a1a"}
               onChange={(e) => updateSelectedProps({ strokeColor: e.target.value })}
             />
@@ -34,12 +34,12 @@ export function StrokeSection({ firstEl, updateSelectedProps, hasStroke, hasStro
       {/* Stroke width */}
       {hasStrokeStyle && (
         <>
-          <div className="excalidraw-sidebar-label">Толщина штриха</div>
-          <div className="excalidraw-sidebar-row">
+          <div className="drawing-sidebar-label">Толщина штриха</div>
+          <div className="drawing-sidebar-row">
             {[1, 2, 4].map((w) => (
               <button
                 key={w}
-                className={`excalidraw-tool-btn${firstEl?.strokeWidth === w ? " active" : ""}`}
+                className={`drawing-tool-btn${firstEl?.strokeWidth === w ? " active" : ""}`}
                 onClick={() => updateSelectedProps({ strokeWidth: w })}
               >
                 <div style={{ width: 20, height: w + 1, backgroundColor: "currentColor", borderRadius: 1 }} />
@@ -52,12 +52,12 @@ export function StrokeSection({ firstEl, updateSelectedProps, hasStroke, hasStro
       {/* Stroke style */}
       {hasStrokeStyle && (
         <>
-          <div className="excalidraw-sidebar-label">Стиль обводки</div>
-          <div className="excalidraw-sidebar-row">
+          <div className="drawing-sidebar-label">Стиль обводки</div>
+          <div className="drawing-sidebar-row">
             {(["solid", "dashed", "dotted"] as const).map((s) => (
               <button
                 key={s}
-                className={`excalidraw-tool-btn${firstEl?.strokeStyle === s ? " active" : ""}`}
+                className={`drawing-tool-btn${firstEl?.strokeStyle === s ? " active" : ""}`}
                 onClick={() => updateSelectedProps({ strokeStyle: s })}
               >
                 <svg width="20" height="4" viewBox="0 0 20 4">

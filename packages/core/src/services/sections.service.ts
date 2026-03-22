@@ -7,8 +7,8 @@ import { prosemirrorToMarkdown } from "../converters/prosemirror-to-markdown.js"
 import { prosemirrorToPlain } from "../converters/prosemirror-to-plain.js";
 import { prosemirrorToStructured } from "../converters/prosemirror-to-structured.js";
 import { kanbanToMarkdown, kanbanToPlain, markdownToKanban, emptyKanbanData } from "../converters/kanban.js";
-import { excalidrawToText, excalidrawToPlain, textToExcalidraw } from "../converters/excalidraw/index.js";
-import type { Section, SectionType, TreeNode, OutputFormat, ProseMirrorNode, StructuredOutput, KanbanData, KanbanCard, FileSectionNode, ExcalidrawElement, IdeaData, IdeaMessage } from "../types.js";
+import { drawingToText, drawingToPlain, textToDrawing } from "../converters/drawing/index.js";
+import type { Section, SectionType, TreeNode, OutputFormat, ProseMirrorNode, StructuredOutput, KanbanData, KanbanCard, FileSectionNode, DrawingElement, IdeaData, IdeaMessage } from "../types.js";
 import { SOFT_DELETE_DAYS } from "../constants.js";
 import { validateHierarchy } from "../hierarchy.js";
 
@@ -58,13 +58,13 @@ export class SectionsService {
     const section = await this.repo.getById(id);
     if (!section) throw new Error(`Section ${id} not found`);
 
-    // Excalidraw — convert JSON elements to text DSL
-    if (section.type === "excalidraw") {
-      let state: { elements: ExcalidrawElement[] };
+    // Drawing — convert JSON elements to text DSL
+    if (section.type === "drawing") {
+      let state: { elements: DrawingElement[] };
       try { state = JSON.parse(section.content); } catch { state = { elements: [] }; }
-      if (format === "plain") return excalidrawToPlain(state.elements);
-      if (format === "markdown") return excalidrawToText(state.elements);
-      return JSON.stringify({ title: section.title, blocks: [{ type: "whiteboard", text: excalidrawToPlain(state.elements) }] });
+      if (format === "plain") return drawingToPlain(state.elements);
+      if (format === "markdown") return drawingToText(state.elements);
+      return JSON.stringify({ title: section.title, blocks: [{ type: "whiteboard", text: drawingToPlain(state.elements) }] });
     }
 
     // Kanban — own JSON format
@@ -140,9 +140,9 @@ export class SectionsService {
 
     let prosemirrorContent: string;
 
-    if (params.type === "excalidraw") {
+    if (params.type === "drawing") {
       if (params.content) {
-        const result = await textToExcalidraw(params.content);
+        const result = await textToDrawing(params.content);
         prosemirrorContent = JSON.stringify({ elements: result.elements, appState: { viewBackgroundColor: "#ffffff", gridSize: null, zoom: 1, scrollX: 0, scrollY: 0 } });
       } else {
         prosemirrorContent = JSON.stringify({ elements: [], appState: { viewBackgroundColor: "#ffffff" }, files: {} });
@@ -188,14 +188,14 @@ export class SectionsService {
 
     if (section.type === "kanban") {
       storedContent = JSON.stringify(markdownToKanban(content));
-    } else if (section.type === "excalidraw") {
+    } else if (section.type === "drawing") {
       // If content looks like raw JSON (from canvas save), pass through; otherwise parse text DSL
       if (content.trimStart().startsWith("{")) {
         storedContent = content;
       } else {
-        let existing: { elements: ExcalidrawElement[]; appState: Record<string, unknown> };
+        let existing: { elements: DrawingElement[]; appState: Record<string, unknown> };
         try { existing = JSON.parse(section.content); } catch { existing = { elements: [], appState: { viewBackgroundColor: "#ffffff" } }; }
-        const result = await textToExcalidraw(content, existing.elements);
+        const result = await textToDrawing(content, existing.elements);
         storedContent = JSON.stringify({ elements: result.elements, appState: existing.appState });
       }
     } else if (section.type === "idea") {

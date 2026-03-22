@@ -26,9 +26,9 @@ export class ExportService {
       const sanitized = sanitizeFilename(section.title, section.id);
       let markdown: string;
 
-      if (section.type === "excalidraw") {
-        // Export .excalidraw file directly, no frontmatter
-        const filePath = join(dir, `${sanitized}.excalidraw`);
+      if (section.type === "drawing") {
+        // Export .drawing file directly, no frontmatter
+        const filePath = join(dir, `${sanitized}.drawing`);
         writeFileSync(filePath, section.content, "utf-8");
         continue;
       } else if (section.type === "kanban") {

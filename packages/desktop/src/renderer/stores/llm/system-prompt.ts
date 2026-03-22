@@ -22,7 +22,7 @@ export function buildSystemPrompt(params: SystemPromptParams): string[] {
   const systemParts: string[] = planMode ? [
     `You are an AI assistant embedded in CCDoc — a documentation tool. Your task: create an implementation plan.
   CRITICAL — BEFORE writing a plan, check if the feature is ALREADY IMPLEMENTED in the codebase. Use find_symbols and search_project_files in Round 1 to verify. If the feature already exists, do NOT create a plan — instead create a short section explaining that the feature is already implemented, where it lives in the code, and how it works.`,
-    `Section hierarchy: root → folder; folder → folder/file/idea/todo/kanban/excalidraw; file → section; section → section.`,
+    `Section hierarchy: root → folder; folder → folder/file/idea/todo/kanban/drawing; file → section; section → section.`,
     `Content creation: ALWAYS pass 'content' parameter with full markdown text when creating sections. For plans, create ONE section with ALL content as rich markdown (## headings become child sections automatically).`,
     `CRITICAL — Pre-seeded context: The documentation tree and source code file tree are ALREADY included in the user's message below. Do NOT call get_tree or get_project_tree — you already have this data. The 8-character IDs in brackets (e.g. [a4f66e9d]) are valid ID prefixes that work with all tools — use them directly.`,
     `Reading: To read content, use get_section or get_file_with_sections. Use get_sections_batch for multiple sections at once.`,
@@ -55,11 +55,11 @@ export function buildSystemPrompt(params: SystemPromptParams): string[] {
   - 'idea': a quick note or idea. Can only be inside a 'folder'.
   - 'todo': a task list with checkboxes. Can only be inside a 'folder'.
   - 'kanban': a kanban board with columns and cards. Can only be inside a 'folder'.
-  - 'excalidraw': a whiteboard/drawing canvas. Can only be inside a 'folder'. Content uses a text DSL:
+  - 'drawing': a whiteboard/drawing canvas. Can only be inside a 'folder'. Content uses a text DSL:
     ## Layout (optional): direction: top-down | left-right (default: top-down). Controls automatic graph layout direction.
     ## Shapes: - [rect|ellipse|diamond|text] "Label" [at x,y] [size WxH]. Properties on next line OR same line: fill: color, stroke: color, round, stroke-style: dashed.
     ## Arrows: - "Source" --> "Target" (one-way), <--> (bidirectional), --- (line). Properties: label: text, style: dashed.
-    EXCALIDRAW RULES:
+    DRAWING RULES:
     - The "Label" of a rect/ellipse/diamond IS the text displayed inside that shape. Do NOT create separate [text] elements to label shapes. Use [text] ONLY for standalone titles or annotations outside shapes.
     - Use \\n for line breaks in labels: "Line 1\\nLine 2".
     - OMIT coordinates (at x,y) and sizes (size WxH) — auto-layout (dagre graph engine) handles placement based on arrows. Only specify them for precise manual control.
@@ -133,7 +133,7 @@ export function buildSystemPrompt(params: SystemPromptParams): string[] {
 
   if (!planMode) {
     const isDark = theme === "dark";
-    systemParts.push(`\nUI theme: ${theme}. For excalidraw diagrams use these colors:
+    systemParts.push(`\nUI theme: ${theme}. For drawing diagrams use these colors:
   - Default stroke: ${isDark ? "#e0e0e0" : "#1a1a1a"}
   - Good fill colors: ${isDark ? "#264d35, #6b3040, #2e4a6e, #6e5c1e, #1e5e5e, #553772" : "#d4edda, #f8d7da, #cce5ff, #fff3cd, #d1ecf1, #e2d9f3"}
   - Text/stroke is ${isDark ? "light on dark background" : "dark on light background"}, choose fill colors with good contrast.`);

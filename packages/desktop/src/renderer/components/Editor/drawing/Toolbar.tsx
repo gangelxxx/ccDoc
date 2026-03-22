@@ -24,28 +24,28 @@ interface ToolbarProps {
 
 export function Toolbar({ activeTool, setActiveTool, autoLayout, pickAndInsertImage }: ToolbarProps) {
   return (
-    <div className="excalidraw-toolbar">
-      <div className="excalidraw-toolbar-group">
+    <div className="drawing-toolbar">
+      <div className="drawing-toolbar-group">
         {TOOLS.map((t) => (
           <button
             key={t.type}
-            className={`excalidraw-tool-btn${activeTool === t.type ? " active" : ""}`}
+            className={`drawing-tool-btn${activeTool === t.type ? " active" : ""}`}
             onClick={() => setActiveTool(t.type)}
             title={`${t.label} (${t.key})`}
           >
             <t.icon size={18} />
           </button>
         ))}
-        <div className="excalidraw-toolbar-sep" />
+        <div className="drawing-toolbar-sep" />
         <button
-          className="excalidraw-tool-btn"
+          className="drawing-tool-btn"
           onClick={autoLayout}
           title="Авто-раскладка"
         >
           <LayoutGrid size={18} />
         </button>
         <button
-          className="excalidraw-tool-btn"
+          className="drawing-tool-btn"
           onClick={pickAndInsertImage}
           title="Изображение (I)"
         >

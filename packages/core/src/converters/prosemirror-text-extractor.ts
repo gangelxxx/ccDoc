@@ -15,8 +15,8 @@ function extractFromNode(node: ProseMirrorNode, parts: string[]): void {
   // Skip code blocks and mermaid diagrams for search
   if (node.type === "codeBlock" || node.type === "mermaid") return;
 
-  // Excalidraw: only index the name
-  if (node.type === "excalidraw") {
+  // Drawing: only index the name
+  if (node.type === "drawing") {
     const name = node.attrs?.name as string;
     if (name) parts.push(name);
     return;

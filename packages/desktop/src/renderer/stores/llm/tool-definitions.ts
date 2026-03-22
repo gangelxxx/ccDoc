@@ -56,7 +56,7 @@ function buildCoreTools(): ToolDefinition[] {
         properties: {
           parent_id: { type: "string", description: "Parent ID. Omit for root (folder only)." },
           title: { type: "string", description: "Title" },
-          type: { type: "string", enum: ["folder", "file", "section", "idea", "todo", "kanban", "excalidraw"], description: "Type" },
+          type: { type: "string", enum: ["folder", "file", "section", "idea", "todo", "kanban", "drawing"], description: "Type" },
           content: { type: "string", description: "Markdown content." },
           icon: { type: "string", description: "One emoji icon." },
         },
@@ -77,7 +77,7 @@ function buildCoreTools(): ToolDefinition[] {
               properties: {
                 parent_id: { type: "string", description: "Parent ID or '$N' ref" },
                 title: { type: "string", description: "Title" },
-                type: { type: "string", enum: ["folder", "file", "section", "idea", "todo", "kanban", "excalidraw"], description: "Type" },
+                type: { type: "string", enum: ["folder", "file", "section", "idea", "todo", "kanban", "drawing"], description: "Type" },
                 content: { type: "string", description: "Markdown content" },
                 icon: { type: "string", description: "One emoji" },
               },

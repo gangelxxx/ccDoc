@@ -1,4 +1,4 @@
-import type { ExcalidrawElement } from "../../types.js";
+import type { DrawingElement } from "../../types.js";
 import { TYPE_TO_DSL, DEFAULT_STROKE, DEFAULT_BG } from "./constants.js";
 import {
   isShape,
@@ -9,7 +9,7 @@ import {
   coordLabel,
 } from "./helpers.js";
 
-export function excalidrawToText(elements: ExcalidrawElement[]): string {
+export function drawingToText(elements: DrawingElement[]): string {
   const elMap = buildElementMap(elements);
   const shapes = elements.filter(isShape);
   const arrows = elements.filter(isArrow);
@@ -98,7 +98,7 @@ export function excalidrawToText(elements: ExcalidrawElement[]): string {
   return lines.join("\n");
 }
 
-export function excalidrawToPlain(elements: ExcalidrawElement[]): string {
+export function drawingToPlain(elements: DrawingElement[]): string {
   const texts: string[] = [];
 
   for (const el of elements) {

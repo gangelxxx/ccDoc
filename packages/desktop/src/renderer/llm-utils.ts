@@ -503,7 +503,7 @@ export interface TreeNode {
 
 export function formatCompactTree(nodes: TreeNode[], depth = 0, includeIds = true, maxDepth?: number): string {
   const indent = "  ".repeat(depth);
-  const typeIcons: Record<string, string> = { folder: "📁", file: "📄", section: "§", idea: "💡", todo: "✅", kanban: "📋", excalidraw: "🎨" };
+  const typeIcons: Record<string, string> = { folder: "📁", file: "📄", section: "§", idea: "💡", todo: "✅", kanban: "📋", drawing: "🎨" };
   return nodes.map(n => {
     const icon = n.icon || typeIcons[n.type] || "•";
     const idSuffix = includeIds ? ` [${n.id.slice(0, 8)}]` : "";

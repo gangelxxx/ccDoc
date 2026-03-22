@@ -20,7 +20,7 @@ export interface Section {
   updated_at: string;
 }
 
-export type SectionType = "folder" | "file" | "section" | "idea" | "excalidraw" | "kanban" | "todo";
+export type SectionType = "folder" | "file" | "section" | "idea" | "drawing" | "kanban" | "todo";
 
 export type PropertyType =
   | "text"
@@ -204,10 +204,10 @@ export interface StructureSection {
   icon: string | null;
   tags: string[];
   file: string;
-  excalidraw_blocks: ExcalidrawBlock[];
+  drawing_blocks: DrawingBlock[];
 }
 
-export interface ExcalidrawBlock {
+export interface DrawingBlock {
   name: string;
   position: number;
   elements: unknown[];
@@ -227,8 +227,8 @@ export interface ProseMirrorMark {
   attrs?: Record<string, unknown>;
 }
 
-// Excalidraw element for converter (subset of desktop DrawElement)
-export interface ExcalidrawElement {
+// Drawing element for converter (subset of desktop DrawElement)
+export interface DrawingElement {
   id: string;
   type: string;
   x: number;

@@ -3,7 +3,7 @@ import { useAppStore } from "../../stores/app.store.js";
 import { useT } from "../../i18n.js";
 import { TipTapEditor, EditorToolbar } from "./TipTapEditor.js";
 import { KanbanBoard } from "./KanbanBoard.js";
-import { ExcalidrawCanvas } from "./ExcalidrawCanvas.js";
+import { DrawingCanvas } from "./DrawingCanvas.js";
 import { FileView } from "./FileView.js";
 import { LlmPanel } from "../LlmPanel/LlmPanel.js";
 import { ResizeHandle } from "../ResizeHandle.js";
@@ -190,7 +190,7 @@ export function ContentArea() {
             </div>
           </div>
         )}
-        {!["folder", "kanban", "excalidraw", "idea"].includes(currentSection.type) && (
+        {!["folder", "kanban", "drawing", "idea"].includes(currentSection.type) && (
           <div className="editor-sticky-top">
             {editorInstance && <EditorToolbar editor={editorInstance} />}
             <EditorSearchBar />
@@ -229,8 +229,8 @@ export function ContentArea() {
             title={currentSection.title}
             initialContent={currentSection.content}
           />
-        ) : currentSection.type === "excalidraw" ? (
-          <ExcalidrawCanvas
+        ) : currentSection.type === "drawing" ? (
+          <DrawingCanvas
             key={currentSection.id}
             sectionId={currentSection.id}
             initialContent={currentSection.content}

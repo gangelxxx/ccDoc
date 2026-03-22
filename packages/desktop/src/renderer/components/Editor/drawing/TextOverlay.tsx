@@ -16,7 +16,7 @@ export function TextOverlay({ textEditing, textInputRef, stateRef, theme, commit
     <textarea
       key={textEditing.el.id + (textEditing.isBoundText ? '-bound' : '')}
       ref={textInputRef}
-      className="excalidraw-text-input"
+      className="drawing-text-input"
       style={{
         left: textEditing.x,
         top: textEditing.y,

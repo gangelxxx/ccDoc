@@ -21,7 +21,7 @@ SECTION TYPES AND HIERARCHY:
 - 'idea': a prompt/requirement for what needs to be done. Can be inside a 'folder'. Can contain 'section' children (implementation plans). Use get_latest_idea to retrieve the most recent idea with its plan.
 - 'todo': a task list with checkboxes. Can only be inside a 'folder'.
 - 'kanban': a kanban board with columns and cards. Can only be inside a 'folder'. Content format: "## Column Name\\n- Card 1\\n- Card 2\\n\\n## Another Column\\n- Card 3"
-- 'excalidraw': a whiteboard/drawing canvas. Can only be inside a 'folder'. Content uses a text DSL:
+- 'drawing': a whiteboard/drawing canvas. Can only be inside a 'folder'. Content uses a text DSL:
   ## Layout (optional): direction: top-down | left-right (default: top-down).
   ## Shapes: - [rect|ellipse|diamond|text] "Label" [at x,y] [size WxH] [inline properties].
   ## Arrows: - "Source" --> "Target" (one-way), <--> (bidirectional), --- (line) [inline properties].
@@ -48,9 +48,9 @@ SECTION TYPES AND HIERARCHY:
   - width: <1|2|4> — stroke thickness
   - arrowType: <sharp|round|elbow> — line shape (default: round/curved)
 
-  EXCALIDRAW RULES: The "Label" of a rect/ellipse/diamond IS the text inside that shape. Use [text] ONLY for standalone titles. Use \\n for line breaks. OMIT coordinates — auto-layout handles placement. Keep diagrams simple: max 8-12 shapes. Every diagram MUST have ## Arrows section.
+  DRAWING RULES: The "Label" of a rect/ellipse/diamond IS the text inside that shape. Use [text] ONLY for standalone titles. Use \\n for line breaks. OMIT coordinates — auto-layout handles placement. Keep diagrams simple: max 8-12 shapes. Every diagram MUST have ## Arrows section.
 
-Nesting summary: root → folder; folder → folder, file, idea, todo, kanban, excalidraw; file → section; section → section; idea → section (for implementation plans).
+Nesting summary: root → folder; folder → folder, file, idea, todo, kanban, drawing; file → section; section → section; idea → section (for implementation plans).
 
 CONTENT CREATION RULES:
 - When creating a file/idea/section with text, you MUST pass the 'content' parameter with the full markdown text. Do NOT leave it empty.
@@ -62,21 +62,21 @@ CONTENT CREATION RULES:
 BEST PRACTICES FOR RICH DOCUMENTATION:
 - Use DIVERSE section types — don't just create files. A good project documentation includes:
   - 'file' for detailed text documentation (architecture, guides, API docs)
-  - 'excalidraw' for visual diagrams (architecture diagrams, data flow, component relationships)
+  - 'drawing' for visual diagrams (architecture diagrams, data flow, component relationships)
   - 'kanban' for task tracking (backlog, in progress, done)
   - 'todo' for checklists (setup steps, release checklist)
   - 'idea' for quick notes and observations
-- When documenting a project, aim to create at least one excalidraw diagram showing the system architecture or data flow.
+- When documenting a project, aim to create at least one drawing diagram showing the system architecture or data flow.
 - ALWAYS use update_icon to set emoji icons on created sections for visual distinction. Recommended icons:
   - Folders: 📁 or thematic (🏗️ for architecture, 📚 for docs, ⚙️ for config)
   - Files: 📄, 📝, 📋, or thematic (🔌 for API, 🚀 for getting started, 🧪 for testing)
-  - Excalidraw: 📊, 🗺️, 🔀
+  - Drawing: 📊, 🗺️, 🔀
   - Kanban: 📋, 🗂️
   - Ideas: 💡
   - Todos: ✅
   Always pass exactly ONE emoji character per call.
 
-EXCALIDRAW COLOR PALETTE (dark UI):
+DRAWING COLOR PALETTE (dark UI):
 - Stroke colors: "#e0e0e0" (default light), "#e03131" (red), "#2f9e44" (green), "#1971c2" (blue), "#f08c00" (orange), "#7048e8" (purple), "#0d7c66" (teal), "#ffffff" (white)
 - Fill colors (use different ones for different shapes): "#264d35" (green), "#6b3040" (red), "#2e4a6e" (blue), "#6e5c1e" (amber), "#1e5e5e" (teal), "#553772" (purple)
 - Text/stroke is light on dark background — choose fill colors with good contrast.

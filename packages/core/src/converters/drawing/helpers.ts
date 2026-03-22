@@ -1,4 +1,4 @@
-import type { ExcalidrawElement } from "../../types.js";
+import type { DrawingElement } from "../../types.js";
 import {
   PADDING_X,
   PADDING_Y,
@@ -18,28 +18,28 @@ export function estimateTextSize(label: string, fontSize = 20): { minW: number; 
   return { minW, minH };
 }
 
-export function isShape(el: ExcalidrawElement): boolean {
+export function isShape(el: DrawingElement): boolean {
   return SHAPE_TYPES.has(el.type) && !el.isDeleted;
 }
 
-export function isArrow(el: ExcalidrawElement): boolean {
+export function isArrow(el: DrawingElement): boolean {
   return ARROW_TYPES.has(el.type) && !el.isDeleted;
 }
 
-export function getLabel(el: ExcalidrawElement): string {
+export function getLabel(el: DrawingElement): string {
   if (el.type === "text") return el.text ?? "";
   return el.boundText ?? "";
 }
 
-export function buildElementMap(elements: ExcalidrawElement[]): Map<string, ExcalidrawElement> {
-  const map = new Map<string, ExcalidrawElement>();
+export function buildElementMap(elements: DrawingElement[]): Map<string, DrawingElement> {
+  const map = new Map<string, DrawingElement>();
   for (const el of elements) {
     map.set(el.id, el);
   }
   return map;
 }
 
-export function centerOf(el: ExcalidrawElement): [number, number] {
+export function centerOf(el: DrawingElement): [number, number] {
   return [el.x + el.width / 2, el.y + el.height / 2];
 }
 
@@ -52,7 +52,7 @@ export function makeSeed(): number {
 }
 
 export function edgeAnchor(
-  from: ExcalidrawElement,
+  from: DrawingElement,
   toward: [number, number],
 ): { anchor: [number, number]; point: [number, number] } {
   const cx = from.x + from.width / 2;
@@ -88,8 +88,8 @@ export function edgeAnchor(
 }
 
 export function resolveBindingLabel(
-  binding: ExcalidrawElement["startBinding"],
-  elMap: Map<string, ExcalidrawElement>,
+  binding: DrawingElement["startBinding"],
+  elMap: Map<string, DrawingElement>,
   labelMap: Map<string, string>,
 ): string | null {
   if (!binding) return null;
@@ -100,7 +100,7 @@ export function resolveBindingLabel(
   return null;
 }
 
-export function coordLabel(el: ExcalidrawElement, end: "start" | "end"): string {
+export function coordLabel(el: DrawingElement, end: "start" | "end"): string {
   if (end === "start") {
     return `${Math.round(el.x)},${Math.round(el.y)}`;
   }

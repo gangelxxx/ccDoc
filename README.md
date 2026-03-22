@@ -18,7 +18,7 @@ It also exposes your docs via [MCP](https://modelcontextprotocol.io/), so AI too
 
 **Kanban boards** — columns, cards, labels, custom properties. Board / table / list views.
 
-**Diagrams** — Excalidraw-based whiteboard. Shapes and arrows described in text, laid out automatically.
+**Diagrams** — whiteboard with shapes and arrows, described in text and laid out automatically.
 
 **Ideas** — quick chat-style notes. Can be turned into a plan or a kanban board later.
 
@@ -79,7 +79,7 @@ macOS and Linux builds are untested — issues and PRs welcome.
 
 ## Tech stack
 
-Electron, React, TipTap, libSQL, isomorphic-git, Zustand, Excalidraw, Tree-sitter, ONNX Runtime.
+Electron, React, TipTap, libSQL, isomorphic-git, Zustand, Tree-sitter, ONNX Runtime.
 
 ## License
 

@@ -11,7 +11,7 @@ const TYPE_ICONS: Record<string, string> = {
   idea: "\u{1F4A1}",
   todo: "\u2705",
   kanban: "\u{1F4CB}",
-  excalidraw: "\u{1F4CA}",
+  drawing: "\u{1F4CA}",
 };
 
 function renderTree(nodes: TreeNode[], depth: number): string {

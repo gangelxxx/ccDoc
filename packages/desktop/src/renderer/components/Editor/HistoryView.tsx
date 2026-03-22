@@ -24,7 +24,7 @@ export function HistoryView() {
 
   const typeIcons: Record<string, string> = {
     folder: "\uD83D\uDCC1", file: "\uD83D\uDCC4", section: "\u00A7",
-    idea: "\uD83D\uDCA1", todo: "\u2611\uFE0F", kanban: "\uD83D\uDCCA", excalidraw: "\u270F\uFE0F",
+    idea: "\uD83D\uDCA1", todo: "\u2611\uFE0F", kanban: "\uD83D\uDCCA", drawing: "\u270F\uFE0F",
   };
 
   // Build tree from flat sections of the commit

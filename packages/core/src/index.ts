@@ -14,7 +14,7 @@ export type {
   StructuredOutput,
   StructureJson,
   StructureSection,
-  ExcalidrawBlock,
+  DrawingBlock,
   ProseMirrorNode,
   ProseMirrorMark,
   SearchResult,
@@ -79,7 +79,7 @@ export { prosemirrorToStructured } from "./converters/prosemirror-to-structured.
 export { markdownToProsemirror } from "./converters/markdown-to-prosemirror.js";
 export { extractTextForSearch } from "./converters/prosemirror-text-extractor.js";
 export { kanbanToMarkdown, kanbanToPlain, markdownToKanban, emptyKanbanData } from "./converters/kanban.js";
-export { excalidrawToText, textToExcalidraw, excalidrawToPlain } from "./converters/excalidraw/index.js";
+export { drawingToText, textToDrawing, drawingToPlain } from "./converters/drawing/index.js";
 export { splitMarkdownByHeadings } from "./converters/markdown-splitter.js";
 export { ideaToPlain } from "./converters/idea.js";
 export type { SplitResult, SplitSection } from "./converters/markdown-splitter.js";

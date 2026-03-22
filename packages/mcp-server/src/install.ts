@@ -34,7 +34,7 @@ function generateFiles(token: string, mcpServerPath: string): Map<string, string
 - 💡 idea
 - ✅ todo
 - 📋 kanban
-- 🎨 excalidraw
+- 🎨 drawing
 
 Если есть паспорт проекта — покажи его в начале.
 
@@ -72,7 +72,7 @@ $ARGUMENTS
 
 Правила иерархии:
 - Корневой уровень: только folders
-- Folders содержат: folders, files, ideas, todos, kanban, excalidraw
+- Folders содержат: folders, files, ideas, todos, kanban, drawing
 - Files содержат: sections
 - Sections содержат: sections (для вложенности)
 
@@ -108,7 +108,7 @@ $ARGUMENTS
    - Используй '$N' ссылки для parent_id (0-indexed, ссылка на N-ю созданную секцию в батче)
    - Пример: '$0' ссылается на первую созданную секцию
 
-Правила иерархии: root→folder, folder→file/idea/todo/kanban/excalidraw, file→section, section→section
+Правила иерархии: root→folder, folder→file/idea/todo/kanban/drawing, file→section, section→section
 
 После создания — \`commit_history\` с описанием.
 
@@ -183,7 +183,7 @@ Project token: ${token}
 - **Ideas** (внутри папок) — быстрые заметки
 - **Todos** (внутри папок) — списки задач
 - **Kanban** (внутри папок) — канбан-доски
-- **Excalidraw** (внутри папок) — диаграммы
+- **Drawing** (внутри папок) — диаграммы
 
 ## Доступные MCP-инструменты
 
@@ -207,7 +207,7 @@ Project token: ${token}
 
 1. **overview → find → read** — следуй воронке. Начни с overview для ориентации, используй find для поиска, read только для полных деталей.
 2. **Сниппетов часто достаточно** — find возвращает короткие сниппеты, не читай полную секцию если ответ виден в сниппете.
-3. **Соблюдай иерархию** — root→folder, folder→file/idea/todo/kanban/excalidraw, file→section, section→section
+3. **Соблюдай иерархию** — root→folder, folder→file/idea/todo/kanban/drawing, file→section, section→section
 4. **Коммить после изменений** — вызывай \`commit_history\` после значимых модификаций
 5. **Читай перед обновлением** — всегда читай текущее содержимое через \`read\` перед update_section
 `);

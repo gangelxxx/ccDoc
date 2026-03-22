@@ -36,7 +36,7 @@ export interface ContextState {
 
 // Inline hierarchy rules to avoid importing @ccdoc/core (which pulls Node.js modules into renderer)
 export const ALLOWED_CHILDREN: Record<string, string[]> = {
-  folder: ["folder", "file", "idea", "todo", "kanban", "excalidraw"],
+  folder: ["folder", "file", "idea", "todo", "kanban", "drawing"],
   file: ["section"],
   section: ["section"],
   idea: ["section"],

@@ -50,7 +50,7 @@ function convertBlock(node: ProseMirrorNode): StructuredBlock | null {
         type: "blockquote",
         text: node.content ? node.content.map((c) => getInlineText(c.content)).join("\n") : "",
       };
-    case "excalidraw":
+    case "drawing":
       return {
         type: "whiteboard",
         name: (node.attrs?.name as string) || "Untitled",

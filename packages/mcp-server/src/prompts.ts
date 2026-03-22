@@ -42,7 +42,7 @@ Please:
 
 The hierarchy rules are:
 - Root level can only have folders
-- Folders contain: folders, files, ideas, todos, kanban, excalidraw
+- Folders contain: folders, files, ideas, todos, kanban, drawing
 - Files contain: sections
 - Sections contain: sections (for nesting)
 
@@ -75,7 +75,7 @@ Provide the content in markdown format.`,
         ideas: allSections.filter(s => s.type === "idea").length,
         todos: allSections.filter(s => s.type === "todo").length,
         kanban: allSections.filter(s => s.type === "kanban").length,
-        excalidraw: allSections.filter(s => s.type === "excalidraw").length,
+        drawing: allSections.filter(s => s.type === "drawing").length,
       };
 
       return {

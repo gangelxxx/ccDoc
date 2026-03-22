@@ -54,7 +54,7 @@ All MCP tools require \`project_token: "${token}"\`.
 ## Documentation hierarchy
 
 - **Root** → folders only
-- **Folders** → files, ideas, todos, kanban, excalidraw
+- **Folders** → files, ideas, todos, kanban, drawing
 - **Files** → sections
 - **Sections** → sections (nested)
 
@@ -74,7 +74,7 @@ Display the result as a readable tree with indentation and type icons:
 - 💡 idea
 - ✅ todo
 - 📋 kanban
-- 🎨 excalidraw
+- 🎨 drawing
 
 $ARGUMENTS
 `);
@@ -110,7 +110,7 @@ Steps:
 
 Hierarchy rules:
 - Root level: folders only
-- Folders contain: folders, files, ideas, todos, kanban, excalidraw
+- Folders contain: folders, files, ideas, todos, kanban, drawing
 - Files contain: sections
 - Sections contain: sections (for nesting)
 
@@ -146,7 +146,7 @@ Steps:
    - Use '$N' references for parent_id (0-indexed, refers to the N-th created section in the batch)
    - Example: '$0' refers to the first created section
 
-Hierarchy rules: root→folder, folder→file/idea/todo/kanban/excalidraw, file→section, section→section
+Hierarchy rules: root→folder, folder→file/idea/todo/kanban/drawing, file→section, section→section
 
 After creation — \`commit_history\` with a description.
 
@@ -224,7 +224,7 @@ Documentation is organized hierarchically:
 - **Ideas** (inside folders) — quick notes
 - **Todos** (inside folders) — task lists
 - **Kanban** (inside folders) — kanban boards
-- **Excalidraw** (inside folders) — diagrams
+- **Drawing** (inside folders) — diagrams
 
 ## Available MCP tools
 
@@ -247,7 +247,7 @@ Documentation is organized hierarchically:
 ## Working principles
 
 1. **Find first** — use \`find\` to locate content, not \`overview\`. Use \`overview\` only when you need the tree for create/move operations.
-2. **Follow the hierarchy** — root→folder, folder→file/idea/todo/kanban/excalidraw, file→section, section→section
+2. **Follow the hierarchy** — root→folder, folder→file/idea/todo/kanban/drawing, file→section, section→section
 3. **Commit after changes** — call \`commit_history\` after significant modifications
 4. **Read before updating** — always use \`read\` to get current content before \`update_section\`
 5. **One file, full content** — prefer creating a single file with full markdown (auto-split by headings) over many small sections

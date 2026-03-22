@@ -11,12 +11,12 @@ export function ShapeSection({ firstEl, updateSelectedProps, hasShapes, hasFill 
       {/* Fill */}
       {hasFill && (
         <>
-          <div className="excalidraw-sidebar-label">Фон</div>
-          <div className="excalidraw-sidebar-colors">
+          <div className="drawing-sidebar-label">Фон</div>
+          <div className="drawing-sidebar-colors">
             {BG_COLORS.map((c) => (
               <button
                 key={c}
-                className={`excalidraw-color-btn${firstEl?.backgroundColor === c ? " active" : ""}`}
+                className={`drawing-color-btn${firstEl?.backgroundColor === c ? " active" : ""}`}
                 style={{
                   backgroundColor: c === "transparent" ? "transparent" : c,
                   border: c === "transparent" ? "1px dashed var(--border)" : undefined,
@@ -34,12 +34,12 @@ export function ShapeSection({ firstEl, updateSelectedProps, hasShapes, hasFill 
       {/* Roundness (shapes) */}
       {hasShapes && (
         <>
-          <div className="excalidraw-sidebar-label">Края</div>
-          <div className="excalidraw-sidebar-row">
+          <div className="drawing-sidebar-label">Края</div>
+          <div className="drawing-sidebar-row">
             {(["sharp", "round"] as const).map((r) => (
               <button
                 key={r}
-                className={`excalidraw-tool-btn${firstEl?.roundness === r ? " active" : ""}`}
+                className={`drawing-tool-btn${firstEl?.roundness === r ? " active" : ""}`}
                 onClick={() => updateSelectedProps({ roundness: r })}
               >
                 <svg width="18" height="18" viewBox="0 0 18 18">

@@ -29,7 +29,7 @@ interface Props {
   initialContent: string;
 }
 
-export function ExcalidrawCanvas({ sectionId, initialContent }: Props) {
+export function DrawingCanvas({ sectionId, initialContent }: Props) {
   const updateSection = useAppStore((s) => s.updateSection);
   const currentSection = useAppStore((s) => s.currentSection);
   const theme = useAppStore((s) => s.theme);
@@ -53,12 +53,12 @@ export function ExcalidrawCanvas({ sectionId, initialContent }: Props) {
   const [renderCounter, forceRender] = useState(0);
   const [sidebarPos, setSidebarPos] = useState<{ x: number; y: number }>(() => {
     try {
-      const saved = localStorage.getItem("excalidraw-sidebar-pos");
+      const saved = localStorage.getItem("drawing-sidebar-pos");
       if (saved) return JSON.parse(saved);
     } catch {}
     return { x: 12, y: 50 };
   });
-  const [sidebarLocked, setSidebarLocked] = useState(() => localStorage.getItem("excalidraw-sidebar-locked") === "1");
+  const [sidebarLocked, setSidebarLocked] = useState(() => localStorage.getItem("drawing-sidebar-locked") === "1");
 
   const selectedIdsRef = useRef(selectedIds);
   selectedIdsRef.current = selectedIds;
@@ -261,7 +261,7 @@ export function ExcalidrawCanvas({ sectionId, initialContent }: Props) {
   );
 
   return (
-    <div className="excalidraw-wrap">
+    <div className="drawing-wrap">
       {/* Top toolbar */}
       <Toolbar
         activeTool={activeTool}
@@ -271,7 +271,7 @@ export function ExcalidrawCanvas({ sectionId, initialContent }: Props) {
       />
 
       {/* Canvas area */}
-      <div className="excalidraw-canvas-area" ref={containerRef}>
+      <div className="drawing-canvas-area" ref={containerRef}>
         <SvgScene
           state={stateRef.current}
           width={containerSize.width}
@@ -325,47 +325,47 @@ export function ExcalidrawCanvas({ sectionId, initialContent }: Props) {
       </div>
 
       {/* Bottom bar */}
-      <div className="excalidraw-bottombar">
-        <div className="excalidraw-toolbar-group">
-          <button className="excalidraw-tool-btn" onClick={undo} title={t("excUndo")}>
+      <div className="drawing-bottombar">
+        <div className="drawing-toolbar-group">
+          <button className="drawing-tool-btn" onClick={undo} title={t("excUndo")}>
             <Undo2 size={16} />
           </button>
-          <button className="excalidraw-tool-btn" onClick={redo} title={t("excRedo")}>
+          <button className="drawing-tool-btn" onClick={redo} title={t("excRedo")}>
             <Redo2 size={16} />
           </button>
         </div>
-        <div className="excalidraw-toolbar-sep" />
-        <button className={`excalidraw-tool-btn${gridEnabled ? " active" : ""}`} onClick={() => setGridEnabled(!gridEnabled)} title={t("excGrid")}>
+        <div className="drawing-toolbar-sep" />
+        <button className={`drawing-tool-btn${gridEnabled ? " active" : ""}`} onClick={() => setGridEnabled(!gridEnabled)} title={t("excGrid")}>
           <Grid3x3 size={16} />
         </button>
-        <div className="excalidraw-toolbar-sep" />
-        <button className="excalidraw-tool-btn" onClick={copySelected} title={t("excCopy")} disabled={selectedIds.size === 0}>
+        <div className="drawing-toolbar-sep" />
+        <button className="drawing-tool-btn" onClick={copySelected} title={t("excCopy")} disabled={selectedIds.size === 0}>
           <Copy size={16} />
         </button>
-        <button className="excalidraw-tool-btn" onClick={paste} title={t("excPaste")} disabled={clipboardRef.current.length === 0}>
+        <button className="drawing-tool-btn" onClick={paste} title={t("excPaste")} disabled={clipboardRef.current.length === 0}>
           <Clipboard size={16} />
         </button>
-        <button className="excalidraw-tool-btn" onClick={duplicate} title={t("excDuplicate")} disabled={selectedIds.size === 0}>
+        <button className="drawing-tool-btn" onClick={duplicate} title={t("excDuplicate")} disabled={selectedIds.size === 0}>
           <CopyPlus size={16} />
         </button>
-        <div className="excalidraw-toolbar-sep" />
-        <button className="excalidraw-tool-btn" onClick={bringToFront} title={t("excBringToFront")} disabled={selectedIds.size === 0}>
+        <div className="drawing-toolbar-sep" />
+        <button className="drawing-tool-btn" onClick={bringToFront} title={t("excBringToFront")} disabled={selectedIds.size === 0}>
           <ArrowUpToLine size={16} />
         </button>
-        <button className="excalidraw-tool-btn" onClick={sendToBack} title={t("excSendToBack")} disabled={selectedIds.size === 0}>
+        <button className="drawing-tool-btn" onClick={sendToBack} title={t("excSendToBack")} disabled={selectedIds.size === 0}>
           <ArrowDownToLine size={16} />
         </button>
-        <div className="excalidraw-toolbar-sep" />
-        <button className="excalidraw-tool-btn" onClick={deleteSelected} title={t("excDelete")} disabled={selectedIds.size === 0}>
+        <div className="drawing-toolbar-sep" />
+        <button className="drawing-tool-btn" onClick={deleteSelected} title={t("excDelete")} disabled={selectedIds.size === 0}>
           <Trash2 size={16} />
         </button>
         <div style={{ flex: 1 }} />
-        <div className="excalidraw-toolbar-group">
-          <button className="excalidraw-tool-btn" onClick={zoomOut} title={t("excZoomOut")}>
+        <div className="drawing-toolbar-group">
+          <button className="drawing-tool-btn" onClick={zoomOut} title={t("excZoomOut")}>
             <ZoomOut size={16} />
           </button>
-          <span className="excalidraw-zoom-label">{Math.round(zoom * 100)}%</span>
-          <button className="excalidraw-tool-btn" onClick={zoomIn} title={t("excZoomIn")}>
+          <span className="drawing-zoom-label">{Math.round(zoom * 100)}%</span>
+          <button className="drawing-tool-btn" onClick={zoomIn} title={t("excZoomIn")}>
             <ZoomIn size={16} />
           </button>
         </div>

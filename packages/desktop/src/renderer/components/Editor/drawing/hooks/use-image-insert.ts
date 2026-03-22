@@ -70,7 +70,7 @@ export function useImageInsert({
       const dataUrl = await window.api.pickImage();
       if (dataUrl) insertImageElement(dataUrl);
     } catch (err) {
-      console.warn("[ExcalidrawCanvas] pickImage failed:", err);
+      console.warn("[DrawingCanvas] pickImage failed:", err);
     }
   }, [insertImageElement]);
 

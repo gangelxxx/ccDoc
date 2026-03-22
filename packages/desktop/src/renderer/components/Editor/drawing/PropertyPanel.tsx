@@ -78,7 +78,7 @@ export function PropertyPanel({
 
   const toggleSidebarLock = useCallback(() => {
     setSidebarLocked((v) => {
-      localStorage.setItem("excalidraw-sidebar-locked", v ? "0" : "1");
+      localStorage.setItem("drawing-sidebar-locked", v ? "0" : "1");
       return !v;
     });
   }, [setSidebarLocked]);
@@ -119,7 +119,7 @@ export function PropertyPanel({
     const onUp = () => {
       if (sidebarDrag.current) {
         setSidebarPos((pos) => {
-          localStorage.setItem("excalidraw-sidebar-pos", JSON.stringify(pos));
+          localStorage.setItem("drawing-sidebar-pos", JSON.stringify(pos));
           return pos;
         });
         sidebarDrag.current = null;
@@ -167,7 +167,7 @@ export function PropertyPanel({
 
         if (x !== pos.x || y !== pos.y) {
           const newPos = { x, y };
-          localStorage.setItem("excalidraw-sidebar-pos", JSON.stringify(newPos));
+          localStorage.setItem("drawing-sidebar-pos", JSON.stringify(newPos));
           return newPos;
         }
         return pos;
@@ -182,20 +182,20 @@ export function PropertyPanel({
   return (
     <div
       ref={sidebarRef}
-      className="excalidraw-sidebar"
+      className="drawing-sidebar"
       style={{ left: clampedSidebarPos.x, top: clampedSidebarPos.y, cursor: sidebarLocked ? "default" : undefined }}
       onPointerDown={onSidebarPointerDown}
     >
-      <div className="excalidraw-sidebar-drag-handle">
+      <div className="drawing-sidebar-drag-handle">
         <button
-          className={`excalidraw-tool-btn excalidraw-lock-btn${sidebarLocked ? " active" : ""}`}
+          className={`drawing-tool-btn drawing-lock-btn${sidebarLocked ? " active" : ""}`}
           onClick={toggleSidebarLock}
           title={sidebarLocked ? "Разблокировать перемещение" : "Заблокировать позицию"}
         >
           {sidebarLocked ? <Lock size={12} /> : <Unlock size={12} />}
         </button>
       </div>
-      <div className="excalidraw-sidebar-content">
+      <div className="drawing-sidebar-content">
         <StrokeSection
           firstEl={firstEl}
           updateSelectedProps={updateSelectedProps}
@@ -225,32 +225,32 @@ export function PropertyPanel({
         />
 
         {/* Opacity */}
-        <div className="excalidraw-sidebar-label">Непрозрачность</div>
-        <div className="excalidraw-sidebar-slider-row">
+        <div className="drawing-sidebar-label">Непрозрачность</div>
+        <div className="drawing-sidebar-slider-row">
           <input
             type="range"
             min="0"
             max="100"
             value={firstEl?.opacity ?? 100}
             onChange={(e) => updateSelectedProps({ opacity: Number(e.target.value) })}
-            className="excalidraw-slider"
+            className="drawing-slider"
           />
-          <span className="excalidraw-sidebar-value">{firstEl?.opacity ?? 100}</span>
+          <span className="drawing-sidebar-value">{firstEl?.opacity ?? 100}</span>
         </div>
 
         {/* Layers */}
-        <div className="excalidraw-sidebar-label">Слои</div>
-        <div className="excalidraw-sidebar-row">
-          <button className="excalidraw-tool-btn" onClick={sendToBack} title="На задний план">
+        <div className="drawing-sidebar-label">Слои</div>
+        <div className="drawing-sidebar-row">
+          <button className="drawing-tool-btn" onClick={sendToBack} title="На задний план">
             <ArrowDownToLine size={16} />
           </button>
-          <button className="excalidraw-tool-btn" onClick={() => { /* move back one */ }} title="Назад">
+          <button className="drawing-tool-btn" onClick={() => { /* move back one */ }} title="Назад">
             <ArrowDownToLine size={14} />
           </button>
-          <button className="excalidraw-tool-btn" onClick={() => { /* move forward one */ }} title="Вперёд">
+          <button className="drawing-tool-btn" onClick={() => { /* move forward one */ }} title="Вперёд">
             <ArrowUpToLine size={14} />
           </button>
-          <button className="excalidraw-tool-btn" onClick={bringToFront} title="На передний план">
+          <button className="drawing-tool-btn" onClick={bringToFront} title="На передний план">
             <ArrowUpToLine size={16} />
           </button>
         </div>

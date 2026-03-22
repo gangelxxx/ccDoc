@@ -1,5 +1,5 @@
 import ELK, { type ElkNode } from "elkjs/lib/elk.bundled.js";
-import type { ExcalidrawElement } from "../../types.js";
+import type { DrawingElement } from "../../types.js";
 import {
   DSL_TO_TYPE,
   DEFAULT_SIZES,
@@ -39,11 +39,11 @@ type PendingArrow = {
   props: Record<string, string>;
 };
 
-export async function textToExcalidraw(
+export async function textToDrawing(
   text: string,
-  existingElements?: ExcalidrawElement[],
-): Promise<{ elements: ExcalidrawElement[] }> {
-  const existingMap = new Map<string, ExcalidrawElement>();
+  existingElements?: DrawingElement[],
+): Promise<{ elements: DrawingElement[] }> {
+  const existingMap = new Map<string, DrawingElement>();
   if (existingElements) {
     for (const el of existingElements) {
       const label = getLabel(el).toLowerCase();
@@ -206,8 +206,8 @@ export async function textToExcalidraw(
     }
   }
 
-  const elements: ExcalidrawElement[] = [];
-  const labelToElement = new Map<string, ExcalidrawElement>();
+  const elements: DrawingElement[] = [];
+  const labelToElement = new Map<string, DrawingElement>();
 
   if (existingElements) {
     const preservedIds = new Set<string>();
@@ -274,15 +274,15 @@ export async function textToExcalidraw(
 function buildShapeFromPending(
   s: PendingShape,
   counter: number,
-  existing?: ExcalidrawElement,
-): ExcalidrawElement {
+  existing?: DrawingElement,
+): DrawingElement {
   const elType = DSL_TO_TYPE[s.dslType] ?? s.dslType;
   const defaults = DEFAULT_SIZES[s.dslType] ?? [200, 80];
 
   const useExistingPos = existing && s.x === null;
   const useExistingSize = existing && s.w === null;
 
-  const el: ExcalidrawElement = {
+  const el: DrawingElement = {
     id: existing?.id ?? makeId(counter),
     type: elType,
     x: useExistingPos ? existing.x : (s.x ?? 100),
@@ -326,8 +326,8 @@ function buildShapeFromPending(
 function buildArrow(
   a: PendingArrow,
   counter: number,
-  labelToElement: Map<string, ExcalidrawElement>,
-): ExcalidrawElement {
+  labelToElement: Map<string, DrawingElement>,
+): DrawingElement {
   const sourceEl = labelToElement.get(a.source.toLowerCase());
   const targetEl = labelToElement.get(a.target.toLowerCase());
 
@@ -352,7 +352,7 @@ function buildArrow(
     startArrowhead = "arrow";
   }
 
-  const el: ExcalidrawElement = {
+  const el: DrawingElement = {
     id: makeId(counter),
     type: a.connector === "---" ? "line" : "arrow",
     x: startPt[0],

@@ -23,7 +23,7 @@ function renderNode(node: ProseMirrorNode, depth: number): string {
       return renderBlockquote(node);
     case "table":
       return renderTable(node);
-    case "excalidraw":
+    case "drawing":
       return `[whiteboard: ${(node.attrs?.name as string) || "Untitled"}]`;
     case "mermaid":
       return `\`\`\`mermaid\n${(node.attrs?.code as string) || ""}\n\`\`\``;
