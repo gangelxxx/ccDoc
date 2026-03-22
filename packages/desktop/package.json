@@ -57,7 +57,6 @@
         "nsis",
         "portable"
       ],
-      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,
@@ -71,16 +70,14 @@
         "dmg",
         "zip"
       ],
-      "category": "public.app-category.developer-tools",
-      "icon": "build/icon.icns"
+      "category": "public.app-category.developer-tools"
     },
     "linux": {
       "target": [
         "AppImage",
         "deb"
       ],
-      "category": "Development",
-      "icon": "build/icons"
+      "category": "Development"
     },
     "extraResources": [],
     "asar": true
