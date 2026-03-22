@@ -2,6 +2,16 @@
   "name": "@ccdoc/desktop",
   "version": "0.1.9",
   "private": true,
+  "description": "Desktop documentation app for software projects",
+  "author": {
+    "name": "gangelxxx",
+    "email": "gangelxxx@users.noreply.github.com"
+  },
+  "homepage": "https://github.com/gangelxxx/ccDoc",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gangelxxx/ccDoc.git"
+  },
   "main": "dist/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -81,6 +91,12 @@
       ],
       "category": "Development",
       "icon": "build/icons"
+    },
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
+    "publish": {
+      "provider": "github",
+      "owner": "gangelxxx",
+      "repo": "ccDoc"
     },
     "extraResources": [],
     "asar": true
