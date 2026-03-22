@@ -86,6 +86,8 @@ export function LlmPanel({ width, onClick }: { width?: number; onClick?: (e: Rea
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const modelPickerRef = useRef<HTMLDivElement>(null);
+  const prevSessionIdRef = useRef(llmCurrentSessionId);
+  const isFirstRenderRef = useRef(true);
 
   // Fetch models when panel is open, API key is set, and models not yet loaded
   useEffect(() => {
@@ -105,8 +107,14 @@ export function LlmPanel({ width, onClick }: { width?: number; onClick?: (e: Rea
   }, [showModelPicker]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [llmMessages, llmLoading]);
+    const sessionChanged = prevSessionIdRef.current !== llmCurrentSessionId;
+    prevSessionIdRef.current = llmCurrentSessionId;
+    // First render (mount/remount) or session switch → instant (no visible animation)
+    // New message in same session → smooth scroll
+    const behavior = isFirstRenderRef.current || sessionChanged ? "instant" : "smooth";
+    isFirstRenderRef.current = false;
+    messagesEndRef.current?.scrollIntoView({ behavior });
+  }, [llmMessages, llmLoading, llmCurrentSessionId]);
 
   // Reset selected option when waiting state ends
   useEffect(() => {

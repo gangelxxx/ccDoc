@@ -1,4 +1,7 @@
-const sharp = require('sharp')
+let sharp
+try { sharp = require('sharp') } catch {
+  sharp = require(require('path').join(__dirname, '..', 'node_modules', '.pnpm', 'sharp@0.34.5', 'node_modules', 'sharp'))
+}
 const fs = require('fs')
 const path = require('path')
 
@@ -10,9 +13,62 @@ if (!SOURCE) {
 
 const OUT = path.join(__dirname, '..', 'packages', 'desktop', 'build')
 const ICO_SIZES = [16, 24, 32, 48, 64, 128, 256]
+const BG_TOLERANCE = 40 // color distance threshold for background removal
+
+/**
+ * Remove background via flood-fill from all 4 corners.
+ * Returns a sharp instance with transparent background.
+ */
+async function removeBackground(sourcePath) {
+  const { data, info } = await sharp(sourcePath)
+    .raw()
+    .ensureAlpha()
+    .toBuffer({ resolveWithObject: true })
+
+  const { width: w, height: h, channels: ch } = info
+  const visited = new Uint8Array(w * h)
+
+  function colorDist(offset, r, g, b) {
+    const dr = data[offset] - r
+    const dg = data[offset + 1] - g
+    const db = data[offset + 2] - b
+    return Math.sqrt(dr * dr + dg * dg + db * db)
+  }
+
+  // Flood-fill from a starting pixel, making matching pixels transparent
+  function floodFill(startX, startY) {
+    const off0 = (startY * w + startX) * ch
+    const sr = data[off0], sg = data[off0 + 1], sb = data[off0 + 2]
+    const queue = [[startX, startY]]
+
+    while (queue.length > 0) {
+      const [x, y] = queue.pop()
+      const idx = y * w + x
+      if (x < 0 || x >= w || y < 0 || y >= h || visited[idx]) continue
+
+      const off = idx * ch
+      if (colorDist(off, sr, sg, sb) > BG_TOLERANCE) continue
+
+      visited[idx] = 1
+      data[off + 3] = 0 // make transparent
+
+      queue.push([x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1])
+    }
+  }
+
+  // Flood-fill from all 4 corners
+  floodFill(0, 0)
+  floodFill(w - 1, 0)
+  floodFill(0, h - 1)
+  floodFill(w - 1, h - 1)
+
+  console.log('  background removed (tolerance: %d)', BG_TOLERANCE)
+
+  return sharp(data, { raw: { width: w, height: h, channels: ch } }).png()
+}
 
 function resize(source, size) {
-  return sharp(source)
+  return source.clone()
     .resize(size, size, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
     .png({ quality: 100 })
 }
@@ -21,8 +77,7 @@ async function createIco(source, outPath, sizes) {
   // Use 32-bit BMP format inside ICO for best Windows transparency support
   const images = await Promise.all(
     sizes.map(async s => {
-      const raw = await sharp(source)
-        .resize(s, s, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+      const raw = await resize(source, s)
         .raw()
         .ensureAlpha()
         .toBuffer()
@@ -99,19 +154,22 @@ async function createIco(source, outPath, sizes) {
 async function main() {
   fs.mkdirSync(OUT, { recursive: true })
 
-  // Main icon (512x512) — macOS auto-converts to ICNS on CI
-  await resize(SOURCE, 1024).toFile(path.join(OUT, 'icon.png'))
+  // Step 1: remove background from source image
+  const cleaned = await removeBackground(SOURCE)
+
+  // Main icon (1024x1024) — macOS auto-converts to ICNS on CI
+  await resize(cleaned, 1024).toFile(path.join(OUT, 'icon.png'))
   console.log('  icon.png (1024x1024)')
 
   // Windows ICO (multi-resolution)
-  await createIco(SOURCE, path.join(OUT, 'icon.ico'), ICO_SIZES)
+  await createIco(cleaned, path.join(OUT, 'icon.ico'), ICO_SIZES)
   console.log('  icon.ico (%s sizes)', ICO_SIZES.join(', '))
 
   // Linux PNGs
   const iconsDir = path.join(OUT, 'icons')
   fs.mkdirSync(iconsDir, { recursive: true })
   for (const s of [16, 24, 32, 48, 64, 128, 256, 512]) {
-    await resize(SOURCE, s).toFile(path.join(iconsDir, `${s}x${s}.png`))
+    await resize(cleaned, s).toFile(path.join(iconsDir, `${s}x${s}.png`))
   }
   console.log('  icons/ (8 sizes for Linux)')
 

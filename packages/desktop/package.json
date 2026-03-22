@@ -1,17 +1,7 @@
 {
   "name": "@ccdoc/desktop",
-  "version": "0.1.7",
+  "version": "0.1.0",
   "private": true,
-  "description": "Desktop documentation app for software projects",
-  "author": {
-    "name": "gangelxxx",
-    "email": "gangelxxx@users.noreply.github.com"
-  },
-  "homepage": "https://github.com/gangelxxx/ccDoc",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/gangelxxx/ccDoc.git"
-  },
   "main": "dist/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -54,7 +44,6 @@
   "build": {
     "appId": "com.ccdoc.app",
     "productName": "ccDoc",
-    "artifactName": "${productName}-${version}-${arch}.${ext}",
     "directories": {
       "output": "release"
     },
@@ -67,7 +56,8 @@
       "target": [
         "nsis",
         "portable"
-      ]
+      ],
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,
@@ -81,19 +71,16 @@
         "dmg",
         "zip"
       ],
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns"
     },
     "linux": {
       "target": [
         "AppImage",
         "deb"
       ],
-      "category": "Development"
-    },
-    "publish": {
-      "provider": "github",
-      "owner": "gangelxxx",
-      "repo": "ccDoc"
+      "category": "Development",
+      "icon": "build/icons"
     },
     "extraResources": [],
     "asar": true

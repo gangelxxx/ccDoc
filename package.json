@@ -1,7 +1,7 @@
 {
   "name": "ccdoc",
   "private": true,
-  "version": "0.1.7",
+  "version": "0.1.0",
   "description": "Desktop documentation app for software projects",
   "scripts": {
     "dev": "node scripts/dev.js",
@@ -9,11 +9,13 @@
     "build:core": "cd packages/core && npx tsup",
     "build:mcp": "cd packages/mcp-server && npx tsup",
     "build:desktop": "cd packages/desktop && npx electron-vite build",
-    "package": "cd packages/desktop && npx electron-builder --publish never",
-    "package:win": "cd packages/desktop && npx electron-builder --win --publish never",
-    "package:mac": "cd packages/desktop && npx electron-builder --mac --publish never",
-    "package:linux": "cd packages/desktop && npx electron-builder --linux --publish never",
-    "release": "bash scripts/release.sh"
+    "package": "bash scripts/package.sh",
+    "package:build": "bash scripts/package.sh --build",
+    "release": "bash scripts/package.sh --release",
+    "release:win": "bash scripts/package.sh --release --win",
+    "release:mac": "bash scripts/package.sh --release --mac",
+    "release:linux": "bash scripts/package.sh --release --linux",
+    "github": "bash scripts/github-release.sh"
   },
   "engines": {
     "node": ">=20"
@@ -35,7 +37,6 @@
     ]
   },
   "devDependencies": {
-    "cross-env": "^10.1.0",
-    "sharp": "^0.34.5"
+    "cross-env": "^10.1.0"
   }
 }

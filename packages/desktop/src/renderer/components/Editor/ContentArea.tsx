@@ -113,6 +113,16 @@ export function ContentArea() {
             Загрузка...
           </div>
         </div>
+        {llmPanelOpen && (
+          <ResizeHandle
+            side="right"
+            onResizeStart={llmResize.handleLlmResizeStart}
+            onResize={llmResize.handleLlmResize}
+            onResizeEnd={llmResize.handleLlmResizeEnd}
+            onDoubleClick={llmResize.handleLlmDoubleClick}
+          />
+        )}
+        <LlmPanel width={llmPanelWidth} onClick={llmResize.handleLlmPanelClick} />
       </div>
     );
   }
