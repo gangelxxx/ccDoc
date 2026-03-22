@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/media/AiHi.gif" alt="ccDoc" />
+</p>
+
 # ccDoc
 
 A local-first desktop app for structured project documentation with a built-in AI assistant.
