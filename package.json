@@ -9,13 +9,11 @@
     "build:core": "cd packages/core && npx tsup",
     "build:mcp": "cd packages/mcp-server && npx tsup",
     "build:desktop": "cd packages/desktop && npx electron-vite build",
-    "package": "bash scripts/package.sh",
-    "package:build": "bash scripts/package.sh --build",
-    "release": "bash scripts/package.sh --release",
-    "release:win": "bash scripts/package.sh --release --win",
-    "release:mac": "bash scripts/package.sh --release --mac",
-    "release:linux": "bash scripts/package.sh --release --linux",
-    "github": "bash scripts/github-release.sh"
+    "package": "cd packages/desktop && npx electron-builder --publish never",
+    "package:win": "cd packages/desktop && npx electron-builder --win --publish never",
+    "package:mac": "cd packages/desktop && npx electron-builder --mac --publish never",
+    "package:linux": "cd packages/desktop && npx electron-builder --linux --publish never",
+    "release": "bash scripts/release.sh"
   },
   "engines": {
     "node": ">=20"
