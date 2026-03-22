@@ -54,6 +54,7 @@
   "build": {
     "appId": "com.ccdoc.app",
     "productName": "ccDoc",
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
     "directories": {
       "output": "release"
     },
