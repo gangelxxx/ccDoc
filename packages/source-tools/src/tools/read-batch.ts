@@ -2,7 +2,7 @@ import { resolve, relative } from 'path'
 import type { Tool, ToolContext } from './types.js'
 import type { SymbolParser } from '../parser/index.js'
 import { readRangeContent } from './read-range.js'
-import { countLines } from '../utils/fs.js'
+import { countLines, assertWithinRoot } from '../utils/fs.js'
 import { truncateOutput } from '../utils/format.js'
 
 /** Maximum total lines across all fragments */
@@ -122,6 +122,9 @@ export function createReadBatchTool(parser?: SymbolParser): Tool {
 
         // Phase 1: Estimate total lines to determine if we need compression
         const absPaths = ranges.map((r) => resolve(ctx.projectRoot, r.path))
+        for (const absPath of absPaths) {
+          assertWithinRoot(absPath, ctx.projectRoot)
+        }
         const estimates = await Promise.all(
           ranges.map((r, i) => estimateLines(r, absPaths[i], parser, ctx.projectRoot)),
         )

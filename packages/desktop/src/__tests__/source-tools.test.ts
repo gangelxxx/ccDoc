@@ -857,7 +857,7 @@ describe("Prompt caching: tool definitions", () => {
 
   it("individual parameter descriptions are under 150 chars each", () => {
     for (const tool of SOURCE_TOOLS) {
-      const props = tool.input_schema.properties as Record<string, { description?: string }>;
+      const props = tool.input_schema.properties as unknown as Record<string, { description?: string }>;
       for (const [paramName, param] of Object.entries(props)) {
         if (param.description) {
           expect(param.description.length).toBeLessThan(150);

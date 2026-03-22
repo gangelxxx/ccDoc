@@ -110,11 +110,37 @@ function convertMdastNode(node: MdNode): ProseMirrorNode | null {
   }
 }
 
+/** Regex to match opening `<span style="color:...">` tags. */
+const SPAN_COLOR_RE = /^<span\s+style="color:\s*(#[0-9a-fA-F]{3,8})">/i;
+
 function convertInlineNodes(nodes: MdNode[]): ProseMirrorNode[] {
   const result: ProseMirrorNode[] = [];
+  let activeColor: string | null = null;
+
   for (const node of nodes) {
+    // Handle color span open/close tags emitted as inline `html` nodes
+    if (node.type === "html") {
+      const val = (node.value as string) || "";
+      const openMatch = val.match(SPAN_COLOR_RE);
+      if (openMatch) {
+        activeColor = openMatch[1];
+        continue;
+      }
+      if (val.trim() === "</span>" && activeColor) {
+        activeColor = null;
+        continue;
+      }
+    }
+
     const converted = convertInline(node);
-    if (converted) result.push(...converted);
+    if (converted) {
+      if (activeColor) {
+        for (const n of converted) {
+          n.marks = [...(n.marks || []), { type: "textStyle", attrs: { color: activeColor } }];
+        }
+      }
+      result.push(...converted);
+    }
   }
   return result;
 }

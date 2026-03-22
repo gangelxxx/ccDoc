@@ -110,6 +110,8 @@ export function NoSectionState({ mainContentRef, llmResize }: CommonProps) {
     createSection,
     llmPanelOpen,
     toggleLlmPanel,
+    quickIdeaOpen,
+    toggleQuickIdea,
     llmPanelWidth,
   } = useAppStore();
 
@@ -130,6 +132,8 @@ export function NoSectionState({ mainContentRef, llmResize }: CommonProps) {
           projectName={currentProject!.name}
           llmPanelOpen={llmPanelOpen}
           toggleLlmPanel={toggleLlmPanel}
+          quickIdeaOpen={quickIdeaOpen}
+          toggleQuickIdea={toggleQuickIdea}
         />
         <div className="empty-state">
           {hasAnySections ? (

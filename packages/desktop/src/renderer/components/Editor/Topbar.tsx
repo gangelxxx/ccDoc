@@ -1,4 +1,4 @@
-import { MessageSquare, Columns2 } from "lucide-react";
+import { MessageSquare, Columns2, Lightbulb } from "lucide-react";
 import { useAppStore } from "../../stores/app.store.js";
 import { useT } from "../../i18n.js";
 import { TopbarMenu } from "./TopbarMenu.js";
@@ -33,6 +33,8 @@ export function Topbar({
   onBreadcrumbClick,
   llmPanelOpen,
   toggleLlmPanel,
+  quickIdeaOpen,
+  toggleQuickIdea,
 }: {
   sidebarCollapsed: boolean;
   toggleSidebar: () => void;
@@ -46,6 +48,8 @@ export function Topbar({
   onBreadcrumbClick?: (id: string) => void;
   llmPanelOpen?: boolean;
   toggleLlmPanel?: () => void;
+  quickIdeaOpen?: boolean;
+  toggleQuickIdea?: () => void;
 }) {
   const t = useT();
   return (
@@ -90,6 +94,13 @@ export function Topbar({
       <div className="topbar-right">
         {projectName && (
           <>
+            <button
+              className={`btn-icon${quickIdeaOpen ? " active" : ""}`}
+              onClick={toggleQuickIdea}
+              title={t("quickIdea")}
+            >
+              <Lightbulb size={18} />
+            </button>
             <button
               className={`btn-icon${llmPanelOpen ? " active" : ""}`}
               onClick={toggleLlmPanel}

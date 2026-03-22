@@ -276,3 +276,10 @@ export interface SearchDocument {
   tags: string[];
   updated_at: number;
 }
+
+/** PDF outline entry extracted from bookmarks/TOC */
+export interface PdfOutlineEntry {
+  title: string;
+  pageNum: number; // 1-based
+  level: number;   // 0 = chapter, 1 = section, 2 = subsection, ...
+}

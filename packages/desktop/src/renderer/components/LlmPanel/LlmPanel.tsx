@@ -87,10 +87,10 @@ export function LlmPanel({ width, onClick }: { width?: number; onClick?: (e: Rea
   const fileInputRef = useRef<HTMLInputElement>(null);
   const modelPickerRef = useRef<HTMLDivElement>(null);
 
-  // Fetch models only when panel is open, API key is set, models not yet loaded, and no model is selected
+  // Fetch models when panel is open, API key is set, and models not yet loaded
   useEffect(() => {
-    if (llmPanelOpen && llmApiKey && llmModels.length === 0 && !llmChatConfig.model) fetchLlmModels();
-  }, [llmPanelOpen, llmApiKey]);
+    if (llmPanelOpen && llmApiKey && llmModels.length === 0) fetchLlmModels();
+  }, [llmPanelOpen, llmApiKey, llmModels.length]);
 
   // Close model picker on outside click
   useEffect(() => {

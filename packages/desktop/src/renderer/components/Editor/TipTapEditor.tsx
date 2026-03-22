@@ -14,6 +14,8 @@ import Placeholder from "@tiptap/extension-placeholder";
 import UnderlineExt from "@tiptap/extension-underline";
 import Highlight from "@tiptap/extension-highlight";
 import TextAlign from "@tiptap/extension-text-align";
+import TextStyle from "@tiptap/extension-text-style";
+import { Color } from "@tiptap/extension-color";
 import { useEffect, useRef, useState, useCallback, type MouseEvent as ReactMouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { useAppStore } from "../../stores/app.store.js";
@@ -45,11 +47,16 @@ export function TipTapEditor({ sectionId, initialContent, title, showToolbar = t
   const lastSavedContent = useRef<string>(initialContent);
   const titleRef = useRef(title);
   titleRef.current = title;
+  const editorCreateTime = useRef(performance.now());
+  const hasEdits = useRef(false);
 
   const setEditorSelectedText = useAppStore((s) => s.setEditorSelectedText);
 
   const editor = useEditor(
     {
+      onCreate: () => {
+        console.log(`[perf] TipTapEditor CREATED +${(performance.now() - editorCreateTime.current).toFixed(0)}ms id=${sectionId.substring(0, 8)} contentLen=${initialContent?.length ?? 0}`);
+      },
       extensions: [
         StarterKit.configure({ codeBlock: false }),
         CodeBlockWithLang.configure({
@@ -67,10 +74,13 @@ export function TipTapEditor({ sectionId, initialContent, title, showToolbar = t
         UnderlineExt,
         Highlight.configure({ multicolor: false }),
         TextAlign.configure({ types: ["heading", "paragraph"] }),
+        TextStyle,
+        Color,
         CustomImage.configure({ inline: false, allowBase64: true }),
       ],
       content: parseContent(initialContent),
       onUpdate: ({ editor }) => {
+        hasEdits.current = true;
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
         saveTimerRef.current = setTimeout(() => {
           const json = JSON.stringify(editor.getJSON());
@@ -106,10 +116,14 @@ export function TipTapEditor({ sectionId, initialContent, title, showToolbar = t
   useEffect(() => {
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-      const json = editor?.getJSON();
-      if (json && sectionId) {
-        const content = JSON.stringify(json);
-        updateSection(sectionId, titleRef.current, content);
+      // Only save on unmount if user actually edited — prevents unnecessary
+      // getJSON() + IPC calls that accumulate when clicking through sections.
+      if (hasEdits.current && editor && !editor.isDestroyed) {
+        const json = editor.getJSON();
+        if (json && sectionId) {
+          const content = JSON.stringify(json);
+          updateSection(sectionId, titleRef.current, content);
+        }
       }
     };
   }, [editor, sectionId, updateSection]);

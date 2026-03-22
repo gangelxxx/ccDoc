@@ -1,6 +1,6 @@
 import { resolve } from 'path'
 import type { Tool, ToolContext } from './types.js'
-import { readLines, countLines } from '../utils/fs.js'
+import { readLines, countLines, assertWithinRoot } from '../utils/fs.js'
 import { truncateOutput } from '../utils/format.js'
 
 /**
@@ -51,6 +51,10 @@ export async function readRangeContent(
     return `File has ${totalLines} lines, requested start ${start} is beyond end of file.`
   }
 
+  if (end < start) {
+    return `Invalid range: end line ${end} is before start line ${start}.`
+  }
+
   const rangeSize = end - start + 1
   const numWidth = String(end).length
 
@@ -98,6 +102,7 @@ export function createReadRangeTool(): Tool {
       try {
         const filePath = params.path as string
         const absPath = resolve(ctx.projectRoot, filePath)
+        assertWithinRoot(absPath, ctx.projectRoot)
         const startLine = typeof params.start_line === 'number' ? params.start_line : 1
         const endLine = typeof params.end_line === 'number' ? params.end_line : undefined
         const maxLines = typeof params.max_lines === 'number' ? params.max_lines : 200

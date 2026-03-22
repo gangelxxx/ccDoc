@@ -3,7 +3,7 @@ import { app, BrowserWindow } from "electron";
 // Suppress Chromium GPU cache errors on Windows
 app.commandLine.appendSwitch("disable-gpu-shader-disk-cache");
 
-import { initServices, setMainWindowGetter, getAppDb, getProjectDbsMap } from "./services";
+import { initServices, setMainWindowGetter, getAppDb, getProjectDbsMap, unwatchProjectDb } from "./services";
 import { createWindow, getMainWindow } from "./window";
 import { registerAllIpcHandlers } from "./ipc";
 import { createSettingsService } from "./services/settings.service";
@@ -32,9 +32,10 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
-  // Close all cached project DB connections
+  // Close all watchers and cached project DB connections
   const projectDbs = getProjectDbsMap();
-  for (const [, { db }] of projectDbs) {
+  for (const [token, { db }] of projectDbs) {
+    unwatchProjectDb(token);
     try { db.close(); } catch { /* ignore */ }
   }
   projectDbs.clear();

@@ -81,6 +81,7 @@ export function KanbanBoard({ sectionId, title, initialContent }: { sectionId: s
 
       // N -- add card in first column
       if (e.key === "n" || e.key === "N") {
+        e.preventDefault();
         if (state.processedColumns.length > 0) {
           state.setAddingCardCol(state.processedColumns[0].id);
         }

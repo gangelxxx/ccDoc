@@ -9,10 +9,11 @@ import type {
   KanbanColumn,
   KanbanData,
 } from "./types.js";
+import type { TranslationKey } from "../../../i18n.js";
 
 // ── Constants ──────────────────────────────────────────────
 
-export const LABEL_COLORS = [
+export const LABEL_COLORS: { key: TranslationKey; color: string }[] = [
   { key: "kanbanColorRed", color: "#e03e3e" },
   { key: "kanbanColorOrange", color: "#d9730d" },
   { key: "kanbanColorYellow", color: "#dfab01" },
@@ -23,7 +24,7 @@ export const LABEL_COLORS = [
   { key: "kanbanColorGray", color: "#787774" },
 ];
 
-export const PROPERTY_TYPE_KEYS: Record<PropertyType, string> = {
+export const PROPERTY_TYPE_KEYS: Record<PropertyType, TranslationKey> = {
   text: "kanbanPropText",
   number: "kanbanPropNumber",
   select: "kanbanPropSelect",
@@ -34,7 +35,7 @@ export const PROPERTY_TYPE_KEYS: Record<PropertyType, string> = {
   person: "kanbanPropPerson",
 };
 
-export const CONDITION_KEYS: Record<string, string> = {
+export const CONDITION_KEYS: Record<string, TranslationKey> = {
   "is": "kanbanCondIs",
   "contains": "kanbanCondContains",
   "is empty": "kanbanCondIsEmpty",
@@ -170,7 +171,7 @@ export function computeCalculation(
   cards: KanbanCard[],
   calc: BoardSettings["calculation"],
   properties: PropertyDefinition[],
-  t: (key: string, ...args: any[]) => string,
+  t: (key: TranslationKey, ...args: (string | number)[]) => string,
 ): string | null {
   if (!calc) return null;
   if (calc.type === "count") return t("kanbanCalcCountValue", cards.length);

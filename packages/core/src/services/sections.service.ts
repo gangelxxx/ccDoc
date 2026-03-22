@@ -20,7 +20,8 @@ export class SectionsService {
   }
 
   async getTree(): Promise<TreeNode[]> {
-    const sections = await this.repo.list();
+    // Use listMeta (excludes content) — tree only needs id/title/type/parent/sort_key.
+    const sections = await this.repo.listMeta();
     return buildTree(sections);
   }
 
@@ -42,8 +43,11 @@ export class SectionsService {
 
   async getParentChain(id: string): Promise<Array<{ id: string; title: string; type: string }>> {
     const chain: Array<{ id: string; title: string; type: string }> = [];
+    const visited = new Set<string>();
     let current = await this.repo.getById(id);
     while (current?.parent_id) {
+      if (visited.has(current.parent_id)) break; // cycle protection
+      visited.add(current.parent_id);
       current = await this.repo.getById(current.parent_id);
       if (current) chain.unshift({ id: current.id, title: current.title, type: current.type });
     }
@@ -227,6 +231,16 @@ export class SectionsService {
     const section = await this.repo.getById(id);
     if (!section) throw new Error(`Section ${id} not found`);
     if (newParentId) {
+      // Prevent circular reference: ensure newParentId is not a descendant of id
+      let ancestor = await this.repo.getById(newParentId);
+      const visited = new Set<string>();
+      while (ancestor) {
+        if (ancestor.id === id) throw new Error("Cannot move section into its own descendant");
+        if (visited.has(ancestor.id)) break;
+        visited.add(ancestor.id);
+        ancestor = ancestor.parent_id ? await this.repo.getById(ancestor.parent_id) : null;
+      }
+
       const parent = await this.repo.getById(newParentId);
       if (!parent) throw new Error(`Parent ${newParentId} not found`);
       validateHierarchy(section.type as SectionType, parent.type as SectionType);
@@ -384,7 +398,18 @@ export class SectionsService {
     });
 
     // Link kanbanId back to the idea
-    const ideaData: IdeaData = JSON.parse(idea.content);
+    let ideaData: IdeaData;
+    try {
+      const parsed = JSON.parse(idea.content);
+      if (parsed.type === "doc") {
+        // Legacy ProseMirror format — convert to IdeaData
+        ideaData = { messages };
+      } else {
+        ideaData = parsed as IdeaData;
+      }
+    } catch {
+      ideaData = { messages };
+    }
     ideaData.kanbanId = id;
     await this.repo.updateContent(ideaId, idea.title, JSON.stringify(ideaData));
 
@@ -406,20 +431,24 @@ export class SectionsService {
   async getFileWithSections(fileId: string): Promise<{ file: Section; sections: FileSectionNode[] }> {
     const file = await this.repo.getById(fileId);
     if (!file || file.type !== "file") throw new Error(`Section ${fileId} is not a file`);
-    const sections = await this.buildSectionTree(fileId);
+    // Limit depth to 2 levels (direct children + their children) to keep
+    // IPC payload small. Deep nesting is accessed via section navigation.
+    const sections = await this.buildSectionTree(fileId, 2);
     return { file, sections };
   }
 
   async getSectionChildren(parentId: string): Promise<FileSectionNode[]> {
-    return this.buildSectionTree(parentId);
+    return this.buildSectionTree(parentId, 2);
   }
 
-  private async buildSectionTree(parentId: string): Promise<FileSectionNode[]> {
+  private async buildSectionTree(parentId: string, maxDepth = 20): Promise<FileSectionNode[]> {
+    // Only load direct children (1 level) to avoid loading the entire tree.
+    // For large PDFs (304 sections), recursive loading produces 19+ MB of JSON.
     const children = await this.repo.getChildren(parentId);
     const sections = children.filter(c => c.type === "section" && !c.deleted_at);
     const result: FileSectionNode[] = [];
     for (const sec of sections) {
-      const subChildren = await this.buildSectionTree(sec.id);
+      const subChildren = maxDepth > 1 ? await this.buildSectionTree(sec.id, maxDepth - 1) : [];
       result.push({ ...sec, children: subChildren });
     }
     return result;

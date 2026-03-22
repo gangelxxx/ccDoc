@@ -12,6 +12,15 @@ export class SectionsRepo {
     return result.rows as unknown as Section[];
   }
 
+  /** Like list() but without the heavy `content` column (for tree building). */
+  async listMeta(includeDeleted = false): Promise<Section[]> {
+    const sql = includeDeleted
+      ? "SELECT id, parent_id, title, type, sort_key, icon, deleted_at, created_at, updated_at, '' as content FROM sections ORDER BY sort_key"
+      : "SELECT id, parent_id, title, type, sort_key, icon, deleted_at, created_at, updated_at, '' as content FROM sections WHERE deleted_at IS NULL ORDER BY sort_key";
+    const result = await this.db.execute(sql);
+    return result.rows as unknown as Section[];
+  }
+
   async getById(id: string): Promise<Section | null> {
     const result = await this.db.execute({
       sql: "SELECT * FROM sections WHERE id = ?",
@@ -26,6 +35,15 @@ export class SectionsRepo {
       : "SELECT * FROM sections WHERE parent_id = ? AND deleted_at IS NULL ORDER BY sort_key";
     const args = parentId === null ? [] : [parentId];
     const result = await this.db.execute({ sql, args });
+    return result.rows as unknown as Section[];
+  }
+
+  /** Like getChildren but without the heavy `content` column (for tree building). */
+  async getChildrenMeta(parentId: string): Promise<Section[]> {
+    const result = await this.db.execute({
+      sql: "SELECT id, parent_id, title, type, sort_key, icon, deleted_at, created_at, updated_at, '' as content FROM sections WHERE parent_id = ? AND deleted_at IS NULL ORDER BY sort_key",
+      args: [parentId],
+    });
     return result.rows as unknown as Section[];
   }
 

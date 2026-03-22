@@ -74,9 +74,15 @@ export function createCompactMessages(params: CompactParams) {
         }}));
       }
 
+      // Merge original user message + summary into one user message
+      // to avoid consecutive user messages (API requires alternating roles)
+      const firstText = typeof first.content === "string"
+        ? first.content
+        : Array.isArray(first.content)
+          ? first.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n")
+          : "";
       return [
-        first,
-        { role: "user", content: `[Conversation summary — previous ${middle.length} messages compressed]\n${summaryText}` },
+        { role: "user", content: `${firstText}\n\n[Conversation summary — previous ${middle.length} messages compressed]\n${summaryText}` },
         { role: "assistant", content: "Understood, continuing from the summary." },
         ...tail,
       ];

@@ -43,6 +43,7 @@ let searchService: SearchService;
 let backupService: BackupService;
 
 const projectDbs = new Map<string, ProjectServices>();
+const pendingInits = new Map<string, Promise<ProjectServices>>();
 
 // Watch project DB files for external changes (e.g. MCP server writes)
 const dbWatchers = new Map<string, FSWatcher>();
@@ -90,7 +91,7 @@ function watchProjectDb(token: string): void {
   }
 }
 
-function unwatchProjectDb(token: string): void {
+export function unwatchProjectDb(token: string): void {
   dbWatchers.get(token)?.close();
   dbWatchers.delete(token);
   if (dbChangeTimers.has(token)) {
@@ -111,41 +112,53 @@ export function trackBgTask<T>(label: string, fn: () => Promise<T>): Promise<T> 
 
 // ── Project services (cached per token) ────────────────────────────
 
-export async function getProjectServices(token: string): Promise<ProjectServices> {
-  if (!projectDbs.has(token)) {
-    const db = await openProjectDb(token);
-    const sections = new SectionsService(db);
-    const fts = new FtsService(db);
-    const index = new IndexService(db);
-    const passport = new ProjectPassportRepo(db);
-    projectDbs.set(token, {
-      db,
-      sections,
-      export_: new ExportService(db),
-      import_: new ImportService(sections),
-      history: new HistoryService(token),
-      fts,
-      index,
-      passport,
-    });
-    backupService.registerDb(token, db);
-    watchProjectDb(token);
+export function getProjectServices(token: string): Promise<ProjectServices> {
+  if (projectDbs.has(token)) return Promise.resolve(projectDbs.get(token)!);
 
-    // Trigger FTS reindex if not yet indexed or index version changed
-    (async () => {
+  if (!pendingInits.has(token)) {
+    const initPromise = (async () => {
       try {
-        const indexed = await fts.isIndexed();
-        const storedVer = await passport.get("fts_index_version");
-        if (!indexed || storedVer !== String(INDEX_VERSION)) {
-          await trackBgTask("Индексация поиска", () => index.reindexAll());
-          await passport.set("fts_index_version", String(INDEX_VERSION));
-        }
-      } catch (err) {
-        console.warn("[fts] reindex on open failed:", err);
+        const db = await openProjectDb(token);
+        const sections = new SectionsService(db);
+        const fts = new FtsService(db);
+        const index = new IndexService(db);
+        const passport = new ProjectPassportRepo(db);
+        const services: ProjectServices = {
+          db,
+          sections,
+          export_: new ExportService(db),
+          import_: new ImportService(sections),
+          history: new HistoryService(token),
+          fts,
+          index,
+          passport,
+        };
+        projectDbs.set(token, services);
+        backupService.registerDb(token, db);
+        watchProjectDb(token);
+
+        // Trigger FTS reindex if not yet indexed or index version changed
+        (async () => {
+          try {
+            const indexed = await fts.isIndexed();
+            const storedVer = await passport.get("fts_index_version");
+            if (!indexed || storedVer !== String(INDEX_VERSION)) {
+              await trackBgTask("Индексация поиска", () => index.reindexAll());
+              await passport.set("fts_index_version", String(INDEX_VERSION));
+            }
+          } catch (err) {
+            console.warn("[fts] reindex on open failed:", err);
+          }
+        })();
+
+        return services;
+      } finally {
+        pendingInits.delete(token);
       }
     })();
+    pendingInits.set(token, initPromise);
   }
-  return projectDbs.get(token)!;
+  return pendingInits.get(token)!;
 }
 
 // ── Service initialization ─────────────────────────────────────────

@@ -37,9 +37,19 @@ export function useAutoSave({
     }, 500);
   }, [updateSection, stateRef]);
 
-  // Cleanup timer on unmount
+  // Flush pending changes on unmount to prevent data loss
   useEffect(() => () => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      // Save immediately before unmount
+      const json = serializeDrawState(stateRef.current!);
+      if (json !== lastSavedContent.current) {
+        const sec = currentSectionRef.current;
+        if (sec && sec.id === sectionIdRef.current) {
+          updateSection(sectionIdRef.current, sec.title, json);
+        }
+      }
+    }
   }, []);
 
   return { scheduleSave, lastSavedContent };

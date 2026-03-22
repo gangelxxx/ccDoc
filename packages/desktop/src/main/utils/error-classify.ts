@@ -69,6 +69,9 @@ export function classifyApiError(status: number, body: string): ErrorCategory {
   // Other 5xx
   if (status >= 500) return "server_error";
 
+  // 401 — auth error (expired token, invalid credentials)
+  if (status === 401) return "auth";
+
   // 400
   if (status === 400) return "bad_request";
 

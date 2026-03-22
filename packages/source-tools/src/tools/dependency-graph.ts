@@ -3,6 +3,7 @@ import { stat } from 'fs/promises'
 import { resolve, relative, dirname } from 'path'
 import type { Tool, ToolContext, Import } from './types.js'
 import type { SymbolParser } from '../parser/index.js'
+import { assertWithinRoot } from '../utils/fs.js'
 import { truncateOutput } from '../utils/format.js'
 
 // ---------------------------------------------------------------------------
@@ -212,6 +213,7 @@ async function resolveEntryFiles(
   }
 
   const absEntry = resolve(projectRoot, entry)
+  assertWithinRoot(absEntry, projectRoot)
   const relEntry = relative(projectRoot, absEntry).replace(/\\/g, '/')
 
   let stats

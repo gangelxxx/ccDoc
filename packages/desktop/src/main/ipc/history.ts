@@ -1,5 +1,5 @@
 import { ipcMain } from "electron";
-import { getProjectServices, suppressExternalChange } from "../services";
+import { getProjectServices, suppressExternalChange, trackBgTask } from "../services";
 
 export function registerHistoryIpc(): void {
   ipcMain.handle("history:commit", async (_e, token: string, message: string) => {
@@ -27,8 +27,10 @@ export function registerHistoryIpc(): void {
 
   ipcMain.handle("history:restore", async (_e, token: string, commitId: string) => {
     suppressExternalChange(token);
-    const { sections, history } = await getProjectServices(token);
+    const { sections, history, index } = await getProjectServices(token);
     await history.restore(commitId, sections);
+    // Rebuild FTS index after restore (restore clears sections_text)
+    trackBgTask("Индексация поиска", () => index.reindexAll()).catch(err => console.warn("[index] reindex after restore:", err));
   });
 
   ipcMain.handle("history:delete", async (_e, token: string, commitId: string) => {

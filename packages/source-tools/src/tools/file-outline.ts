@@ -2,7 +2,7 @@ import { readFile } from 'fs/promises'
 import { resolve, relative } from 'path'
 import type { Tool, ToolContext, Symbol } from './types.js'
 import type { SymbolParser } from '../parser/index.js'
-import { countLines } from '../utils/fs.js'
+import { countLines, assertWithinRoot } from '../utils/fs.js'
 import { truncateOutput } from '../utils/format.js'
 
 // ---------------------------------------------------------------------------
@@ -208,6 +208,7 @@ export function createFileOutlineTool(parser: SymbolParser): Tool {
 
         for (const filePath of paths) {
           const absPath = resolve(ctx.projectRoot, filePath)
+          assertWithinRoot(absPath, ctx.projectRoot)
           const relPath = relative(ctx.projectRoot, absPath).replace(/\\/g, '/')
 
           // Read file content

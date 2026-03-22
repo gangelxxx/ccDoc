@@ -25,6 +25,7 @@ export type {
   IdeaImage,
   IdeaMessage,
   IdeaData,
+  PdfOutlineEntry,
 } from "./types.js";
 
 // Constants

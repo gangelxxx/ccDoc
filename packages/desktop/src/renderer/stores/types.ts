@@ -74,7 +74,7 @@ export interface LlmSession {
   id: string;
   title: string; // first user message preview
   messages: LlmMessage[];
-  tokensUsed: { input: number; output: number };
+  tokensUsed: { input: number; output: number; cacheRead: number; cacheCreation: number };
   createdAt: number;
   updatedAt: number;
 }
@@ -253,6 +253,12 @@ export interface AppState {
   llmPanelOpen: boolean;
   setLlmPanelOpen: (open: boolean) => void;
   toggleLlmPanel: () => void;
+
+  // Quick idea
+  quickIdeaOpen: boolean;
+  setQuickIdeaOpen: (open: boolean) => void;
+  toggleQuickIdea: () => void;
+  quickCreateIdea: (text: string, images?: { id: string; name: string; mediaType: string; data: string }[]) => Promise<void>;
 
   settingsOpen: string | null;
   openSettings: (tab?: string) => void;

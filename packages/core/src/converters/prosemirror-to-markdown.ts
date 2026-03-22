@@ -80,6 +80,11 @@ function applyMark(text: string, mark: ProseMirrorMark): string {
       return `~~${text}~~`;
     case "link":
       return `[${text}](${(mark.attrs?.href as string) || ""})`;
+    case "textStyle":
+      if (mark.attrs?.color) {
+        return `<span style="color:${mark.attrs.color}">${text}</span>`;
+      }
+      return text;
     default:
       return text;
   }
@@ -116,7 +121,12 @@ function renderTaskList(node: ProseMirrorNode, depth: number): string {
   return node.content
     .map((item) => {
       const checked = item.attrs?.checked ? "x" : " ";
-      const text = renderInlineContent(item.content?.[0]?.content);
+      const text = item.content
+        ? item.content.map((child) => {
+            if (child.type === "paragraph") return renderInlineContent(child.content);
+            return renderNode(child, depth + 1);
+          }).join("\n")
+        : "";
       return `${indent}- [${checked}] ${text}`;
     })
     .join("\n");
@@ -138,11 +148,22 @@ function renderBlockquote(node: ProseMirrorNode): string {
     .join("\n");
 }
 
+function renderTableCell(cell: ProseMirrorNode): string {
+  if (!cell.content) return "";
+  return cell.content
+    .map((child) => {
+      if (child.type === "paragraph") return renderInlineContent(child.content);
+      return renderNode(child, 0);
+    })
+    .join(" ")
+    .replace(/\|/g, "\\|");
+}
+
 function renderTable(node: ProseMirrorNode): string {
   if (!node.content) return "";
   const rows = node.content.map((row) => {
     if (!row.content) return [];
-    return row.content.map((cell) => renderInlineContent(cell.content?.[0]?.content));
+    return row.content.map((cell) => renderTableCell(cell));
   });
   if (rows.length === 0) return "";
 
@@ -161,5 +182,6 @@ function renderCallout(node: ProseMirrorNode): string {
   const content = node.content
     ? node.content.map((n) => renderNode(n, 0)).join("\n\n")
     : "";
-  return `> **${type}:** ${content}`;
+  const lines = `**${type}:** ${content}`.split("\n");
+  return lines.map((line) => `> ${line}`).join("\n");
 }

@@ -2,7 +2,7 @@ import { readFile } from 'fs/promises'
 import { resolve, relative } from 'path'
 import type { Tool, ToolContext, Symbol } from './types.js'
 import type { SymbolParser } from '../parser/index.js'
-import { walkDir } from '../utils/fs.js'
+import { walkDir, assertWithinRoot } from '../utils/fs.js'
 import { IGNORED_DIRS, loadGitignore } from '../utils/ignore.js'
 import { truncateOutput } from '../utils/format.js'
 
@@ -257,9 +257,12 @@ export function createFindReferencesTool(parser: SymbolParser): Tool {
           return 'Error: symbol name is required'
         }
 
-        const defPath = filePath
-          ? relative(ctx.projectRoot, resolve(ctx.projectRoot, filePath)).replace(/\\/g, '/')
-          : undefined
+        let defPath: string | undefined
+        if (filePath) {
+          const absDefPath = resolve(ctx.projectRoot, filePath)
+          assertWithinRoot(absDefPath, ctx.projectRoot)
+          defPath = relative(ctx.projectRoot, absDefPath).replace(/\\/g, '/')
+        }
 
         const { refs, definitionFile } = await findReferences(
           parser,

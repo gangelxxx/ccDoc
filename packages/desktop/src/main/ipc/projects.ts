@@ -1,6 +1,6 @@
 import { ipcMain, dialog } from "electron";
 import { InstallService } from "@ccdoc/core";
-import { getProjectsService, getBackupService, getProjectDbsMap } from "../services";
+import { getProjectsService, getBackupService, getProjectDbsMap, unwatchProjectDb } from "../services";
 import { getMainWindow } from "../window";
 
 export function registerProjectsIpc(): void {
@@ -32,7 +32,8 @@ export function registerProjectsIpc(): void {
       }
     }
 
-    // Close and clean up cached DB connection before removing the project
+    // Close watcher and cached DB connection before removing the project
+    unwatchProjectDb(token);
     const cached = projectDbs.get(token);
     if (cached) {
       try {

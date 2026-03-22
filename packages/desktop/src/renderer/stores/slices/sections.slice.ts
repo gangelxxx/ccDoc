@@ -2,6 +2,7 @@ import type { Section, TreeNode, SliceCreator } from "../types.js";
 import { t } from "../../i18n.js";
 
 let _renameTimer: ReturnType<typeof setTimeout> | null = null;
+let selectSectionGen = 0;
 
 export function resolveTargetFolder(tree: TreeNode[], currentSection: Section | null): string | null {
   if (!currentSection) {
@@ -38,6 +39,7 @@ export interface SectionsSlice {
   loadTree: () => Promise<void>;
   selectSection: (id: string) => Promise<void>;
   createSection: (parentId: string | null, title: string, type: string, icon?: string | null) => Promise<void>;
+  quickCreateIdea: (text: string, images?: { id: string; name: string; mediaType: string; data: string }[]) => Promise<void>;
   updateSection: (id: string, title: string, content: string) => Promise<void>;
   renameSection: (id: string, title: string) => Promise<void>;
   updateIcon: (id: string, icon: string | null) => Promise<void>;
@@ -54,6 +56,10 @@ export interface SectionsSlice {
   /** When set, IdeaChat scrolls to the first message matching this query and highlights it */
   highlightQuery: string | null;
   setHighlightQuery: (q: string | null) => void;
+  /** Counter that increments to toggle IdeaChat local search open */
+  ideaSearchTrigger: number;
+  /** Counter that increments to toggle editor search bar */
+  editorSearchTrigger: number;
 }
 
 export const createSectionsSlice: SliceCreator<SectionsSlice> = (set, get) => ({
@@ -85,7 +91,7 @@ export const createSectionsSlice: SliceCreator<SectionsSlice> = (set, get) => ({
   },
 
   selectSection: async (id) => {
-    const { currentProject, navHistory, navIndex, currentSection } = get();
+    const { currentProject } = get();
     if (!currentProject) return;
 
     // Close history view when selecting a section
@@ -93,17 +99,29 @@ export const createSectionsSlice: SliceCreator<SectionsSlice> = (set, get) => ({
       get().closeHistoryView();
     }
 
+    const gen = ++selectSectionGen;
+    const t0 = performance.now();
+    console.log(`[perf] selectSection START id=${id.substring(0, 8)} gen=${gen}`);
+
     set({ sectionLoading: true });
     try {
       const section = await window.api.getSection(currentProject.token, id);
+      const t1 = performance.now();
+      console.log(`[perf] selectSection IPC done +${(t1 - t0).toFixed(0)}ms id=${id.substring(0, 8)} type=${section?.type} contentLen=${section?.content?.length ?? 0}`);
 
-      if (currentSection?.id === id) {
-        set({ sectionLoading: false });
+      if (gen !== selectSectionGen) {
+        console.log(`[perf] selectSection DISCARDED (stale gen=${gen} current=${selectSectionGen})`);
         return;
       }
 
-      // Push to navigation history
-      const trimmedHistory = navHistory.slice(0, navIndex + 1);
+      if (get().currentSection?.id === id) {
+        set({ currentSection: section, sectionLoading: false, externalChangePending: false });
+        console.log(`[perf] selectSection SAME-RESELECT +${(performance.now() - t0).toFixed(0)}ms`);
+        return;
+      }
+
+      const { navHistory: currentHistory, navIndex: currentNavIndex } = get();
+      const trimmedHistory = currentHistory.slice(0, currentNavIndex + 1);
       trimmedHistory.push(id);
       const newIndex = trimmedHistory.length - 1;
 
@@ -115,10 +133,13 @@ export const createSectionsSlice: SliceCreator<SectionsSlice> = (set, get) => ({
         canGoForward: false,
         externalChangePending: false,
       });
+      console.log(`[perf] selectSection SET-STATE +${(performance.now() - t0).toFixed(0)}ms`);
     } catch (e: any) {
+      if (gen !== selectSectionGen) return;
+      console.error(`[perf] selectSection ERROR +${(performance.now() - t0).toFixed(0)}ms`, e.message);
       get().addToast("error", "Failed to load section", e.message);
     } finally {
-      set({ sectionLoading: false });
+      if (gen === selectSectionGen) set({ sectionLoading: false });
     }
   },
 
@@ -162,18 +183,23 @@ export const createSectionsSlice: SliceCreator<SectionsSlice> = (set, get) => ({
     // Debounced rename via IPC
     if (_renameTimer) clearTimeout(_renameTimer);
     _renameTimer = setTimeout(async () => {
-      const latestSection = get().currentSection;
-      if (latestSection && latestSection.id === id) {
-        // Renaming current section -- use its latest content
-        await window.api.updateSection(currentProject.token, id, title, latestSection.content);
-      } else {
-        // Renaming a non-current section -- fetch its content first
-        const section = await window.api.getSection(currentProject.token, id);
-        if (section) {
-          await window.api.updateSection(currentProject.token, id, title, section.content);
+      try {
+        // Re-read currentProject from store (may have changed during debounce)
+        const project = get().currentProject;
+        if (!project) return;
+        const latestSection = get().currentSection;
+        if (latestSection && latestSection.id === id) {
+          await window.api.updateSection(project.token, id, title, latestSection.content);
+        } else {
+          const section = await window.api.getSection(project.token, id);
+          if (section) {
+            await window.api.updateSection(project.token, id, title, section.content);
+          }
         }
+        await get().loadTree();
+      } catch (e: any) {
+        get().addToast("error", "Failed to rename section", e.message);
       }
-      await get().loadTree();
     }, 400);
   },
 
@@ -252,6 +278,66 @@ export const createSectionsSlice: SliceCreator<SectionsSlice> = (set, get) => ({
       get().addToast("error", "Failed to delete section", e.message);
     } finally {
       set({ treeLoading: false });
+    }
+  },
+
+  quickCreateIdea: async (text: string, images?: { id: string; name: string; mediaType: string; data: string }[]) => {
+    const { currentProject, tree, language } = get();
+    if (!currentProject?.token || !text.trim()) return;
+
+    const folderName = t(language, "quickIdeaFolderName" as any);
+    const ideaTitle = t(language, "quickIdeaTitle" as any);
+
+    try {
+      // Find existing Quick Ideas folder at root level
+      let folder = tree.find(
+        (n) => n.type === "folder" && n.title === folderName
+      );
+
+      // Create folder if it doesn't exist
+      if (!folder) {
+        const created = await window.api.createSection(
+          currentProject.token,
+          null,
+          folderName,
+          "folder",
+          "\u{1F4A1}" // 💡
+        );
+        await get().loadTree();
+        folder = get().tree.find((n) => n.id === created.id) ?? undefined;
+      }
+
+      if (!folder) return;
+
+      // Find existing idea section inside the folder
+      let ideaSection = folder.children?.find(
+        (n) => n.type === "idea"
+      );
+
+      // Create idea section if it doesn't exist
+      if (!ideaSection) {
+        const created = await window.api.createSection(
+          currentProject.token,
+          folder.id,
+          ideaTitle,
+          "idea"
+        );
+        await get().loadTree();
+        ideaSection = get().tree
+          .find((n) => n.id === folder!.id)
+          ?.children?.find((n) => n.id === created.id);
+        if (!ideaSection) return;
+      }
+
+      // Add message (with optional images) to the idea section
+      await get().addIdeaMessage(ideaSection.id, text.trim(), images);
+
+      // Reload tree so IdeaChat's useEffect [section.id, tree] triggers
+      await get().loadTree();
+
+      get().addToast("success", t(language, "quickIdeaSaved" as any));
+    } catch (e: any) {
+      get().addToast("error", "Failed to create quick idea", e.message);
     }
   },
 });

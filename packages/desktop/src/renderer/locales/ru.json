@@ -490,5 +490,11 @@
   "voice_whisper_base": "Whisper Base",
   "voice_whisper_base_desc": "Оптимальный баланс скорости и качества. 99 языков.",
   "voice_whisper_small": "Whisper Small",
-  "voice_whisper_small_desc": "Лучшее качество, медленнее. Рекомендуется для русского."
+  "voice_whisper_small_desc": "Лучшее качество, медленнее. Рекомендуется для русского.",
+
+  "quickIdea": "Быстрая идея (Ctrl+Shift+I)",
+  "quickIdeaTitle": "Быстрая идея",
+  "quickIdeaPlaceholder": "Запишите идею...",
+  "quickIdeaSaved": "Идея сохранена",
+  "quickIdeaFolderName": "Быстрые идеи"
 }

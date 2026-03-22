@@ -42,12 +42,19 @@ export interface UiSlice {
   sectionViewFiles: Record<string, boolean>;
   toggleFileViewMode: (fileId: string) => void;
 
+  // FileView content refresh signal (incremented after LLM mutations)
+  fileSectionsVersion: number;
+
   sectionLoading: boolean;
   treeLoading: boolean;
 
   llmPanelOpen: boolean;
   setLlmPanelOpen: (open: boolean) => void;
   toggleLlmPanel: () => void;
+
+  quickIdeaOpen: boolean;
+  setQuickIdeaOpen: (open: boolean) => void;
+  toggleQuickIdea: () => void;
 
   settingsOpen: string | null; // null = closed, string = tab to open (e.g. "voice")
   openSettings: (tab?: string) => void;
@@ -155,6 +162,10 @@ export const createUiSlice: SliceCreator<UiSlice> = (set, get) => ({
   llmPanelOpen: false,
   setLlmPanelOpen: (open) => set({ llmPanelOpen: open }),
   toggleLlmPanel: () => set((s) => ({ llmPanelOpen: !s.llmPanelOpen })),
+
+  quickIdeaOpen: false,
+  setQuickIdeaOpen: (open) => set({ quickIdeaOpen: open }),
+  toggleQuickIdea: () => set((s) => ({ quickIdeaOpen: !s.quickIdeaOpen })),
 
   settingsOpen: null,
   openSettings: (tab) => set({ settingsOpen: tab || "model" }),

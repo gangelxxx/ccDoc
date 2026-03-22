@@ -2,7 +2,7 @@ import { readFile } from 'fs/promises'
 import { resolve, relative } from 'path'
 import type { Tool, ToolContext, Symbol } from './types.js'
 import type { SymbolParser } from '../parser/index.js'
-import { readLines } from '../utils/fs.js'
+import { readLines, assertWithinRoot } from '../utils/fs.js'
 import { truncateOutput } from '../utils/format.js'
 
 // ---------------------------------------------------------------------------
@@ -209,6 +209,7 @@ export function createReadSymbolTool(parser: SymbolParser): Tool {
         }
 
         const absPath = filePath ? resolve(ctx.projectRoot, filePath) : undefined
+        if (absPath) assertWithinRoot(absPath, ctx.projectRoot)
 
         const result = await readSymbolContent(
           parser,

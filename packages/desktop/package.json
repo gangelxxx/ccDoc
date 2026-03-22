@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@ccdoc/core": "workspace:*",
+    "@huggingface/transformers": "^3.4.1",
     "@tiptap/extension-code-block-lowlight": "^2",
     "@tiptap/extension-highlight": "^2.27.2",
     "@tiptap/extension-image": "^2.27.2",
@@ -32,11 +33,11 @@
     "elkjs": "^0.11.1",
     "lowlight": "^3.3.0",
     "lucide-react": "^0.577.0",
+    "onnxruntime-web": "^1.24.3",
     "pdfjs-dist": "^4.0.379",
     "picomatch": "^4.0.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "@huggingface/transformers": "^3.4.1",
     "write-file-atomic": "^7.0.1",
     "zustand": "^5.0.3"
   },
@@ -85,6 +86,8 @@
     "asar": true
   },
   "devDependencies": {
+    "@tiptap/extension-color": "^2.27.2",
+    "@tiptap/extension-text-style": "^2.27.2",
     "@types/dompurify": "^3.2.0",
     "@types/picomatch": "^4.0.2",
     "@types/react": "^19.0.8",

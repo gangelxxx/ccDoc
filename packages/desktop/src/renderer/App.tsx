@@ -9,6 +9,7 @@ import { CommandPalette } from "./components/CommandPalette/CommandPalette.js";
 import { StatusBar } from "./components/StatusBar/StatusBar.js";
 import { ConfirmModal } from "./components/ConfirmModal/ConfirmModal.js";
 import { ResizeHandle } from "./components/ResizeHandle.js";
+import { QuickIdeaPopup } from "./components/QuickIdea/QuickIdea.js";
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null };
@@ -111,6 +112,13 @@ export function App() {
         }
       }
 
+      // Ctrl+Shift+I — quick idea
+      if (mod && e.shiftKey && e.key === "I") {
+        e.preventDefault();
+        useAppStore.getState().toggleQuickIdea();
+        return;
+      }
+
       // Ctrl+S — prevent default (save version)
       if (mod && e.key === "s") {
         e.preventDefault();
@@ -162,6 +170,7 @@ export function App() {
         <ToastContainer />
         <CommandPalette />
         <ConfirmModal />
+        <QuickIdeaPopup />
       </div>
     </ErrorBoundary>
   );

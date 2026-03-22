@@ -60,7 +60,10 @@ function extractTableText(node: ProseMirrorNode): string {
     .map((row) => {
       if (!row.content) return "";
       return row.content
-        .map((cell) => getInlineText(cell.content?.[0]?.content))
+        .map((cell) => {
+          if (!cell.content) return "";
+          return cell.content.map(extractText).filter(Boolean).join(" ");
+        })
         .join(" | ");
     })
     .filter(Boolean)

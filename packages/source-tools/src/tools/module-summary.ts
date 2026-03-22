@@ -3,7 +3,7 @@ import { readdir, readFile, stat } from 'fs/promises'
 import { resolve, relative, join, dirname } from 'path'
 import type { Tool, ToolContext, Symbol, Import } from './types.js'
 import type { SymbolParser } from '../parser/index.js'
-import { countLines } from '../utils/fs.js'
+import { countLines, assertWithinRoot } from '../utils/fs.js'
 import { shouldIgnore } from '../utils/ignore.js'
 import { truncateOutput } from '../utils/format.js'
 
@@ -419,6 +419,7 @@ export function createModuleSummaryTool(parser: SymbolParser): Tool {
         }
 
         const absDir = resolve(ctx.projectRoot, dirPath)
+        assertWithinRoot(absDir, ctx.projectRoot)
 
         // Verify it's a directory
         let stats

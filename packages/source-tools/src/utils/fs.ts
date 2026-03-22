@@ -1,7 +1,19 @@
 import { readdir, readFile } from 'fs/promises'
-import { join, relative } from 'path'
+import { join, relative, resolve } from 'path'
 import picomatch from 'picomatch'
 import { shouldIgnore } from './ignore.js'
+
+/**
+ * Validate that a resolved path is within the project root.
+ * Throws if the path escapes the project boundary (path traversal protection).
+ */
+export function assertWithinRoot(absPath: string, projectRoot: string): void {
+  const resolved = resolve(absPath)
+  const root = resolve(projectRoot)
+  if (!resolved.startsWith(root + '/') && !resolved.startsWith(root + '\\') && resolved !== root) {
+    throw new Error(`Path outside project root: ${absPath}`)
+  }
+}
 
 export interface WalkEntry {
   path: string

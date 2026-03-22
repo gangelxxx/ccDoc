@@ -89,7 +89,10 @@ function extractTableText(node: ProseMirrorNode): string {
   if (!node.content) return "";
   return node.content
     .map((row) =>
-      (row.content || []).map((cell) => getInlineText(cell.content?.[0]?.content)).join(" | ")
+      (row.content || []).map((cell) => {
+        if (!cell.content) return "";
+        return cell.content.map((child) => getInlineText(child.content)).filter(Boolean).join(" ");
+      }).join(" | ")
     )
     .join("\n");
 }

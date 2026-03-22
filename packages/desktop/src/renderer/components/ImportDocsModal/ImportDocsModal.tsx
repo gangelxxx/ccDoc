@@ -209,7 +209,7 @@ export function ImportDocsModal({ onClose, onDone }: { onClose: () => void; onDo
     }
 
     try {
-      const result = await window.api.cleanupProjectDocs(pathsToDelete);
+      const result = await window.api.cleanupProjectDocs(currentProject!.token, pathsToDelete);
       if (!mountedRef.current) return;
       setCleanupDeleted(result.deleted);
       setCleanupErrors(result.errors);

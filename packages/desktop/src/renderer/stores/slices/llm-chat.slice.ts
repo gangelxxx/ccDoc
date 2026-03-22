@@ -98,7 +98,18 @@ export const createLlmChatSlice: SliceCreator<LlmChatSlice> = (set, get) => ({
     }
     if (idx === undefined || idx < 0 || llmMessages[idx]?.role !== "user") return;
     const userMsg = llmMessages[idx];
-    const text = typeof userMsg.content === "string" ? userMsg.content : "";
+    // Extract text from content (may be string or array of content blocks)
+    let text: string;
+    if (typeof userMsg.content === "string") {
+      text = userMsg.content;
+    } else if (Array.isArray(userMsg.content)) {
+      text = userMsg.content
+        .filter((b: any) => b.type === "text")
+        .map((b: any) => b.text)
+        .join("\n");
+    } else {
+      text = "";
+    }
     // Remove this message and everything after it, then resend
     set({ llmMessages: llmMessages.slice(0, idx) });
     get().sendLlmMessage(text, true, userMsg.attachments);

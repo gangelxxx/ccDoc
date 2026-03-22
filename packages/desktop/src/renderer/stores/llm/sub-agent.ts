@@ -281,20 +281,28 @@ RULES:
       if (subData.stop_reason === "tool_use") {
         subMessages = [...subMessages, { role: "assistant", content: subData.content }];
         const subToolBlocks = (subData.content || []).filter((b: any) => b.type === "tool_use");
-        const subToolResults = await Promise.all(
-          subToolBlocks.map(async (block: any) => {
-            if (!allowed.has(block.name)) {
-              return { type: "tool_result", tool_use_id: block.id, content: `Error: tool '${block.name}' not allowed for ${agentType} sub-agent` };
-            }
-            // Sub-agents: default to MAX_CONTENT_LIMIT (10000) for get_section reads
-            const toolInput = (block.name === "get_section" && block.input.limit == null)
-              ? { ...block.input, limit: 10000 }
-              : block.input;
-            const raw = await executeTool(block.name, toolInput);
-            const compressed = compressToolResult(raw);
-            return { type: "tool_result", tool_use_id: block.id, content: truncateToolResult(compressed, SUB_AGENT_RESULT_LIMIT) };
-          })
-        );
+        // Execute tools — parallel for read-only, sequential if any mutating
+        const allSubReadOnly = subToolBlocks.every((b: any) => READ_ONLY_TOOLS.has(b.name));
+        const executeSubTool = async (block: any) => {
+          if (!allowed.has(block.name)) {
+            return { type: "tool_result", tool_use_id: block.id, content: `Error: tool '${block.name}' not allowed for ${agentType} sub-agent` };
+          }
+          const toolInput = (block.name === "get_section" && block.input.limit == null)
+            ? { ...block.input, limit: 10000 }
+            : block.input;
+          const raw = await executeTool(block.name, toolInput);
+          const compressed = compressToolResult(raw);
+          return { type: "tool_result", tool_use_id: block.id, content: truncateToolResult(compressed, SUB_AGENT_RESULT_LIMIT) };
+        };
+        let subToolResults: any[];
+        if (allSubReadOnly) {
+          subToolResults = await Promise.all(subToolBlocks.map(executeSubTool));
+        } else {
+          subToolResults = [];
+          for (const block of subToolBlocks) {
+            subToolResults.push(await executeSubTool(block));
+          }
+        }
         // On the penultimate round, warn the model that next round is the last
         if (subRound === maxRounds - 1) {
           subToolResults.push({

@@ -109,7 +109,7 @@ export function registerImportDocsIpc(): void {
           const cleanHref = href.split("#")[0].split("?")[0];
           const fileDir = fileRelPath.replace(/\\/g, "/").replace(/\/[^/]*$/, "");
           const resolvedRel = join(fileDir, cleanHref).replace(/\\/g, "/");
-          const resolvedAbs = resolve(project.path, resolvedRel);
+          const resolvedAbs = resolve(project!.path, resolvedRel);
 
           if (isImage) {
             const found = existsSync(resolvedAbs);
@@ -201,12 +201,21 @@ export function registerImportDocsIpc(): void {
     return verifyResults;
   });
 
-  ipcMain.handle("import-docs:cleanup", async (_e, filePaths: string[]) => {
+  ipcMain.handle("import-docs:cleanup", async (_e, token: string, filePaths: string[]) => {
+    const project = await getProjectsService().getByToken(token);
+    if (!project) throw new Error("Project not found");
+    const projectRoot = resolve(project.path);
+
     const deleted: string[] = [];
     const errors: string[] = [];
     for (let i = 0; i < filePaths.length; i++) {
+      const resolved = resolve(filePaths[i]);
+      if (!resolved.startsWith(projectRoot + "\\") && !resolved.startsWith(projectRoot + "/")) {
+        errors.push(`${filePaths[i]}: path outside project directory`);
+        continue;
+      }
       try {
-        await fsUnlink(filePaths[i]);
+        await fsUnlink(resolved);
         deleted.push(filePaths[i]);
       } catch (err: any) {
         errors.push(`${filePaths[i]}: ${err.message}`);

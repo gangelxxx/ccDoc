@@ -490,5 +490,11 @@
   "voice_whisper_base": "Whisper Base",
   "voice_whisper_base_desc": "Optimal speed/quality balance. 99 languages.",
   "voice_whisper_small": "Whisper Small",
-  "voice_whisper_small_desc": "Best quality, slower. Recommended for non-English."
+  "voice_whisper_small_desc": "Best quality, slower. Recommended for non-English.",
+
+  "quickIdea": "Quick Idea (Ctrl+Shift+I)",
+  "quickIdeaTitle": "Quick Idea",
+  "quickIdeaPlaceholder": "Write an idea...",
+  "quickIdeaSaved": "Idea saved",
+  "quickIdeaFolderName": "Quick Ideas"
 }

@@ -81,8 +81,8 @@ const api = {
     ipcRenderer.invoke("import-docs:import", token, files, folderId),
   verifyProjectDocs: (token: string, importResults: { relativePath: string; absolutePath: string; fileId: string }[]) =>
     ipcRenderer.invoke("import-docs:verify", token, importResults),
-  cleanupProjectDocs: (filePaths: string[]) =>
-    ipcRenderer.invoke("import-docs:cleanup", filePaths),
+  cleanupProjectDocs: (token: string, filePaths: string[]) =>
+    ipcRenderer.invoke("import-docs:cleanup", token, filePaths),
   onImportDocsProgress: (callback: (data: { phase: string; found?: number; current?: number; total?: number; file?: string }) => void) => {
     const handler = (_event: unknown, data: any) => callback(data);
     ipcRenderer.on("import-docs:progress", handler);

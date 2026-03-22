@@ -120,7 +120,7 @@ export const createHistorySlice: SliceCreator<HistorySlice> = (set, get) => ({
         window.api.getSectionContent(currentProject.token, sectionId, "markdown").catch(() => null),
       ]);
       set({
-        historyViewContent: versionContent || { content: "" },
+        historyViewContent: versionContent || { title: "", content: "" },
         historyViewCurrentContent: typeof currentContent === "string" ? currentContent : null,
       });
     } catch (e: any) {

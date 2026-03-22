@@ -195,8 +195,11 @@ export function useKanbanState(sectionId: string, title: string, initialContent:
   const setFilters = useCallback((newFilters: Filter[] | ((prev: Filter[]) => Filter[])) => {
     setFiltersLocal((prev) => {
       const resolved = typeof newFilters === "function" ? newFilters(prev) : newFilters;
-      const updatedViews = views.map((v) => (v.id === activeView.id ? { ...v, filters: resolved } : v));
-      save({ ...data, views: updatedViews });
+      // Schedule save outside of setState updater (side effects must not be in updaters)
+      queueMicrotask(() => {
+        const updatedViews = views.map((v) => (v.id === activeView.id ? { ...v, filters: resolved } : v));
+        save({ ...data, views: updatedViews });
+      });
       return resolved;
     });
   }, [views, activeView.id, data, save]);
@@ -204,8 +207,10 @@ export function useKanbanState(sectionId: string, title: string, initialContent:
   const setSorts = useCallback((newSorts: Sort[] | ((prev: Sort[]) => Sort[])) => {
     setSortsLocal((prev) => {
       const resolved = typeof newSorts === "function" ? newSorts(prev) : newSorts;
-      const updatedViews = views.map((v) => (v.id === activeView.id ? { ...v, sorts: resolved } : v));
-      save({ ...data, views: updatedViews });
+      queueMicrotask(() => {
+        const updatedViews = views.map((v) => (v.id === activeView.id ? { ...v, sorts: resolved } : v));
+        save({ ...data, views: updatedViews });
+      });
       return resolved;
     });
   }, [views, activeView.id, data, save]);

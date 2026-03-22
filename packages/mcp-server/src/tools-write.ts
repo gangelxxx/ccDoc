@@ -76,19 +76,21 @@ export function registerWriteTools(server: McpServer): void {
       try {
         const { sections, index } = await getProjectServices(project_token);
 
-        let finalTitle = title;
-        let finalContent = content;
         const current = await sections.getById(section_id);
         if (!current) {
           return errorResult(new Error(`Section ${section_id} not found`));
         }
-        if (finalTitle === undefined) finalTitle = current.title;
-        if (finalContent === undefined) {
-          finalContent = await sections.getContent(section_id, "markdown");
-        }
-
+        const finalTitle = title ?? current.title;
         const titleChanged = title !== undefined && current.title !== title;
-        await sections.update(section_id, finalTitle, finalContent);
+
+        if (content !== undefined) {
+          // Content provided — go through format conversion (markdown → internal)
+          await sections.update(section_id, finalTitle, content);
+        } else if (titleChanged) {
+          // Title-only update — use raw content to avoid lossy markdown round-trip
+          // (kanban, idea, excalidraw store JSON that would be corrupted by markdown conversion)
+          await sections.updateRaw(section_id, finalTitle, current.content);
+        }
         const updated = await sections.getById(section_id);
         if (updated) {
           await index.indexSection(updated);
@@ -114,8 +116,20 @@ export function registerWriteTools(server: McpServer): void {
     async ({ section_id, project_token }) => {
       try {
         const { sections, index } = await getProjectServices(project_token);
+        // Collect descendant IDs before soft-delete (cascade will mark them too)
+        const idsToRemove = [section_id];
+        async function collectDescendants(parentId: string) {
+          const children = await sections.getSectionChildren(parentId);
+          for (const child of children) {
+            idsToRemove.push(child.id);
+            await collectDescendants(child.id);
+          }
+        }
+        await collectDescendants(section_id);
         await sections.softDelete(section_id);
-        await index.removeSection(section_id);
+        for (const id of idsToRemove) {
+          await index.removeSection(id);
+        }
         return {
           content: [{ type: "text", text: "Section deleted" }],
         };
@@ -228,7 +242,7 @@ export function registerWriteTools(server: McpServer): void {
           let parentId = def.parent_id;
           if (parentId && parentId.startsWith("$")) {
             const idx = parseInt(parentId.slice(1), 10);
-            if (idx < 0 || idx >= createdIds.length) {
+            if (isNaN(idx) || idx < 0 || idx >= createdIds.length) {
               return errorResult(new Error(`Invalid batch reference ${parentId}: only ${createdIds.length} sections created so far`));
             }
             parentId = createdIds[idx];

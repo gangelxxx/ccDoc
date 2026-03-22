@@ -53,6 +53,7 @@ export function useImageInsert({
         el.x = cx - el.width / 2;
         el.y = cy - el.height / 2;
         redraw();
+        scheduleSave(); // Save correct dimensions after image loads
       };
       img.src = dataUrl;
       stateRef.current!.elements.push(el);

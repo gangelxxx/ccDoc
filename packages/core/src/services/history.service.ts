@@ -1,7 +1,7 @@
 import git from "isomorphic-git";
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "fs";
 import { join } from "path";
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
 import { projectHistoryPath } from "../constants.js";
 import { prosemirrorToMarkdown } from "../converters/prosemirror-to-markdown.js";
 import { markdownToProsemirror } from "../converters/markdown-to-prosemirror.js";
@@ -136,10 +136,9 @@ export class HistoryService {
 
     // Remove deleted files from the git index (git.add doesn't handle deletions)
     const statusMatrix = await git.statusMatrix({ fs, dir: this.dir });
-    for (const [filepath, headStatus, , stageStatus] of statusMatrix) {
-      // headStatus=1 means file exists in HEAD; stageStatus=0 means absent from staging
-      // This indicates a file that was deleted from disk but not removed from the index
-      if (headStatus === 1 && stageStatus === 0) {
+    for (const [filepath, headStatus, workdirStatus] of statusMatrix) {
+      // headStatus=1 means file existed in HEAD; workdirStatus=0 means deleted from disk
+      if (headStatus === 1 && workdirStatus === 0) {
         await git.remove({ fs, dir: this.dir, filepath });
       }
     }
@@ -250,8 +249,9 @@ export class HistoryService {
       }
 
       // Use native git grep — blazing fast even for thousands of files
-      const output = execSync(
-        `git grep -l -i -F -- ${JSON.stringify(query)} ${commitId} -- docs/`,
+      const output = execFileSync(
+        "git",
+        ["grep", "-l", "-i", "-F", "--", query, commitId, "--", "docs/"],
         { cwd: this.dir, encoding: "utf-8", timeout: 10000 }
       ).trim();
       if (!output) return [];

@@ -130,11 +130,11 @@ function extractTypeDeclarations(
       name,
       kind,
       exported: isExportedName(name),
-      startLine: node.startPosition.row + 1,
-      endLine: node.endPosition.row + 1,
+      startLine: spec.startPosition.row + 1,
+      endLine: spec.endPosition.row + 1,
       signature: buildTypeSignature(name, typeNode),
       filePath,
-      jsdoc: extractGoDoc(node),
+      jsdoc: extractGoDoc(spec),
     })
   }
 

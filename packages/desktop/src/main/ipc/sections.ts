@@ -11,8 +11,11 @@ export function registerSectionsIpc(): void {
   });
 
   ipcMain.handle("sections:get", async (_e, token: string, id: string) => {
+    const t0 = performance.now();
     const { sections } = await getProjectServices(token);
-    return sections.getById(id);
+    const result = await sections.getById(id);
+    console.log(`[perf] sections:get ${id.substring(0, 8)} +${(performance.now() - t0).toFixed(0)}ms contentLen=${result?.content?.length ?? 0}`);
+    return result;
   });
 
   ipcMain.handle("sections:getContent", async (_e, token: string, id: string, format: OutputFormat) => {
@@ -92,7 +95,9 @@ export function registerSectionsIpc(): void {
     suppressExternalChange(token);
     const { sections, index } = await getProjectServices(token);
     const result = await sections.convertIdeaToKanban(ideaId, columnNames);
-    index.indexSection(result).catch((err) => console.warn("[index] convertIdeaToKanban:", err));
+    if (result) {
+      index.indexSection(result).catch((err) => console.warn("[index] convertIdeaToKanban:", err));
+    }
     return result;
   });
 
@@ -114,8 +119,11 @@ export function registerSectionsIpc(): void {
   });
 
   ipcMain.handle("sections:getFileWithSections", async (_e, token: string, fileId: string) => {
+    const t0 = performance.now();
     const { sections } = await getProjectServices(token);
-    return sections.getFileWithSections(fileId);
+    const result = await sections.getFileWithSections(fileId);
+    console.log(`[perf] sections:getFileWithSections ${fileId.substring(0, 8)} +${(performance.now() - t0).toFixed(0)}ms sections=${JSON.stringify(result).length} chars`);
+    return result;
   });
 
   ipcMain.handle("sections:getSectionChildren", async (_e, token: string, parentId: string) => {

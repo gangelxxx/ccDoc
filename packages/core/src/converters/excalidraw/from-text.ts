@@ -354,7 +354,7 @@ function buildArrow(
 
   const el: ExcalidrawElement = {
     id: makeId(counter),
-    type: "arrow",
+    type: a.connector === "---" ? "line" : "arrow",
     x: startPt[0],
     y: startPt[1],
     width: Math.abs(dx),

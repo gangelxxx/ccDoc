@@ -3,7 +3,20 @@ import { join, dirname } from "path";
 import { mkdirSync, existsSync, rmSync, readdirSync, createWriteStream } from "fs";
 import { homedir } from "os";
 import https from "https";
+import Module from "module";
+import { pathToFileURL } from "url";
 import { getMainWindow } from "../window";
+
+// Redirect onnxruntime-node → onnxruntime-web in Electron.
+// onnxruntime-node's native DLL fails to initialize in Electron,
+// but onnxruntime-web registers 'cpu' as a WASM backend alias, so it's a drop-in replacement.
+const _origResolve = (Module as any)._resolveFilename;
+(Module as any)._resolveFilename = function (request: string, ...args: any[]) {
+  if (request === "onnxruntime-node") {
+    return _origResolve.call(this, "onnxruntime-web", ...args);
+  }
+  return _origResolve.call(this, request, ...args);
+};
 
 const VOICE_MODELS_DIR = join(homedir(), ".ccdoc", "models", "voice");
 
@@ -262,7 +275,18 @@ export function registerVoiceIpc(): void {
         try { await transcriber.dispose(); } catch { /* ignore */ }
       }
       console.log("[voice:transcribe] loading pipeline...");
-      const { pipeline } = await import("@huggingface/transformers");
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const hf = require("@huggingface/transformers");
+      // Override CDN wasmPaths set by transformers during init —
+      // CDN https:// URLs fail in Node.js/Electron (ERR_UNSUPPORTED_ESM_URL_SCHEME).
+      // Point to local transformers dist dir which bundles the WASM files.
+      // Resolve onnxruntime-web from transformers' context (1.22.0-dev, not desktop's 1.24.3)
+      const hfDir = dirname(require.resolve("@huggingface/transformers"));
+      const ortWebDistDir = pathToFileURL(
+        dirname(require.resolve("onnxruntime-web", { paths: [hfDir] })) + "/"
+      ).href;
+      hf.env.backends.onnx.wasm.wasmPaths = ortWebDistDir;
+      const { pipeline } = hf;
       const modelDir = join(VOICE_MODELS_DIR, modelId);
       console.log("[voice:transcribe] cache_dir:", modelDir, "repo:", model.repo);
       transcriber = await pipeline("automatic-speech-recognition", model.repo, {

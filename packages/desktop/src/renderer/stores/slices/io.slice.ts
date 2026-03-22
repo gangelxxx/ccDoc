@@ -64,24 +64,25 @@ export const createIoSlice: SliceCreator<IoSlice> = (set, get) => ({
   importPdf: async (targetFolderId?: string) => {
     const { currentProject, currentSection, tree } = get();
     if (!currentProject) return;
-    set({ treeLoading: true });
-    try {
-      let folderId = targetFolderId || resolveTargetFolder(tree, currentSection);
-      if (!folderId) {
-        const folder = await window.api.createSection(currentProject.token, null, "Imported", "folder");
-        await get().loadTree();
-        folderId = folder.id;
-      }
-      const fileId = await window.api.importPdf(currentProject.token, folderId!);
-      if (!fileId) return;
+
+    let folderId = targetFolderId || resolveTargetFolder(tree, currentSection);
+    if (!folderId) {
+      const folder = await window.api.createSection(currentProject.token, null, "Imported", "folder");
       await get().loadTree();
-      await get().selectSection(fileId);
-      get().addToast("success", "PDF imported");
-    } catch (e: any) {
-      get().addToast("error", "Import failed", e.message);
-    } finally {
-      set({ treeLoading: false });
+      folderId = folder.id;
     }
+
+    // Fire and forget — PDF processing runs in background (tracked in status bar)
+    window.api.importPdf(currentProject.token, folderId!)
+      .then(async (fileId) => {
+        if (!fileId) return; // user cancelled dialog
+        await get().loadTree();
+        await get().selectSection(fileId);
+        get().addToast("success", "PDF imported");
+      })
+      .catch((e: any) => {
+        get().addToast("error", "Import failed", e.message);
+      });
   },
 
   importDroppedFiles: async (filePaths: string[], targetFolderId?: string) => {
@@ -100,51 +101,49 @@ export const createIoSlice: SliceCreator<IoSlice> = (set, get) => ({
       return;
     }
 
-    set({ treeLoading: true });
-    try {
-      let folderId = targetFolderId || resolveTargetFolder(tree, currentSection);
-      if (!folderId) {
-        const folder = await window.api.createSection(currentProject.token, null, "Imported", "folder");
-        await get().loadTree();
-        folderId = folder.id;
-      }
+    // Resolve target folder
+    let folderId = targetFolderId || resolveTargetFolder(tree, currentSection);
+    if (!folderId) {
+      const folder = await window.api.createSection(currentProject.token, null, "Imported", "folder");
+      await get().loadTree();
+      folderId = folder.id;
+    }
 
-      let lastId: string | null = null;
-      let count = 0;
-
-      // Import markdown files
-      if (mdFiles.length) {
+    // Import markdown files (synchronous — fast)
+    if (mdFiles.length) {
+      set({ treeLoading: true });
+      try {
         const fileIds = await window.api.importMarkdownFiles(currentProject.token, folderId!, mdFiles);
         if (fileIds?.length) {
-          lastId = fileIds[fileIds.length - 1];
-          count += fileIds.length;
-          // Auto-generate summaries
+          await get().loadTree();
+          await get().selectSection(fileIds[fileIds.length - 1]);
+          get().addToast("success", `Imported ${fileIds.length} file(s)`);
           if (get().llmApiKey) {
             for (const id of fileIds) {
               get().generateSectionSummary(id).catch(() => {});
             }
           }
         }
+      } catch (e: any) {
+        get().addToast("error", "Import failed", e.message);
+      } finally {
+        set({ treeLoading: false });
       }
+    }
 
-      // Import PDF files
-      for (const pdfPath of pdfFiles) {
-        const fileId = await window.api.importPdfFile(currentProject.token, folderId!, pdfPath);
-        if (fileId) {
-          lastId = fileId;
-          count++;
-        }
-      }
-
-      if (count > 0) {
-        await get().loadTree();
-        if (lastId) await get().selectSection(lastId);
-        get().addToast("success", `Imported ${count} file(s)`);
-      }
-    } catch (e: any) {
-      get().addToast("error", "Import failed", e.message);
-    } finally {
-      set({ treeLoading: false });
+    // Import PDF files (non-blocking — runs in background, tracked in status bar)
+    for (const pdfPath of pdfFiles) {
+      window.api.importPdfFile(currentProject.token, folderId!, pdfPath)
+        .then(async (fileId) => {
+          if (fileId) {
+            await get().loadTree();
+            await get().selectSection(fileId);
+            get().addToast("success", "PDF imported");
+          }
+        })
+        .catch((e: any) => {
+          get().addToast("error", "PDF import failed", e.message);
+        });
     }
   },
 });

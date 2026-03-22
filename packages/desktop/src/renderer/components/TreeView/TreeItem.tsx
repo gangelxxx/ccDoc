@@ -138,9 +138,11 @@ export function TreeItem({
             onDragOver(node.id, "inside");
             return;
           }
+          // External file drag over non-folder: let it bubble to container for drop zone highlight
+          if (!dragItem) return;
           e.preventDefault();
           e.stopPropagation();
-          if (!dragItem || dragItem.id === node.id) return;
+          if (dragItem.id === node.id) return;
           const pos = getDropPosition(e);
           // Auto-expand collapsed containers on hover
           if (pos === "inside" && !expanded && canCollapse) {
@@ -157,17 +159,21 @@ export function TreeItem({
           if (expandTimerRef.current) { clearTimeout(expandTimerRef.current); expandTimerRef.current = null; }
         }}
         onDrop={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
           // External file drop on folder
           if (!dragItem && isFolder && getImportableFilePaths && onFileDrop) {
+            e.preventDefault();
+            e.stopPropagation();
             const paths = getImportableFilePaths(e);
             if (paths.length) {
               onFileDrop(paths, node.id);
               return;
             }
           }
-          if (!dragItem || dragItem.id === node.id) return;
+          // External file drop on non-folder: let it bubble to container
+          if (!dragItem) return;
+          e.preventDefault();
+          e.stopPropagation();
+          if (dragItem.id === node.id) return;
           const pos = getDropPosition(e);
           onDrop(node.id, pos);
         }}

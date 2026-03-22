@@ -25,6 +25,7 @@ export function ContentArea() {
   const {
     currentProject,
     currentSection,
+    sectionLoading,
     sidebarCollapsed,
     toggleSidebar,
     canGoBack,
@@ -35,6 +36,8 @@ export function ContentArea() {
     selectSection,
     llmPanelOpen,
     toggleLlmPanel,
+    quickIdeaOpen,
+    toggleQuickIdea,
     renameSection,
     llmPanelWidth,
     historyViewCommit,
@@ -72,6 +75,8 @@ export function ContentArea() {
             projectName={currentProject?.name}
             llmPanelOpen={llmPanelOpen}
             toggleLlmPanel={toggleLlmPanel}
+            quickIdeaOpen={quickIdeaOpen}
+            toggleQuickIdea={toggleQuickIdea}
           />
           <HistoryView />
         </div>
@@ -99,6 +104,19 @@ export function ContentArea() {
     return <NoSectionState mainContentRef={mainContentRef} llmResize={llmResize} />;
   }
 
+  // --- Loading section ---
+  if (sectionLoading) {
+    return (
+      <div className="content-area-wrap">
+        <div className="main-content" ref={mainContentRef}>
+          <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "200px", opacity: 0.5 }}>
+            Загрузка...
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // --- Section selected ---
   return (
     <div className="content-area-wrap">
@@ -116,6 +134,8 @@ export function ContentArea() {
         onBreadcrumbClick={selectSection}
         llmPanelOpen={llmPanelOpen}
         toggleLlmPanel={toggleLlmPanel}
+        quickIdeaOpen={quickIdeaOpen}
+        toggleQuickIdea={toggleQuickIdea}
       />
       {externalChangePending && currentSection && (
         <div className="external-change-banner">

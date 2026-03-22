@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, memo } from "react";
 import { useAppStore } from "../../stores/app.store.js";
 import { TipTapEditor, EditorToolbar } from "./TipTapEditor.js";
 import { ContextMenu } from "../ContextMenu/ContextMenu.js";
@@ -45,6 +45,42 @@ interface FileSection {
   children?: FileSection[];
 }
 
+/** Lazy-rendered TipTap editor: only mounts when the section scrolls into view. */
+const LazyEditor = memo(function LazyEditor({
+  sectionId, content, title, onEditorReady,
+}: {
+  sectionId: string; content: string; title: string;
+  onEditorReady: (editor: Editor) => void;
+}) {
+  const [visible, setVisible] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) { setVisible(true); observer.disconnect(); } },
+      { rootMargin: "300px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  if (!visible) return <div ref={ref} style={{ minHeight: 40 }} />;
+
+  return (
+    <div ref={ref}>
+      <TipTapEditor
+        sectionId={sectionId}
+        initialContent={content}
+        title={title}
+        showToolbar={false}
+        onEditorReady={onEditorReady}
+      />
+    </div>
+  );
+});
+
 interface Props {
   fileId: string;
   fileTitle: string;
@@ -70,11 +106,16 @@ export function FileView({ fileId, fileTitle, onActiveEditorChange }: Props) {
   }, [setActiveEditor]);
 
   const loadSections = async () => {
+    const t0 = performance.now();
+    console.log(`[perf] FileView.loadSections START fileId=${fileId.substring(0, 8)}`);
     try {
       const result = await window.api.getFileWithSections(
         useAppStore.getState().currentProject!.token,
         fileId,
       );
+      const flat = flattenSections(result.sections, fileId);
+      const totalContentLen = flat.reduce((s, f) => s + (f.content?.length ?? 0), 0);
+      console.log(`[perf] FileView.loadSections DONE +${(performance.now() - t0).toFixed(0)}ms sections=${flat.length} totalContentLen=${totalContentLen}`);
       setSections(result.sections);
     } catch (err) {
       console.warn("[FileView] Failed to load sections:", err);
@@ -193,8 +234,10 @@ export function FileView({ fileId, fileTitle, onActiveEditorChange }: Props) {
     const flat = flattenSections(sections, fileId);
     const fromIndex = flat.findIndex(s => s.id === draggedId);
     if (fromIndex === -1 || fromIndex === toIndex) return;
-    // Find the section that should precede the dragged section at the new position
-    const afterId = toIndex > 0 ? flat[toIndex - 1].id : null;
+    // Build the target order excluding the dragged item to find the correct afterId
+    const withoutDragged = flat.filter(s => s.id !== draggedId);
+    const insertAt = toIndex > fromIndex ? toIndex - 1 : toIndex;
+    const afterId = insertAt > 0 ? withoutDragged[insertAt - 1].id : null;
     // Determine new parent: same parent as the section at the target position
     const targetParentId = toIndex < flat.length ? flat[toIndex].parentId : flat[flat.length - 1].parentId;
     try {
@@ -299,12 +342,11 @@ export function FileView({ fileId, fileTitle, onActiveEditorChange }: Props) {
                   </button>
                 </div>
                 {!isEmptyContent(item.content) && (
-                  <TipTapEditor
+                  <LazyEditor
                     key={item.id}
                     sectionId={item.id}
-                    initialContent={item.content}
+                    content={item.content}
                     title={item.title}
-                    showToolbar={false}
                     onEditorReady={handleEditorReady}
                   />
                 )}
