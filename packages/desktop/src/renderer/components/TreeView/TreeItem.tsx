@@ -1,15 +1,18 @@
 import { useState, useRef, useEffect } from "react";
 import type { TreeNode, DragState, DropState, DropPosition } from "./tree-utils.js";
+import { useT } from "../../i18n.js";
 
 export interface TreeItemProps {
   node: TreeNode;
   depth: number;
   activeId: string | null;
   editingId: string | null;
+  selectedIds: Set<string>;
   expandedNodes: Set<string>;
   onToggleExpanded: (id: string) => void;
   onExpandNode: (id: string) => void;
   onSelect: (id: string) => void;
+  onMultiSelect: (id: string, ctrlKey: boolean, shiftKey: boolean) => void;
   onDelete: (id: string, type: string) => void;
   onRename: (id: string, title: string) => void;
   onStartEdit: (id: string | null) => void;
@@ -31,10 +34,12 @@ export function TreeItem({
   depth,
   activeId,
   editingId,
+  selectedIds,
   expandedNodes,
   onToggleExpanded,
   onExpandNode,
   onSelect,
+  onMultiSelect,
   onDelete,
   onRename,
   onStartEdit,
@@ -50,6 +55,7 @@ export function TreeItem({
   hasImportableFiles,
   getImportableFilePaths,
 }: TreeItemProps) {
+  const t = useT();
   const expanded = expandedNodes.has(node.id);
   const [editValue, setEditValue] = useState(node.title);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -57,6 +63,7 @@ export function TreeItem({
   const dragStartPos = useRef<{ x: number; y: number } | null>(null);
 
   const isActive = node.id === activeId;
+  const isSelected = selectedIds.has(node.id);
   const isEditing = editingId === node.id;
   const hasChildren = node.children.length > 0;
   const isFolder = node.type === "folder";
@@ -113,7 +120,7 @@ export function TreeItem({
   return (
     <div>
       <div
-        className={`tree-item ${isActive ? "active" : ""} ${isDragging ? "tree-item-dragging" : ""} ${dropClass}`}
+        className={`tree-item ${isActive ? "active" : ""} ${isSelected ? "selected" : ""} ${isDragging ? "tree-item-dragging" : ""} ${dropClass}`}
         style={{ paddingLeft: 6 + depth * 12 }}
         tabIndex={0}
         draggable={!isEditing}
@@ -177,8 +184,16 @@ export function TreeItem({
           const pos = getDropPosition(e);
           onDrop(node.id, pos);
         }}
-        onClick={() => {
-          onSelect(node.id);
+        onClick={(e) => {
+          if (e.shiftKey) {
+            e.preventDefault();
+            onMultiSelect(node.id, false, true);
+          } else if (e.ctrlKey || e.metaKey) {
+            onMultiSelect(node.id, true, false);
+          } else {
+            onMultiSelect(node.id, false, false);
+            onSelect(node.id);
+          }
         }}
         onKeyDown={(e) => {
           if (e.key === "Delete" && !isEditing) {
@@ -244,7 +259,7 @@ export function TreeItem({
                 e.stopPropagation();
                 onContextMenu(e.clientX, e.clientY, node);
               }}
-              title="More"
+              title={t("moreActions")}
             >
               {"\u2022\u2022\u2022"}
             </button>
@@ -256,7 +271,7 @@ export function TreeItem({
                   e.stopPropagation();
                   onCreateChild(node.id, node.type);
                 }}
-                title={isSection ? "Add subsection" : isFile ? "Add section" : "Add child"}
+                title={isSection ? t("addSubsection") : isFile ? t("addSection") : t("addChild")}
               >
                 +
               </button>
@@ -274,10 +289,12 @@ export function TreeItem({
               depth={depth + 1}
               activeId={activeId}
               editingId={editingId}
+              selectedIds={selectedIds}
               expandedNodes={expandedNodes}
               onToggleExpanded={onToggleExpanded}
               onExpandNode={onExpandNode}
               onSelect={onSelect}
+              onMultiSelect={onMultiSelect}
               onDelete={onDelete}
               onRename={onRename}
               onStartEdit={onStartEdit}

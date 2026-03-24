@@ -39,6 +39,7 @@ const api = {
   downloadEmbeddingModel: (modelId: string) => ipcRenderer.invoke("embedding:download", modelId),
   cancelEmbeddingDownload: (modelId: string) => ipcRenderer.invoke("embedding:cancel", modelId),
   deleteEmbeddingModel: (modelId: string) => ipcRenderer.invoke("embedding:delete", modelId),
+  applyEmbeddingConfig: () => ipcRenderer.invoke("embedding:apply-config"),
   onEmbeddingProgress: (callback: (data: { modelId?: string; file?: string; percent?: number; done?: boolean; error?: string }) => void) => {
     const handler = (_event: unknown, data: any) => callback(data);
     ipcRenderer.on("embedding:progress", handler);
@@ -52,6 +53,11 @@ const api = {
   getHistory: (token: string) => ipcRenderer.invoke("history:log", token),
   restoreVersion: (token: string, commitId: string) =>
     ipcRenderer.invoke("history:restore", token, commitId),
+  onRestoreProgress: (callback: (data: { current: number; total: number; title: string }) => void) => {
+    const handler = (_event: unknown, data: any) => callback(data);
+    ipcRenderer.on("history:restore-progress", handler);
+    return () => { ipcRenderer.removeListener("history:restore-progress", handler); };
+  },
   deleteHistoryCommit: (token: string, commitId: string) =>
     ipcRenderer.invoke("history:delete", token, commitId),
   getHistoryStructure: (token: string, commitId: string) =>
@@ -139,6 +145,26 @@ const api = {
   llmChat: (params: { apiKey: string; system: string; messages: any[]; model: string; maxTokens: number; tools?: any[]; thinking?: { type: string; budget_tokens: number }; temperature?: number; skipMessageCache?: boolean; toolChoice?: { type: string } }) =>
     ipcRenderer.invoke("llm:chat", params),
   llmSetupToken: () => ipcRenderer.invoke("llm:setup-token"),
+
+  // Knowledge Graph
+  kgAnalyze: (token: string, sources?: { ideas?: boolean; docs?: boolean; sections?: boolean; sessions?: boolean }) => ipcRenderer.invoke("kg:analyze", token, sources),
+  kgGet: (token: string) => ipcRenderer.invoke("kg:get", token),
+  kgGetNeighbourhood: (token: string, sectionId: string) => ipcRenderer.invoke("kg:getNeighbourhood", token, sectionId),
+  kgSyncNode: (token: string, sectionId: string) => ipcRenderer.invoke("kg:syncNode", token, sectionId),
+  kgGetRelated: (token: string, sectionId: string, limit?: number) => ipcRenderer.invoke("kg:getRelated", token, sectionId, limit),
+  kgFindOrphans: (token: string, nodeType?: string) => ipcRenderer.invoke("kg:findOrphans", token, nodeType),
+  kgStats: (token: string) => ipcRenderer.invoke("kg:stats", token),
+  kgSaveViewSettings: (token: string, sectionId: string, settings: string) => ipcRenderer.invoke("kg:saveViewSettings", token, sectionId, settings),
+  onKgProgress: (cb: (data: { phase: string; current: number; total: number }) => void) => {
+    const handler = (_event: unknown, data: any) => cb(data);
+    ipcRenderer.on("kg:progress", handler);
+    return () => { ipcRenderer.removeListener("kg:progress", handler); };
+  },
+  onKgNodeUpdated: (cb: (sectionId: string) => void) => {
+    const handler = (_event: unknown, id: string) => cb(id);
+    ipcRenderer.on("kg:nodeUpdated", handler);
+    return () => { ipcRenderer.removeListener("kg:nodeUpdated", handler); };
+  },
 
   // Settings
   settingsGetAll: () => ipcRenderer.invoke("settings:getAll"),

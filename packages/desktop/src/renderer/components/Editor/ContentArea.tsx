@@ -14,6 +14,7 @@ import { Topbar } from "./Topbar.js";
 import { HistoryView } from "./HistoryView.js";
 import { FolderSummary } from "./FolderSummary.js";
 import { IdeaChat } from "./IdeaChat.js";
+import { KnowledgeGraph } from "./knowledge-graph/index.js";
 import { EditorSearchBar } from "./EditorSearchBar.js";
 import { ChildSections } from "./ChildSections.js";
 import { NoProjectState, NoSectionState } from "./EmptyStates.js";
@@ -147,7 +148,7 @@ export function ContentArea() {
         quickIdeaOpen={quickIdeaOpen}
         toggleQuickIdea={toggleQuickIdea}
       />
-      {externalChangePending && currentSection && (
+      {externalChangePending && currentSection && currentSection.type !== "knowledge_graph" && (
         <div className="external-change-banner">
           <RefreshCw size={14} />
           <span>Документация обновлена внешним процессом</span>
@@ -200,7 +201,7 @@ export function ContentArea() {
             </div>
           </div>
         )}
-        {!["folder", "kanban", "drawing", "idea"].includes(currentSection.type) && (
+        {!["folder", "kanban", "drawing", "idea", "knowledge_graph"].includes(currentSection.type) && (
           <div className="editor-sticky-top">
             {editorInstance && <EditorToolbar editor={editorInstance} />}
             <EditorSearchBar />
@@ -241,6 +242,12 @@ export function ContentArea() {
           />
         ) : currentSection.type === "drawing" ? (
           <DrawingCanvas
+            key={currentSection.id}
+            sectionId={currentSection.id}
+            initialContent={currentSection.content}
+          />
+        ) : currentSection.type === "knowledge_graph" ? (
+          <KnowledgeGraph
             key={currentSection.id}
             sectionId={currentSection.id}
             initialContent={currentSection.content}

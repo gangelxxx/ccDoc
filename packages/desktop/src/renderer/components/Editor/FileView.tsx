@@ -3,6 +3,7 @@ import { useAppStore } from "../../stores/app.store.js";
 import { TipTapEditor, EditorToolbar } from "./TipTapEditor.js";
 import { ContextMenu } from "../ContextMenu/ContextMenu.js";
 import { GripVertical } from "lucide-react";
+import { useT } from "../../i18n.js";
 import type { Editor } from "@tiptap/react";
 
 function isEmptyContent(content: string): boolean {
@@ -88,6 +89,7 @@ interface Props {
 }
 
 export function FileView({ fileId, fileTitle, onActiveEditorChange }: Props) {
+  const t = useT();
   const { tree, renameSection, deleteSection, loadTree, fileSectionsVersion } = useAppStore();
   const [sections, setSections] = useState<FileSection[]>([]);
   const [loading, setLoading] = useState(true);
@@ -258,9 +260,9 @@ export function FileView({ fileId, fileTitle, onActiveEditorChange }: Props) {
     <div className="file-view" ref={containerRef}>
       {sections.length === 0 ? (
         <div className="file-view-empty">
-          <p>This file has no sections yet.</p>
+          <p>{t("noSectionsYet")}</p>
           <button className="btn btn-primary" onClick={handleAddSection}>
-            + Add section
+            {t("addSectionBtn")}
           </button>
         </div>
       ) : (
@@ -307,35 +309,35 @@ export function FileView({ fileId, fileTitle, onActiveEditorChange }: Props) {
                     setContextMenu({ x: e.clientX, y: e.clientY, sectionId: item.id });
                   }}
                 >
-                  <span className="file-section-drag-handle" title="Drag to reorder">
+                  <span className="file-section-drag-handle" title={t("dragToReorder")}>
                     <GripVertical size={14} />
                   </span>
                   <span className="file-section-icon">{"\u00A7"}</span>
                   <input
                     className={`file-section-title${item.depth > 0 ? " file-section-title-nested" : ""}`}
                     value={item.title}
-                    placeholder="Untitled section"
+                    placeholder={t("untitledSection")}
                     onChange={(e) =>
                       handleRenameSection(item.id, e.target.value)
                     }
                   />
                   <button
                     className="btn-icon file-section-more"
-                    title="More actions"
+                    title={t("moreActions")}
                     onClick={(e) => setContextMenu({ x: e.clientX, y: e.clientY, sectionId: item.id })}
                   >
                     {"\u2022\u2022\u2022"}
                   </button>
                   <button
                     className="btn-icon file-section-add"
-                    title="Add subsection"
+                    title={t("addSubsection")}
                     onClick={() => handleAddSubsection(item.id)}
                   >
                     +
                   </button>
                   <button
                     className="btn-icon file-section-delete"
-                    title="Delete section"
+                    title={t("deleteSection")}
                     onClick={() => handleDeleteSection(item.id)}
                   >
                     {"\u00D7"}
@@ -357,7 +359,7 @@ export function FileView({ fileId, fileTitle, onActiveEditorChange }: Props) {
             ))}
           </div>
           <button className="file-view-add-section" onClick={handleAddSection}>
-            + Add section
+            {t("addSectionBtn")}
           </button>
         </>
       )}
@@ -371,24 +373,24 @@ export function FileView({ fileId, fileTitle, onActiveEditorChange }: Props) {
             onClose={() => setContextMenu(null)}
             items={[
               {
-                label: "Add subsection",
+                label: t("addSubsection"),
                 icon: "+",
                 onClick: () => handleAddSubsection(contextMenu.sectionId),
               },
               "sep" as const,
               {
-                label: "Move up",
+                label: t("moveUp"),
                 icon: "\u2191",
                 onClick: () => handleMoveSection(contextMenu.sectionId, "up"),
               },
               {
-                label: "Move down",
+                label: t("moveDown"),
                 icon: "\u2193",
                 onClick: () => handleMoveSection(contextMenu.sectionId, "down"),
               },
               "sep" as const,
               {
-                label: "Delete",
+                label: t("delete"),
                 icon: "\uD83D\uDDD1\uFE0F",
                 danger: true,
                 onClick: () => handleDeleteSection(contextMenu.sectionId),

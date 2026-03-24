@@ -105,6 +105,7 @@ export function Topbar({
               className={`btn-icon${llmPanelOpen ? " active" : ""}`}
               onClick={toggleLlmPanel}
               title={t("aiAssistant")}
+              data-llm-toggle
             >
               <MessageSquare size={18} />
             </button>

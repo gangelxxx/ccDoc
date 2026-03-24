@@ -2,6 +2,7 @@ import type { TreeNode, SliceCreator } from "../types.js";
 import {
   estimateInputTokens,
   formatCompactTree,
+  buildSlugMap,
 } from "../../llm-utils.js";
 
 export interface PassportSlice {
@@ -12,6 +13,7 @@ export interface PassportSlice {
   generatePassport: () => Promise<void>;
   generateSectionSummary: (sectionId: string) => Promise<void>;
   expandIdeaToPlan: (ideaId: string, messageId?: string, messageText?: string, messageImages?: { id: string; name: string; mediaType: string; data: string }[]) => Promise<string | null>;
+  processIdeaWithLLM: (ideaId: string) => Promise<void>;
   addIdeaMessage: (sectionId: string, text: string, images?: { id: string; name: string; mediaType: string; data: string }[]) => Promise<{ id: string; text: string; createdAt: number }>;
   deleteIdeaMessage: (sectionId: string, messageId: string) => Promise<void>;
   getIdeaMessages: (sectionId: string) => Promise<{ id: string; text: string; createdAt: number; planId?: string; images?: { id: string; name: string; mediaType: string; data: string }[] }[]>;
@@ -204,7 +206,7 @@ Only output valid JSON, nothing else.`;
     );
 
     // Pre-seed: fetch doc tree and source tree upfront to save round-trips
-    const docTree = formatCompactTree(tree);
+    const docTree = formatCompactTree(tree, 0, true, undefined, buildSlugMap(tree));
     let sourceTree = "";
     try {
       sourceTree = await window.api.sourceTree(currentProject.token);
@@ -327,6 +329,102 @@ ${content}`;
     try { await get().selectSection(ideaId); } catch { /* ignore */ }
 
     return null;
+  },
+
+  processIdeaWithLLM: async (ideaId: string) => {
+    const { currentProject, llmApiKey, language, tree } = get();
+    if (!currentProject?.token || !llmApiKey) return;
+
+    // Read idea messages
+    const section = await window.api.getSection(currentProject.token, ideaId);
+    let data: { messages: any[]; kanbanId?: string };
+    try {
+      const parsed = JSON.parse(section.content);
+      data = parsed.type === "doc" ? { messages: [] } : parsed;
+    } catch { data = { messages: [] }; }
+
+    if (data.messages.length === 0) return;
+
+    // Format messages for the LLM
+    const messagesText = data.messages
+      .map((m: any, i: number) => `[${i + 1}] ${m.text}${m.completed ? " ✅" : ""}`)
+      .join("\n");
+
+    const findNode = (nodes: TreeNode[], id: string): TreeNode | null => {
+      for (const n of nodes) {
+        if (n.id === id) return n;
+        const found = findNode(n.children, id);
+        if (found) return found;
+      }
+      return null;
+    };
+    const ideaNode = findNode(tree, ideaId);
+    const ideaTitle = ideaNode?.title || "Ideas";
+
+    const ru = language === "ru";
+
+    const message = ru
+      ? `Обработай список идей ниже. Тебе нужно:
+
+1. **Сгенерировать заголовок** — краткое название (1 предложение) для этого блока идей, отражающее общую тему.
+2. **Улучшить текст** каждой идеи — сделать его более структурированным, читабельным и грамотным. Сохрани смысл, но оформи профессионально.
+3. **Сгруппировать** похожие идеи — если несколько идей про одно и то же, объедини их в одну.
+4. **Удалить дубликаты** — если идеи полностью совпадают по смыслу, оставь только одну (лучшую формулировку).
+
+ВАЖНО: Сохрани статус выполнения (✅) для завершённых идей. Не удаляй завершённые идеи при дедупликации.
+
+Выполни два действия:
+1. update_section(id="${ideaId}", title="<новый заголовок>") — обнови заголовок секции
+2. update_section(id="${ideaId}", content="<JSON>") — обнови содержимое
+
+Формат JSON для content (строго соблюдай):
+{"messages":[{"id":"<uuid>","text":"<улучшенный текст>","createdAt":<timestamp>},...],${data.kanbanId ? '"kanbanId":"' + data.kanbanId + '",' : ""}}
+
+Для новых (объединённых) сообщений генерируй новый UUID. Для сохранённых — оставляй оригинальный id. Поле createdAt бери из самой ранней идеи в группе. Если идея была completed, добавь "completed":true. Если была planId, сохрани "planId":"<значение>". Если были images, сохрани "images":[...].
+
+Текущий заголовок: "${ideaTitle}"
+Количество идей: ${data.messages.length}
+
+---
+
+${messagesText}`
+      : `Process the idea list below. You need to:
+
+1. **Generate a title** — a short name (1 sentence) for this ideas block reflecting the overall theme.
+2. **Improve the text** of each idea — make it more structured, readable, and professional. Keep the meaning but polish the wording.
+3. **Group** similar ideas — if multiple ideas are about the same thing, merge them into one.
+4. **Remove duplicates** — if ideas are identical in meaning, keep only one (best wording).
+
+IMPORTANT: Preserve completion status (✅) for completed ideas. Don't remove completed ideas during deduplication.
+
+Execute two actions:
+1. update_section(id="${ideaId}", title="<new title>") — update the section title
+2. update_section(id="${ideaId}", content="<JSON>") — update the content
+
+JSON format for content (follow strictly):
+{"messages":[{"id":"<uuid>","text":"<improved text>","createdAt":<timestamp>},...],${data.kanbanId ? '"kanbanId":"' + data.kanbanId + '",' : ""}}
+
+For new (merged) messages generate a new UUID. For preserved ones — keep the original id. Take createdAt from the earliest idea in the group. If idea was completed, add "completed":true. If had planId, preserve "planId":"<value>". If had images, preserve "images":[...].
+
+Current title: "${ideaTitle}"
+Number of ideas: ${data.messages.length}
+
+---
+
+${messagesText}`;
+
+    const displayText = ru
+      ? `✨ Обработка идей: ${ideaTitle}`
+      : `✨ Processing ideas: ${ideaTitle}`;
+
+    // Start a new LLM session
+    get().clearLlmMessages();
+    set({ llmPanelOpen: true, llmIncludeSourceCode: false, llmIncludeContext: false });
+    await get().sendLlmMessage(message, false, undefined, false, displayText);
+    await get().loadTree();
+
+    // Navigate back to the idea to see updated content
+    try { await get().selectSection(ideaId); } catch { /* ignore */ }
   },
 
   addIdeaMessage: async (sectionId: string, text: string, images?: { id: string; name: string; mediaType: string; data: string }[]) => {

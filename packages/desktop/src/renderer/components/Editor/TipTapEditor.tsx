@@ -20,7 +20,7 @@ import { useEffect, useRef, useState, useCallback, type MouseEvent as ReactMouse
 import { createPortal } from "react-dom";
 import { useAppStore } from "../../stores/app.store.js";
 import { useT } from "../../i18n.js";
-import { CodeBlockWithLang, CustomImage, lowlight } from "./tiptap/extensions.js";
+import { CodeBlockWithLang, CustomImage, SelectionPreserve, lowlight } from "./tiptap/extensions.js";
 import { EditorToolbar } from "./tiptap/EditorToolbar.js";
 import { TableContextMenu } from "./tiptap/TableContextMenu.js";
 
@@ -77,6 +77,7 @@ export function TipTapEditor({ sectionId, initialContent, title, showToolbar = t
         TextStyle,
         Color,
         CustomImage.configure({ inline: false, allowBase64: true }),
+        SelectionPreserve,
       ],
       content: parseContent(initialContent),
       onUpdate: ({ editor }) => {
@@ -89,8 +90,16 @@ export function TipTapEditor({ sectionId, initialContent, title, showToolbar = t
         }, 500);
       },
       onSelectionUpdate: ({ editor }) => {
+        if (!editor.isFocused) return; // Don't clear selection when editor loses focus
         const { from, to } = editor.state.selection;
         setEditorSelectedText(from === to ? "" : editor.state.doc.textBetween(from, to, " "));
+      },
+      onBlur: ({ event }) => {
+        const related = (event as FocusEvent).relatedTarget as HTMLElement | null;
+        const isLlm = related?.closest(".llm-panel") || related?.closest("[data-llm-toggle]");
+        if (!isLlm && useAppStore.getState().editorSelectedText) {
+          setEditorSelectedText("");
+        }
       },
       onFocus: () => {
         if (editor && onEditorReady) onEditorReady(editor);
@@ -100,7 +109,11 @@ export function TipTapEditor({ sectionId, initialContent, title, showToolbar = t
   );
 
   useEffect(() => {
-    if (editor && onEditorReady) onEditorReady(editor);
+    if (editor) {
+      if (onEditorReady) onEditorReady(editor);
+      // Store ProseMirror view ref for selection decoration clearing
+      useAppStore.getState().setEditorView(editor.view);
+    }
   }, [editor, onEditorReady]);
 
   // Sync from external changes (e.g. LLM tool calls)

@@ -76,6 +76,13 @@ export class SectionsService {
       return JSON.stringify({ title: section.title, blocks: [{ type: "kanban", text: kanbanToPlain(data) }] });
     }
 
+    // Knowledge Graph — view settings only
+    if (section.type === "knowledge_graph") {
+      if (format === "plain") return "Knowledge Graph: " + section.title;
+      if (format === "markdown") return "# " + section.title + "\n\nKnowledge Graph";
+      return JSON.stringify({ title: section.title, blocks: [{ type: "knowledge_graph" }] });
+    }
+
     // Idea — messages JSON
     if (section.type === "idea") {
       let data: IdeaData;
@@ -158,6 +165,8 @@ export class SectionsService {
       } else {
         prosemirrorContent = JSON.stringify({ messages: [] });
       }
+    } else if (params.type === "knowledge_graph") {
+      prosemirrorContent = JSON.stringify({ analyzedAt: null, version: 1, filters: { visibleNodeTypes: ["idea", "doc", "section"], visibleEdgeTypes: ["semantic_similar", "parent_child"], minWeight: 0 }, pinnedNodes: {} });
     } else if (params.type === "todo") {
       prosemirrorContent = params.content
         ? JSON.stringify(markdownToProsemirror(params.content))
@@ -207,6 +216,9 @@ export class SectionsService {
         existing.messages.push({ id: uuid(), text: content, createdAt: Date.now() });
         storedContent = JSON.stringify(existing);
       }
+    } else if (section.type === "knowledge_graph") {
+      // Pass through JSON view settings
+      storedContent = content;
     } else {
       storedContent = JSON.stringify(markdownToProsemirror(content));
     }

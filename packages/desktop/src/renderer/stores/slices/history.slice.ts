@@ -1,7 +1,14 @@
 import type { HistoryCommit, SliceCreator } from "../types.js";
 
+export interface RestoreProgress {
+  current: number;
+  total: number;
+  title: string;
+}
+
 export interface HistorySlice {
   history: HistoryCommit[];
+  restoreProgress: RestoreProgress | null;
   commitVersion: (message: string) => Promise<void>;
   loadHistory: () => Promise<void>;
   restoreVersion: (commitId: string) => Promise<void>;
@@ -21,6 +28,7 @@ export interface HistorySlice {
 
 export const createHistorySlice: SliceCreator<HistorySlice> = (set, get) => ({
   history: [],
+  restoreProgress: null,
 
   commitVersion: async (message) => {
     const { currentProject } = get();
@@ -52,7 +60,10 @@ export const createHistorySlice: SliceCreator<HistorySlice> = (set, get) => ({
   restoreVersion: async (commitId) => {
     const { currentProject } = get();
     if (!currentProject) return;
-    set({ treeLoading: true });
+    set({ treeLoading: true, restoreProgress: { current: 0, total: 0, title: "" } });
+    const cleanup = window.api.onRestoreProgress((data) => {
+      set({ restoreProgress: data });
+    });
     try {
       await window.api.restoreVersion(currentProject.token, commitId);
       await get().loadTree();
@@ -61,7 +72,8 @@ export const createHistorySlice: SliceCreator<HistorySlice> = (set, get) => ({
     } catch (e: any) {
       get().addToast("error", "Failed to restore version", e.message);
     } finally {
-      set({ treeLoading: false });
+      cleanup();
+      set({ treeLoading: false, restoreProgress: null });
     }
   },
 

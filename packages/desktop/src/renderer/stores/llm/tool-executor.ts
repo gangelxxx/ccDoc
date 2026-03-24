@@ -3,9 +3,11 @@
  * Manages mutation tracking and section creation with markdown splitting.
  */
 
-import type { GetState, SplitSection, SubAgentType } from "./types.js";
-import { formatCompactTree, resolveIdInTree, paginateText, DEFAULT_CONTENT_LIMIT, MAX_CONTENT_LIMIT } from "../../llm-utils.js";
+import type { GetState, SetState } from "./types.js";
+import { formatCompactTree, resolveIdInTree, paginateText, buildSlugMap, DEFAULT_CONTENT_LIMIT, MAX_CONTENT_LIMIT } from "../../llm-utils.js";
+import { truncateToolResult, compressToolResult } from "../../llm-utils.js";
 import { splitMarkdownIntoSections } from "./split-markdown.js";
+import { buildTools, TOOL_DESCRIPTIONS } from "./tool-definitions.js";
 
 /**
  * Strip comment-only lines and collapse consecutive blank lines from source code.
@@ -58,7 +60,7 @@ function normalizeInput(input: any): any {
   const out = { ...input };
 
   // Fix stringified arrays (e.g. section_ids: "[\"a\",\"b\"]" → ["a","b"], paths: "[...]" → [...])
-  for (const key of ["section_ids", "paths", "sections"]) {
+  for (const key of ["section_ids", "paths", "sections", "tags", "ordered_ids"]) {
     if (typeof out[key] === "string" && out[key].startsWith("[")) {
       try { out[key] = JSON.parse(out[key]); } catch { /* leave as-is */ }
     }
@@ -86,7 +88,7 @@ function normalizeInput(input: any): any {
 
 // ─── Tool result cache ──────────────────────────────────────────
 // Two-level cache:
-// 1. In-memory Map — shared across orchestrator and all sub-agents within one session.
+// 1. In-memory Map — shared within one session.
 // 2. localStorage — persists across sessions. Loaded on start, saved on each cache write.
 // Automatically invalidated when mutating tools (update/create/delete/move) are called.
 
@@ -197,15 +199,214 @@ function invalidateCache(cache: Map<string, any>, sectionId?: string) {
 }
 
 /**
+ * Runs a custom agent in an isolated conversation context.
+ * The agent has its own system prompt, tool set, and round loop.
+ */
+const AGENT_MAX_ROUNDS = 100;
+const AGENT_IDLE_TIMEOUT = 10 * 60 * 1000; // 10 minutes
+
+async function executeAgentTool(
+  input: any,
+  token: string,
+  get: GetState,
+  set: SetState,
+  state: ToolExecutionState,
+): Promise<string> {
+  const agents = get().customAgents || [];
+  const agent = agents.find(a => a.id === input.agent_id);
+  if (!agent) return `Error: agent "${input.agent_id}" not found`;
+
+  // Build agent tools from the full tool list (without run_agent to prevent recursion)
+  const allToolDefs = buildTools({
+    includeSourceCode: true,
+    planMode: false,
+    webSearchEnabled: get().webSearchProvider !== "none" && !!get().webSearchApiKey,
+    customAgents: [], // no nested agents
+  });
+  const BUFFER_TOOLS = new Set(["write_buffer", "read_buffer", "list_buffer"]);
+  const agentToolDefs = allToolDefs.filter(t =>
+    (agent.tools.includes(t.name) || BUFFER_TOOLS.has(t.name)) && t.name !== "run_agent"
+  );
+
+  const agentSystem = agent.systemPrompt +
+    `\n\nProject token: ${token}` +
+    `\n\nSession Buffer: You have write_buffer, read_buffer, list_buffer tools for sharing data with the main assistant and other agents. Use list_buffer to see what's available. Write findings to the buffer with write_buffer instead of returning everything as text — the assistant will read them from the buffer.` +
+    `\n\nIMPORTANT: If a tool returns an error, do NOT retry the same call. Try a different approach or report what you found so far and finish.`;
+  const taskContent = agent.prompt ? `${agent.prompt}\n\nTask: ${input.task}` : input.task;
+
+  let agentMessages: any[] = [{ role: "user", content: taskContent }];
+  let round = 0;
+  let lastActivityTime = Date.now();
+  const startedAt = Date.now();
+  const recentSignatures: string[] = [];
+
+  // Create a separate tool executor for the agent (shares the same token/state)
+  const agentExecuteTool = createToolExecutor(token, get, set, state, agent.name);
+
+  const effortMaxTokens = agent.effort === "low" ? 2048 : agent.effort === "high" ? 16384 : 8192;
+
+  // --- Agent card in chat ---
+  const cardMsgIdx = get().llmMessages.length;
+  const card: any = {
+    agentId: agent.id, agentName: agent.name, task: input.task,
+    actions: [], startedAt, status: "running",
+  };
+  set((s: any) => ({
+    llmMessages: [...s.llmMessages, { role: "assistant" as const, content: "", agentCard: { ...card } }],
+  }));
+
+  const updateCard = (patch: any) => {
+    Object.assign(card, patch);
+    set((s: any) => ({
+      llmMessages: s.llmMessages.map((m: any, idx: number) =>
+        idx === cardMsgIdx && m.agentCard ? { ...m, agentCard: { ...card, actions: [...card.actions] } } : m
+      ),
+    }));
+  };
+
+  const addAction = (tool: string, description: string, status: "running" | "done" | "error" = "running") => {
+    card.actions.push({ tool, description, timestamp: Date.now(), status });
+    updateCard({});
+  };
+
+  const finishLastAction = (status: "done" | "error" = "done") => {
+    if (card.actions.length > 0) card.actions[card.actions.length - 1].status = status;
+    updateCard({});
+  };
+
+  const buildStopSummary = (reason: string) => {
+    const elapsed = Math.round((Date.now() - startedAt) / 1000);
+    const agentBufferEntries = get().listBuffer().filter((e: any) => e.author === agent.name);
+    const bufferInfo = agentBufferEntries.length > 0
+      ? `\nBuffer entries written: ${agentBufferEntries.map((e: any) => `"${e.key}"`).join(", ")}. Use read_buffer to access them.`
+      : "";
+    const lastAction = card.actions.length > 0 ? card.actions[card.actions.length - 1].description : "none";
+    return `[Agent "${agent.name}" ${reason} after ${elapsed}s, ${round} rounds, ${card.actions.length} tool calls.\nLast action: ${lastAction}.${bufferInfo}]`;
+  };
+
+  try {
+    while (round < AGENT_MAX_ROUNDS) {
+      // Check abort (user pressed global stop OR agent-specific stop)
+      if (get().llmAborted) {
+        updateCard({ status: "stopped" });
+        return buildStopSummary("stopped by user");
+      }
+
+      // Check idle timeout
+      if (Date.now() - lastActivityTime > AGENT_IDLE_TIMEOUT) {
+        updateCard({ status: "error" });
+        return buildStopSummary("timed out (10 min idle)");
+      }
+
+      round++;
+
+      const data = await window.api.llmChat({
+        apiKey: get().llmApiKey,
+        system: agentSystem,
+        messages: agentMessages,
+        model: agent.model,
+        maxTokens: agent.thinking ? effortMaxTokens + 16000 : effortMaxTokens,
+        tools: agentToolDefs.length ? agentToolDefs : undefined,
+        ...(agent.thinking ? { thinking: { type: "enabled", budget_tokens: 16000 } } : {}),
+        ...(!agent.thinking ? { temperature: 0.5 } : {}),
+      });
+
+      lastActivityTime = Date.now();
+
+      // Track tokens
+      if (data.usage) {
+        set((s: any) => ({
+          llmTokensUsed: {
+            input: s.llmTokensUsed.input + (data.usage.input_tokens || 0),
+            output: s.llmTokensUsed.output + (data.usage.output_tokens || 0),
+            cacheRead: s.llmTokensUsed.cacheRead + (data.usage.cache_read_input_tokens || 0),
+            cacheCreation: s.llmTokensUsed.cacheCreation + (data.usage.cache_creation_input_tokens || 0),
+          },
+        }));
+      }
+
+      if (data.stop_reason === "tool_use") {
+        const blocks = (data.content || []).filter((b: any) => b.type === "tool_use");
+
+        // Loop detection
+        const sig = blocks.map((b: any) => `${b.name}:${JSON.stringify(b.input)}`).sort().join("|");
+        recentSignatures.push(sig);
+        if (recentSignatures.length >= 3 && recentSignatures.slice(-3).every(s => s === sig)) {
+          console.warn(`[Agent:${agent.name}] LOOP DETECTED at round ${round}`);
+          updateCard({ status: "error" });
+          return buildStopSummary("stuck in a loop");
+        }
+
+        agentMessages = [...agentMessages, { role: "assistant", content: data.content }];
+        const results: any[] = [];
+        for (const block of blocks) {
+          if (!agent.tools.includes(block.name) && !BUFFER_TOOLS.has(block.name)) {
+            results.push({ type: "tool_result", tool_use_id: block.id, content: `Error: tool '${block.name}' not allowed for agent "${agent.name}"` });
+            continue;
+          }
+          const desc = TOOL_DESCRIPTIONS[block.name] || block.name;
+          addAction(block.name, desc, "running");
+          const raw = await agentExecuteTool(block.name, block.input);
+          lastActivityTime = Date.now();
+          const isError = raw.startsWith("Error:");
+          finishLastAction(isError ? "error" : "done");
+          results.push({ type: "tool_result", tool_use_id: block.id, content: truncateToolResult(compressToolResult(raw)) });
+        }
+        agentMessages = [...agentMessages, { role: "user", content: results }];
+      } else {
+        // Agent finished — extract text
+        const agentText = (data.content || [])
+          .filter((b: any) => b.type === "text")
+          .map((b: any) => b.text)
+          .join("\n") || "[Agent returned no text]";
+        // Auto-save agent output to buffer
+        const bufferKey = `agent-${agent.id}-output`;
+        get().writeBuffer(
+          bufferKey,
+          agentText,
+          `Output from agent "${agent.name}"`,
+          agent.name,
+          ["agent-output"],
+        );
+        const agentBufferEntries = get().listBuffer().filter((e: any) => e.author === agent.name);
+        const bufferNote = agentBufferEntries.length > 0
+          ? `\n\n[Agent wrote ${agentBufferEntries.length} buffer entries: ${agentBufferEntries.map((e: any) => `"${e.key}"`).join(", ")}. Use read_buffer to access them.]`
+          : "";
+        updateCard({ status: "done" });
+        return agentText + bufferNote;
+      }
+    }
+    updateCard({ status: "error" });
+    return buildStopSummary(`hit safety limit (${AGENT_MAX_ROUNDS} rounds)`);
+  } catch (e: any) {
+    updateCard({ status: "error" });
+    return buildStopSummary(`error: ${e.message || e}`);
+  }
+}
+
+/**
  * Creates a tool executor bound to the current project token and state.
  */
 export function createToolExecutor(
   token: string,
   get: GetState,
+  set: SetState,
   state: ToolExecutionState,
-  executeSubAgent: (agentType: SubAgentType, task: string, context?: string) => Promise<string>,
+  authorName: string = "assistant",
 ) {
-  const resolveId = (prefix: string): string => resolveIdInTree(prefix, get().tree);
+  // Slug map: human-readable names → UUIDs, rebuilt on tree changes
+  let slugMap = buildSlugMap(get().tree);
+  let lastTreeRef = get().tree;
+
+  const resolveId = (prefix: string): string => {
+    // Rebuild slug map if tree reference changed (after mutations)
+    const currentTree = get().tree;
+    if (currentTree !== lastTreeRef) {
+      slugMap = buildSlugMap(currentTree);
+      lastTreeRef = currentTree;
+    }
+    return resolveIdInTree(prefix, currentTree, slugMap);
+  };
 
   // Two-level cache: in-memory (session) + localStorage (persistent).
   // Loaded from localStorage on start (with TTL filtering), saved on each write.
@@ -214,14 +415,21 @@ export function createToolExecutor(
   const cache = new Map<string, string>();
   for (const [k, entry] of persistentCache) cache.set(k, entry.v);
 
+  // Tool error tracking (Feature 3: Tool Diagnostics)
+  const toolErrorCounts = new Map<string, { count: number; errors: string[] }>();
+
   async function executeToolInner(name: string, rawInput: any): Promise<string> {
     if (!token) return "Error: no project selected";
     const input = normalizeInput(rawInput);
     try {
       switch (name) {
         case "get_tree": {
-          let treeData = await window.api.getTree(token);
+          const fullTree = await window.api.getTree(token);
+          // Rebuild slug map from latest tree (don't update lastTreeRef —
+          // let resolveId rebuild again when store catches up via silentRefreshUI)
+          slugMap = buildSlugMap(fullTree);
 
+          let treeData = fullTree;
           if (input.parent_id) {
             const parentId = resolveId(input.parent_id);
             const findSubtree = (nodes: any[]): any[] | null => {
@@ -232,17 +440,39 @@ export function createToolExecutor(
               }
               return null;
             };
-            const subtree = findSubtree(treeData);
+            const subtree = findSubtree(fullTree);
             if (!subtree) return `Error: section "${input.parent_id}" not found in tree.`;
             treeData = subtree;
           }
 
-          return formatCompactTree(treeData, 0, true, input.max_depth);
+          return formatCompactTree(treeData, 0, true, input.max_depth, slugMap);
         }
         case "get_section": {
           const format = (input.format === "plain") ? "plain" : "markdown";
-          const raw = await window.api.getSectionContent(token, resolveId(input.section_id), format);
-          const text = (typeof raw === "string" && raw) ? raw : "";
+          const sectionId = resolveId(input.section_id);
+          const sectionMeta = await window.api.getSection(token, sectionId);
+          let raw = await window.api.getSectionContent(token, sectionId, format);
+          let text = (typeof raw === "string" && raw) ? raw : "";
+
+          // File-type sections store content in children — auto-collect
+          if (sectionMeta?.type === "file" && !text.trim()) {
+            try {
+              const fileData = await window.api.getFileWithSections(token, sectionId);
+              const parts: string[] = [];
+              const collectContent = async (nodes: any[]) => {
+                for (const node of nodes) {
+                  const nodeContent = await window.api.getSectionContent(token, node.id, format);
+                  if (nodeContent && typeof nodeContent === "string" && nodeContent.trim()) {
+                    parts.push(`## ${node.title}\n${nodeContent}`);
+                  }
+                  if (node.children?.length) await collectContent(node.children);
+                }
+              };
+              await collectContent(fileData.sections || []);
+              text = parts.join("\n\n");
+            } catch { /* fallback to empty */ }
+          }
+
           if (!text) return "(empty section)";
 
           const offset = input.offset ?? 0;
@@ -286,6 +516,11 @@ export function createToolExecutor(
           const parentId = (input.parent_id && input.parent_id !== "null") ? resolveId(input.parent_id) : null;
           const content = input.content;
 
+          // Validate: content is required for types that need text
+          if (["file", "section", "idea", "todo"].includes(input.type) && !content?.trim()) {
+            return `Error: 'content' parameter is REQUIRED for type '${input.type}'. Pass full markdown text in 'content'. Never leave it empty.`;
+          }
+
           // For 'file' with content: create file, then split markdown into nested child sections
           if (input.type === "file" && content) {
             const file = await window.api.createSection(token, parentId, input.title, "file", input.icon || null);
@@ -299,15 +534,24 @@ export function createToolExecutor(
                 totalCreated++;
               }
             }
+            // Position after specified sibling
+            if (input.after_id) {
+              const afterId = resolveId(input.after_id);
+              await window.api.moveSection(token, file.id, parentId, afterId);
+            }
             state.mutated = true;
             state.lastCreatedId = file.id;
-            return JSON.stringify({ id: file.id, title: file.title, type: file.type, sections_created: totalCreated });
+            return JSON.stringify({ id: file.id, title: file.title, type: file.type, sections_created: totalCreated, link: `[${file.title}](ccdoc:${file.id})` });
           }
 
           const section = await window.api.createSection(token, parentId, input.title, input.type, input.icon || null, content);
+          if (input.after_id) {
+            const afterId = resolveId(input.after_id);
+            await window.api.moveSection(token, section.id, parentId, afterId);
+          }
           state.mutated = true;
           state.lastCreatedId = section.id;
-          return JSON.stringify({ id: section.id, title: section.title, type: section.type });
+          return JSON.stringify({ id: section.id, title: section.title, type: section.type, link: `[${section.title}](ccdoc:${section.id})` });
         }
         case "bulk_create_sections": {
           const createdIds: string[] = [];
@@ -341,12 +585,12 @@ export function createToolExecutor(
                 }
                 createdIds.push(file.id);
                 state.lastCreatedId = file.id;
-                results.push({ index: i, id: file.id, title: s.title, type: s.type, sections_created: totalCreated });
+                results.push({ index: i, id: file.id, title: s.title, type: s.type, sections_created: totalCreated, link: `[${s.title}](ccdoc:${file.id})` });
               } else {
                 const section = await window.api.createSection(token, parentId, s.title, s.type, s.icon || null, s.content);
                 createdIds.push(section.id);
                 state.lastCreatedId = section.id;
-                results.push({ index: i, id: section.id, title: section.title, type: section.type });
+                results.push({ index: i, id: section.id, title: section.title, type: section.type, link: `[${section.title}](ccdoc:${section.id})` });
               }
             } catch (e: any) {
               createdIds.push("");
@@ -361,19 +605,37 @@ export function createToolExecutor(
           const title = input.title;
           const content = input.content;
           // Use explicit undefined/null check — empty string "" is a valid content (clears section)
-          if (title == null || content == null) {
-            const current = await window.api.getSection(token, sid);
-            const currentContent = await window.api.getSectionContent(token, sid, "markdown");
-            const finalTitle = title ?? current.title;
-            const finalContent = content ?? (typeof currentContent === "string" ? currentContent : "");
-            await window.api.updateSectionMarkdown(token, sid, finalTitle, finalContent);
-            state.mutated = true;
-            const fl = (finalContent || "").length;
-            return `Section "${finalTitle}" updated (${fl} chars sent, ${fl} chars written).`;
-          }
-          await window.api.updateSectionMarkdown(token, sid, title, content);
+          const current = await window.api.getSection(token, sid);
+          const finalTitle = title ?? current.title;
+          const finalContent = content ?? await (async () => {
+            const c = await window.api.getSectionContent(token, sid, "markdown");
+            return typeof c === "string" ? c : "";
+          })();
+
+          await window.api.updateSectionMarkdown(token, sid, finalTitle, finalContent);
           state.mutated = true;
-          return `Section "${title}" updated (${content.length} chars sent, ${content.length} chars written).`;
+          return `Section "${finalTitle}" updated (${finalContent.length} chars sent, ${finalContent.length} chars written).`;
+        }
+        case "bulk_update_sections": {
+          if (!Array.isArray(input.sections)) return "Error: 'sections' must be an array.";
+          const results: any[] = [];
+          for (const s of input.sections) {
+            const sid = resolveId(s.section_id);
+            try {
+              const current = await window.api.getSection(token, sid);
+              const finalTitle = s.title ?? current.title;
+              const finalContent = s.content ?? await (async () => {
+                const c = await window.api.getSectionContent(token, sid, "markdown");
+                return typeof c === "string" ? c : "";
+              })();
+              await window.api.updateSectionMarkdown(token, sid, finalTitle, finalContent);
+              results.push({ id: sid, title: finalTitle, chars: finalContent.length });
+            } catch (e: any) {
+              results.push({ id: sid, error: e.message });
+            }
+          }
+          state.mutated = true;
+          return JSON.stringify({ updated: results });
         }
         case "move_section": {
           const newParentId = (input.new_parent_id && input.new_parent_id !== "null") ? resolveId(input.new_parent_id) : null;
@@ -381,6 +643,18 @@ export function createToolExecutor(
           await window.api.moveSection(token, resolveId(input.section_id), newParentId, afterId);
           state.mutated = true;
           return "Section moved successfully.";
+        }
+        case "reorder_children": {
+          if (!Array.isArray(input.ordered_ids)) return "Error: 'ordered_ids' must be an array of section IDs.";
+          const parentId = (input.parent_id && input.parent_id !== "null") ? resolveId(input.parent_id) : null;
+          const orderedIds = (input.ordered_ids as string[]).map((id: string) => resolveId(id));
+          // Reorder by moving each section after the previous one
+          for (let i = 0; i < orderedIds.length; i++) {
+            const afterId = i === 0 ? null : orderedIds[i - 1];
+            await window.api.moveSection(token, orderedIds[i], parentId, afterId);
+          }
+          state.mutated = true;
+          return `Reordered ${orderedIds.length} children successfully.`;
         }
         case "delete_section": {
           await window.api.deleteSection(token, resolveId(input.section_id));
@@ -486,8 +760,29 @@ export function createToolExecutor(
             const id = resolveId(rawId);
             try {
               const section = await window.api.getSection(token, id);
-              const raw = await window.api.getSectionContent(token, id, format);
-              const content = (typeof raw === "string" && raw) ? raw : "";
+              let raw = await window.api.getSectionContent(token, id, format);
+              let content = (typeof raw === "string" && raw) ? raw : "";
+
+              // File-type sections store content in children, not in the file node itself.
+              // Auto-collect children content so the model doesn't waste a round discovering this.
+              if (section?.type === "file" && !content.trim()) {
+                try {
+                  const fileData = await window.api.getFileWithSections(token, id);
+                  const parts: string[] = [];
+                  const collectContent = async (nodes: any[]) => {
+                    for (const node of nodes) {
+                      const nodeContent = await window.api.getSectionContent(token, node.id, format);
+                      if (nodeContent && typeof nodeContent === "string" && nodeContent.trim()) {
+                        parts.push(`## ${node.title}\n${nodeContent}`);
+                      }
+                      if (node.children?.length) await collectContent(node.children);
+                    }
+                  };
+                  await collectContent(fileData.sections || []);
+                  content = parts.join("\n\n");
+                } catch { /* fallback to empty */ }
+              }
+
               if (content.length > DEFAULT_CONTENT_LIMIT) {
                 results.push({
                   id, title: section?.title, type: section?.type,
@@ -597,38 +892,114 @@ export function createToolExecutor(
             .join("\n\n");
           return `Found ${response.results.length} results for "${response.query}" (${response.duration}ms):\n\n${formatted}`;
         }
-        case "delegate_research": {
-          return await executeSubAgent("research", input.task, input.context);
+        case "create_plan": {
+          const steps = (input.steps || []).map((s: string) => ({
+            text: String(s),
+            status: "pending" as const,
+          }));
+          if (steps.length === 0) return "Error: plan must have at least one step";
+          steps[0].status = "in_progress";
+          const plan = { steps };
+          set((s: any) => ({
+            llmCurrentPlan: plan,
+            llmMessages: [...s.llmMessages, { role: "assistant" as const, content: "", plan: { ...plan, steps: [...plan.steps] } }],
+          }));
+          return `Plan created with ${steps.length} steps. Now working on step 1: "${steps[0].text}"`;
         }
-        case "delegate_writing": {
-          // Auto-inject current section content when the task is about updating a specific section.
-          // This gives the writer ground truth instead of a possibly stale research summary.
-          let context = input.context || "";
-          const sidMatch = input.task?.match(/section_id:\s*([0-9a-f-]{8,36})/i)
-            || input.task?.match(/\(([0-9a-f-]{8,36})\)/);
-          if (sidMatch) {
-            try {
-              const sid = resolveId(sidMatch[1]);
-              const section = await window.api.getSection(token, sid);
-              const content = await window.api.getSectionContent(token, sid, "markdown");
-              if (content && typeof content === "string" && content.length > 0) {
-                const trimmed = content.length > MAX_CONTENT_LIMIT
-                  ? content.slice(0, MAX_CONTENT_LIMIT) + `\n\n[truncated, ${content.length} chars total]`
-                  : content;
-                context = `CURRENT CONTENT of "${section?.title || sid}" (${sid}):\n---\n${trimmed}\n---\nThis is the authoritative source. Do NOT re-read this section.\n\n${context}`;
-              }
-            } catch { /* section not found — let the writer handle it */ }
+        case "update_plan": {
+          const plan = get().llmCurrentPlan;
+          if (!plan) return "Error: no active plan. Create one with create_plan first.";
+          const idx = Number(input.step_index);
+          if (isNaN(idx) || idx < 0 || idx >= plan.steps.length) return `Error: invalid step index ${input.step_index}. Plan has ${plan.steps.length} steps (0-${plan.steps.length - 1}).`;
+
+          const newSteps = plan.steps.map((s) => ({ ...s }));
+          newSteps[idx].status = input.status as "in_progress" | "done";
+
+          // Auto-advance: if marking done and next step exists, set it to in_progress
+          if (input.status === "done" && idx + 1 < newSteps.length && newSteps[idx + 1].status === "pending") {
+            newSteps[idx + 1].status = "in_progress";
           }
-          return await executeSubAgent("writer", input.task, context || undefined);
-        }
-        case "delegate_review": {
-          return await executeSubAgent("critic", input.task, input.context);
-        }
-        case "delegate_planning": {
-          return await executeSubAgent("planner", input.task, input.context);
+
+          const updatedPlan = { steps: newSteps };
+          const planSnapshot = { steps: newSteps.map((st: any) => ({ ...st })) };
+          set((s: any) => ({
+            llmCurrentPlan: updatedPlan,
+            // Update old plan messages in-place AND append fresh copy at the bottom
+            llmMessages: [
+              ...s.llmMessages.map((m: any) =>
+                m.plan ? { ...m, plan: planSnapshot } : m
+              ),
+              { role: "assistant" as const, content: "", plan: { ...planSnapshot, steps: [...planSnapshot.steps] } },
+            ],
+          }));
+
+          const allDone = newSteps.every((s) => s.status === "done");
+          if (allDone) {
+            set({ llmCurrentPlan: null });
+            return "All plan steps completed!";
+          }
+          const nextStep = newSteps.find((s) => s.status === "in_progress");
+          const nextIdx = nextStep ? newSteps.indexOf(nextStep) : -1;
+          return `Step ${idx + 1} "${newSteps[idx].text}" done.${nextStep ? ` Now working on step ${nextIdx + 1}: "${nextStep.text}"` : ""}`;
         }
         case "ask_user":
           return "Error: ask_user should be handled by the engine, not the executor.";
+        case "rate_agent": {
+          const agents = get().customAgents || [];
+          const agent = agents.find((a: any) => a.id === input.agent_id);
+          if (!agent) return `Error: agent "${input.agent_id}" not found`;
+          const score = Math.max(0, Math.min(10, Number(input.score) || 10));
+          const issues = input.issues ? String(input.issues) : undefined;
+          const newLog = issues ? [issues, ...(agent.ratingLog || []).slice(0, 9)] : (agent.ratingLog || []);
+          // Running average: blend old rating with new score (biased toward history)
+          const newRating = Math.round(((agent.rating ?? 10) * 0.6 + score * 0.4) * 10) / 10;
+          get().updateCustomAgent(agent.id, { rating: newRating, ratingLog: newLog });
+          return `Agent "${agent.name}" rated: ${score}/10 → rating now ${newRating}/10${issues ? `. Issues noted: ${issues}` : ""}`;
+        }
+        case "run_agent": {
+          const mutatedBefore = state.mutated;
+          const agentResult = await executeAgentTool(input, token, get, set, state);
+          // If agent was stopped by user, reset abort so the assistant can continue
+          if (get().llmAborted) {
+            set({ llmAborted: false });
+          }
+          // If agent mutated data, invalidate our cache so main assistant gets fresh data
+          if (state.mutated && !mutatedBefore) {
+            invalidateCache(cache);
+            invalidateCache(persistentCache);
+          }
+          return agentResult + `\n\n[IMPORTANT: Call rate_agent(agent_id="${input.agent_id}", score=...) to rate this agent's performance]`;
+        }
+        // ─── Session buffer tools ──────────────────────────────
+        case "write_buffer": {
+          return get().writeBuffer(
+            String(input.key || ""),
+            String(input.content || ""),
+            String(input.summary || ""),
+            authorName,
+            Array.isArray(input.tags) ? input.tags : undefined,
+          );
+        }
+        case "read_buffer": {
+          const entry = get().readBuffer(String(input.key || ""));
+          if (!entry) return `Buffer entry "${input.key}" not found. Use list_buffer to see available entries.`;
+          const limit = Math.min(Math.max(input.limit || DEFAULT_CONTENT_LIMIT, 1), MAX_CONTENT_LIMIT);
+          const offset = Math.max(input.offset || 0, 0);
+          const page = paginateText(entry.content, offset, limit);
+          const meta: any = { key: entry.key, author: entry.author, tags: entry.tags, charCount: entry.charCount, content: page.slice };
+          if (page.hasMore) {
+            meta.hasMore = true;
+            meta.nextOffset = page.end;
+            meta.hint = `Use read_buffer(key="${entry.key}", offset=${page.end}) to continue reading.`;
+          }
+          return JSON.stringify(meta);
+        }
+        case "list_buffer": {
+          const entries = get().listBuffer(input.tag ? String(input.tag) : undefined);
+          if (entries.length === 0) return "Session buffer is empty.";
+          return JSON.stringify({ entries, totalEntries: entries.length });
+        }
+
         default:
           return `Unknown tool: ${name}`;
       }
@@ -649,6 +1020,18 @@ export function createToolExecutor(
     return out;
   }
 
+  /** Find "Быстрые идеи" / "Quick Ideas" folder in tree. */
+  function findQuickIdeasFolder(tree: any[]): string | null {
+    for (const node of tree) {
+      if (node.title === "Быстрые идеи" || node.title === "Quick Ideas") return node.id;
+      if (node.children?.length) {
+        const found = findQuickIdeasFolder(node.children);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+
   // Wrapper that adds caching and invalidation
   return async function executeToolCached(name: string, rawInput: any): Promise<string> {
     const input = resolveInputIds(normalizeInput(rawInput));
@@ -662,12 +1045,32 @@ export function createToolExecutor(
 
     const result = await executeToolInner(name, rawInput);
 
+    // Tool error tracking (Feature 3: Tool Diagnostics)
+    if (result.startsWith("Error:")) {
+      const entry = toolErrorCounts.get(name) || { count: 0, errors: [] };
+      entry.count++;
+      entry.errors.push(result.slice(0, 200));
+      toolErrorCounts.set(name, entry);
+
+      // If devTrackToolIssues is on and tool errored 3+ times, create an idea in Quick Ideas
+      if (entry.count === 3 && get().devTrackToolIssues) {
+        const quickIdeasId = findQuickIdeasFolder(get().tree);
+        if (quickIdeasId) {
+          window.api.createSection(
+            token, quickIdeasId,
+            `Tool issue: ${name}`, "idea", null,
+            `Tool "${name}" failed ${entry.count} times.\nErrors:\n${entry.errors.join("\n")}`,
+          ).catch(() => {});
+        }
+      }
+    }
+
     // Invalidate cache on mutating operations
-    const isMutating = ["create_section", "bulk_create_sections", "update_section",
-      "delete_section", "move_section", "duplicate_section", "restore_section",
+    const isMutating = ["create_section", "bulk_create_sections", "update_section", "bulk_update_sections",
+      "delete_section", "move_section", "reorder_children", "duplicate_section", "restore_section",
       "update_icon", "restore_version"].includes(name);
     if (isMutating) {
-      const broadMutation = name === "restore_version" || name === "bulk_create_sections";
+      const broadMutation = name === "restore_version" || name === "bulk_create_sections" || name === "bulk_update_sections" || name === "reorder_children";
       const sid = broadMutation ? undefined : (input.section_id || input.file_id || state.lastCreatedId);
       invalidateCache(cache, sid);
       invalidateCache(persistentCache, sid);

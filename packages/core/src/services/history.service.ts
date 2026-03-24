@@ -92,11 +92,10 @@ export class HistoryService {
         mkdirSync(join(docsDir, fileName, ".."), { recursive: true });
         writeFileSync(filePath, markdown, "utf-8");
       } else if (section.type === "idea") {
-        fileName = `${prefix}-${sanitizedTitle}.md`;
-        const markdown = ideaToPlain(section.content);
+        fileName = `${prefix}-${sanitizedTitle}.idea`;
         const filePath = join(docsDir, fileName);
         mkdirSync(join(docsDir, fileName, ".."), { recursive: true });
-        writeFileSync(filePath, markdown, "utf-8");
+        writeFileSync(filePath, section.content, "utf-8");
       } else {
         // file, section, todo — all ProseMirror-based
         fileName = `${prefix}-${sanitizedTitle}.md`;
@@ -370,12 +369,10 @@ export class HistoryService {
         const prevContent = prevContents.get(s.id) || "";
         let currentMd = "";
         try {
-          if (s.type === "drawing") {
+          if (s.type === "drawing" || s.type === "idea") {
             currentMd = s.content;
           } else if (s.type === "kanban") {
             currentMd = kanbanToMarkdown(JSON.parse(s.content));
-          } else if (s.type === "idea") {
-            currentMd = ideaToPlain(s.content);
           } else {
             currentMd = prosemirrorToMarkdown(JSON.parse(s.content));
           }
@@ -442,9 +439,8 @@ export class HistoryService {
       const prevContent = prevContents.get(s.id) || "";
       let currentMd = "";
       try {
-        if (s.type === "drawing") currentMd = s.content;
+        if (s.type === "drawing" || s.type === "idea") currentMd = s.content;
         else if (s.type === "kanban") currentMd = kanbanToMarkdown(JSON.parse(s.content));
-        else if (s.type === "idea") currentMd = ideaToPlain(s.content);
         else currentMd = prosemirrorToMarkdown(JSON.parse(s.content));
       } catch { currentMd = s.content; }
       if (currentMd.trim() !== prevContent.trim() || prev.title !== s.title) changed.push(s.id);
@@ -459,7 +455,8 @@ export class HistoryService {
 
   async restore(
     commitId: string,
-    sectionsService: SectionsService
+    sectionsService: SectionsService,
+    onProgress?: (current: number, total: number, title: string) => void
   ): Promise<void> {
     await this.init();
 
@@ -473,10 +470,15 @@ export class HistoryService {
 
     // Step 1: Hard-delete ALL current sections (clean slate)
     const db = (sectionsService as any).repo.db;
+    await db.execute("PRAGMA foreign_keys = OFF");
     await db.execute("DELETE FROM sections");
 
     // Step 2: Re-create all sections from the snapshot
+    const total = structure.sections.length;
+    let current = 0;
     for (const sectionMeta of structure.sections) {
+      current++;
+      onProgress?.(current, total, sectionMeta.title);
       try {
         let content = "";
 
@@ -497,15 +499,30 @@ export class HistoryService {
           } else if (sectionMeta.type === "kanban") {
             content = JSON.stringify(markdownToKanban(fileContent));
           } else if (sectionMeta.type === "idea") {
-            // Ideas stored as plain text — restore as single-message IdeaData
-            const msgId = `restored-${Date.now()}`;
-            content = JSON.stringify({ messages: [{ id: msgId, text: fileContent, createdAt: Date.now() }] });
+            // New format: raw JSON (IdeaData); old format: plain text
+            try {
+              const parsed = JSON.parse(fileContent);
+              if (parsed.messages) {
+                content = fileContent; // already valid IdeaData JSON
+              } else {
+                throw new Error("not IdeaData");
+              }
+            } catch {
+              // Legacy plain text fallback — split by double newline into separate messages
+              const texts = fileContent.split(/\n{2,}/).filter((t: string) => t.trim());
+              const messages = texts.map((text: string, i: number) => ({
+                id: `restored-${Date.now()}-${i}`,
+                text: text.trim(),
+                createdAt: Date.now() + i,
+              }));
+              content = JSON.stringify({ messages: messages.length > 0 ? messages : [] });
+            }
           } else {
             // ProseMirror-based (file, section, todo)
             const doc = markdownToProsemirror(fileContent);
 
             // Re-insert drawing blocks (reverse order to preserve positions)
-            if (sectionMeta.drawing_blocks.length > 0) {
+            if (sectionMeta.drawing_blocks?.length > 0) {
               const sorted = [...sectionMeta.drawing_blocks].sort((a, b) => b.position - a.position);
               for (const eb of sorted) {
                 if (doc.content && eb.position <= doc.content.length) {
@@ -544,7 +561,10 @@ export class HistoryService {
       }
     }
 
-    // Step 3: Clear FTS text table (triggers will handle sections_fts)
+    // Step 3: Re-enable foreign keys
+    await db.execute("PRAGMA foreign_keys = ON");
+
+    // Step 4: Clear FTS text table (triggers will handle sections_fts)
     try {
       await db.execute("DELETE FROM sections_text");
     } catch (err) {

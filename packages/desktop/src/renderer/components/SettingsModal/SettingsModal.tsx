@@ -1,15 +1,16 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useAppStore, type LlmConfig } from "../../stores/app.store.js";
 import { useT, type Lang } from "../../i18n.js";
 import { ModelTab } from "./tabs/ModelTab.js";
 import { EmbeddingsTab } from "./tabs/EmbeddingsTab.js";
 import { VoiceTab } from "./tabs/VoiceTab.js";
-import { SubAgentsTab } from "./tabs/SubAgentsTab.js";
 import { WebSearchTab } from "./tabs/WebSearchTab.js";
 import { AppearanceTab } from "./tabs/AppearanceTab.js";
+import { AgentsTab } from "./tabs/AgentsTab.js";
+import { DeveloperTab } from "./tabs/DeveloperTab.js";
 
-type Tab = "model" | "embeddings" | "voice" | "websearch" | "theme" | "language" | "subagents";
+type Tab = "model" | "embeddings" | "voice" | "websearch" | "agents" | "theme" | "language" | "developer";
 
 function configsEqual(a: LlmConfig, b: LlmConfig): boolean {
   return a.model === b.model && a.effort === b.effort && a.thinking === b.thinking && a.inheritFromParent === b.inheritFromParent;
@@ -22,34 +23,48 @@ export function SettingsModal({ onClose, initialTab }: { onClose: () => void; in
     llmChatConfig, setLlmChatConfig,
     llmPassportConfig, setLlmPassportConfig,
     llmSummaryConfig, setLlmSummaryConfig,
-    llmResearchConfig, setLlmResearchConfig,
-    llmWriterConfig, setLlmWriterConfig,
-    llmCriticConfig, setLlmCriticConfig,
-    llmPlannerConfig, setLlmPlannerConfig,
-    useSubAgents, setUseSubAgents,
     webSearchProvider, setWebSearchProvider,
     webSearchApiKey, setWebSearchApiKey,
     theme, toggleTheme,
     language, setLanguage,
     fetchEmbeddingStatus,
     fetchVoiceStatuses,
+    devMode, setDevMode,
+    addToast,
   } = useAppStore();
   const t = useT();
 
-  const validTabs: Tab[] = ["model", "embeddings", "voice", "websearch", "theme", "language", "subagents"];
+  const validTabs: Tab[] = ["model", "embeddings", "voice", "websearch", "agents", "theme", "language"];
   const [tab, setTab] = useState<Tab>(validTabs.includes(initialTab as Tab) ? initialTab as Tab : "model");
   const [openSection, setOpenSection] = useState<string>("chat");
+
+  // Secret dev mode activation: press "8" four times in a row
+  const devCodeRef = useRef("");
+  const handleDevCode = useCallback((e: KeyboardEvent) => {
+    if (e.key === "8") {
+      devCodeRef.current += "8";
+      if (devCodeRef.current.length >= 4) {
+        if (!devMode) {
+          setDevMode(true);
+          addToast("info", t("devModeActivated"));
+        }
+        devCodeRef.current = "";
+      }
+    } else {
+      devCodeRef.current = "";
+    }
+  }, [devMode, setDevMode, addToast, t]);
+
+  useEffect(() => {
+    document.addEventListener("keydown", handleDevCode);
+    return () => document.removeEventListener("keydown", handleDevCode);
+  }, [handleDevCode]);
 
   /* --- drafts --- */
   const [keyDraft, setKeyDraft] = useState(llmApiKey);
   const [chatDraft, setChatDraft] = useState<LlmConfig>(llmChatConfig);
   const [passportDraft, setPassportDraft] = useState<LlmConfig>(llmPassportConfig);
   const [summaryDraft, setSummaryDraft] = useState<LlmConfig>(llmSummaryConfig);
-  const [researchDraft, setResearchDraft] = useState<LlmConfig>(llmResearchConfig);
-  const [writerDraft, setWriterDraft] = useState<LlmConfig>(llmWriterConfig);
-  const [criticDraft, setCriticDraft] = useState<LlmConfig>(llmCriticConfig);
-  const [plannerDraft, setPlannerDraft] = useState<LlmConfig>(llmPlannerConfig);
-  const [useSubAgentsDraft, setUseSubAgentsDraft] = useState(useSubAgents);
   const [webSearchProviderDraft, setWebSearchProviderDraft] = useState(webSearchProvider);
   const [webSearchApiKeyDraft, setWebSearchApiKeyDraft] = useState(webSearchApiKey);
   const [themeDraft, setThemeDraft] = useState(theme);
@@ -73,17 +88,12 @@ export function SettingsModal({ onClose, initialTab }: { onClose: () => void; in
     !configsEqual(chatDraft, llmChatConfig) ||
     !configsEqual(passportDraft, llmPassportConfig) ||
     !configsEqual(summaryDraft, llmSummaryConfig) ||
-    !configsEqual(researchDraft, llmResearchConfig) ||
-    !configsEqual(writerDraft, llmWriterConfig) ||
-    !configsEqual(criticDraft, llmCriticConfig) ||
-    !configsEqual(plannerDraft, llmPlannerConfig) ||
-    useSubAgentsDraft !== useSubAgents ||
     webSearchProviderDraft !== webSearchProvider ||
     webSearchApiKeyDraft !== webSearchApiKey ||
     themeDraft !== theme ||
     langDraft !== language,
-    [keyDraft, chatDraft, passportDraft, summaryDraft, researchDraft, writerDraft, criticDraft, plannerDraft, useSubAgentsDraft, webSearchProviderDraft, webSearchApiKeyDraft, themeDraft, langDraft,
-     llmApiKey, llmChatConfig, llmPassportConfig, llmSummaryConfig, llmResearchConfig, llmWriterConfig, llmCriticConfig, llmPlannerConfig, useSubAgents, webSearchProvider, webSearchApiKey, theme, language]
+    [keyDraft, chatDraft, passportDraft, summaryDraft, webSearchProviderDraft, webSearchApiKeyDraft, themeDraft, langDraft,
+     llmApiKey, llmChatConfig, llmPassportConfig, llmSummaryConfig, webSearchProvider, webSearchApiKey, theme, language]
   );
 
   /* --- save --- */
@@ -95,11 +105,6 @@ export function SettingsModal({ onClose, initialTab }: { onClose: () => void; in
     if (!configsEqual(chatDraft, llmChatConfig)) setLlmChatConfig(chatDraft);
     if (!configsEqual(passportDraft, llmPassportConfig)) setLlmPassportConfig(passportDraft);
     if (!configsEqual(summaryDraft, llmSummaryConfig)) setLlmSummaryConfig(summaryDraft);
-    if (!configsEqual(researchDraft, llmResearchConfig)) setLlmResearchConfig(researchDraft);
-    if (!configsEqual(writerDraft, llmWriterConfig)) setLlmWriterConfig(writerDraft);
-    if (!configsEqual(criticDraft, llmCriticConfig)) setLlmCriticConfig(criticDraft);
-    if (!configsEqual(plannerDraft, llmPlannerConfig)) setLlmPlannerConfig(plannerDraft);
-    if (useSubAgentsDraft !== useSubAgents) setUseSubAgents(useSubAgentsDraft);
     if (webSearchProviderDraft !== webSearchProvider) setWebSearchProvider(webSearchProviderDraft);
     if (webSearchApiKeyDraft !== webSearchApiKey) setWebSearchApiKey(webSearchApiKeyDraft);
     if (themeDraft !== theme) toggleTheme();
@@ -148,9 +153,14 @@ export function SettingsModal({ onClose, initialTab }: { onClose: () => void; in
           <button className={`settings-tab${tab === "websearch" ? " active" : ""}`} onClick={() => setTab("websearch")}>
             {t("webSearchTitle")}
           </button>
-          <button className={`settings-tab${tab === "subagents" ? " active" : ""}`} onClick={() => setTab("subagents")}>
-            {t("settingsSubAgents")}
+          <button className={`settings-tab${tab === "agents" ? " active" : ""}`} onClick={() => setTab("agents")}>
+            {t("settingsAgents")}
           </button>
+          {devMode && (
+            <button className={`settings-tab${tab === "developer" ? " active" : ""}`} onClick={() => setTab("developer")}>
+              {t("settingsDeveloper")}
+            </button>
+          )}
         </div>
 
         <div className="settings-tab-content">
@@ -181,6 +191,10 @@ export function SettingsModal({ onClose, initialTab }: { onClose: () => void; in
             />
           )}
 
+          {tab === "agents" && <AgentsTab />}
+
+          {tab === "developer" && <DeveloperTab />}
+
           {tab === "theme" && (
             <AppearanceTab mode="theme" themeDraft={themeDraft} onThemeChange={setThemeDraft} />
           )}
@@ -189,22 +203,6 @@ export function SettingsModal({ onClose, initialTab }: { onClose: () => void; in
             <AppearanceTab mode="language" langDraft={langDraft} onLangChange={setLangDraft} />
           )}
 
-          {tab === "subagents" && (
-            <SubAgentsTab
-              useSubAgentsDraft={useSubAgentsDraft}
-              onUseSubAgentsChange={setUseSubAgentsDraft}
-              chatDraft={chatDraft}
-              researchDraft={researchDraft}
-              onResearchChange={(cfg) => setResearchDraft((d) => ({ ...d, ...cfg }))}
-              writerDraft={writerDraft}
-              onWriterChange={(cfg) => setWriterDraft((d) => ({ ...d, ...cfg }))}
-              criticDraft={criticDraft}
-              onCriticChange={(cfg) => setCriticDraft((d) => ({ ...d, ...cfg }))}
-              plannerDraft={plannerDraft}
-              onPlannerChange={(cfg) => setPlannerDraft((d) => ({ ...d, ...cfg }))}
-              {...modelProps}
-            />
-          )}
         </div>
 
         <div className="modal-actions">

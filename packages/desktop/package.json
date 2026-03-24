@@ -1,17 +1,7 @@
 {
   "name": "@ccdoc/desktop",
-  "version": "0.1.10",
+  "version": "0.1.0",
   "private": true,
-  "description": "Desktop documentation app for software projects",
-  "author": {
-    "name": "gangelxxx",
-    "email": "gangelxxx@users.noreply.github.com"
-  },
-  "homepage": "https://github.com/gangelxxx/ccDoc",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/gangelxxx/ccDoc.git"
-  },
   "main": "dist/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -38,6 +28,10 @@
     "@tiptap/pm": "^2.11.5",
     "@tiptap/react": "^2.11.5",
     "@tiptap/starter-kit": "^2.11.5",
+    "d3-drag": "^3.0.0",
+    "d3-force": "^3.0.0",
+    "d3-selection": "^3.0.0",
+    "d3-zoom": "^3.0.0",
     "diff": "^8.0.3",
     "dompurify": "^3.3.2",
     "elkjs": "^0.11.1",
@@ -50,6 +44,9 @@
     "react-dom": "^19.0.0",
     "write-file-atomic": "^7.0.1",
     "zustand": "^5.0.3"
+  },
+  "optionalDependencies": {
+    "onnxruntime-node": "^1.20.0"
   },
   "build": {
     "appId": "com.ccdoc.app",
@@ -92,18 +89,16 @@
       "category": "Development",
       "icon": "build/icons"
     },
-    "artifactName": "${productName}-${version}-${arch}.${ext}",
-    "publish": {
-      "provider": "github",
-      "owner": "gangelxxx",
-      "repo": "ccDoc"
-    },
     "extraResources": [],
     "asar": true
   },
   "devDependencies": {
     "@tiptap/extension-color": "^2.27.2",
     "@tiptap/extension-text-style": "^2.27.2",
+    "@types/d3-drag": "^3.0.7",
+    "@types/d3-force": "^3.0.10",
+    "@types/d3-selection": "^3.0.11",
+    "@types/d3-zoom": "^3.0.8",
     "@types/dompurify": "^3.2.0",
     "@types/picomatch": "^4.0.2",
     "@types/react": "^19.0.8",

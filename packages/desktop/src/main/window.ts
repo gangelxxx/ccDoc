@@ -1,7 +1,7 @@
 /**
  * Window creation, spell-check setup, context menu.
  */
-import { BrowserWindow, Menu, nativeImage } from "electron";
+import { BrowserWindow, Menu } from "electron";
 import { join } from "path";
 
 let mainWindow: BrowserWindow | null = null;
@@ -17,7 +17,6 @@ export function createWindow(): void {
     minWidth: 800,
     minHeight: 600,
     title: "CCDoc",
-    icon: nativeImage.createFromPath(join(__dirname, "../../build/icon.png")),
     autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, "../preload/preload.js"),

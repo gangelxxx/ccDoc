@@ -5,7 +5,7 @@ export interface SearchSlice {
   search: (query: string) => Promise<void>;
 
   ftsQuery: string;
-  ftsResults: { id: string; title: string; titleHighlighted: string; snippet: string; score: number }[];
+  ftsResults: { id: string; title: string; titleHighlighted: string; snippet: string; score: number; breadcrumbs?: string }[];
   ftsLoading: boolean;
   setFtsQuery: (query: string) => void;
   searchFts: (query: string) => Promise<void>;

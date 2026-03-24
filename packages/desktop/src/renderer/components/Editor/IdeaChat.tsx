@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { ChevronRight, Zap, RotateCcw, Loader2, Check, Copy, Send, Trash2, ArrowDown, CircleCheck, FileText, Pencil, Paperclip, X, Search, ChevronUp, ChevronDown } from "lucide-react";
+import { ChevronRight, Zap, RotateCcw, Loader2, Check, Copy, Send, Trash2, ArrowDown, CircleCheck, FileText, Pencil, Paperclip, X, Search, ChevronUp, ChevronDown, Sparkles } from "lucide-react";
 import { useAppStore } from "../../stores/app.store.js";
 import { useT } from "../../i18n.js";
 import { findTreeNode, renderMarkdown } from "./editor-utils.js";
@@ -134,6 +134,7 @@ export function IdeaChat({ section, tree, onNavigate }: {
 }) {
   const t = useT();
   const expandIdeaToPlan = useAppStore((s) => s.expandIdeaToPlan);
+  const processIdeaWithLLM = useAppStore((s) => s.processIdeaWithLLM);
   const addIdeaMessage = useAppStore((s) => s.addIdeaMessage);
   const deleteIdeaMessage = useAppStore((s) => s.deleteIdeaMessage);
   const getIdeaMessages = useAppStore((s) => s.getIdeaMessages);
@@ -877,6 +878,16 @@ export function IdeaChat({ section, tree, onNavigate }: {
         >
           <Search size={16} />
         </button>
+        {llmApiKey && messages.length > 0 && (
+          <button
+            className="idea-chat-search-btn"
+            onClick={() => processIdeaWithLLM(section.id)}
+            disabled={llmLoading || generatingFor !== null}
+            title={t("processIdeas")}
+          >
+            <Sparkles size={16} />
+          </button>
+        )}
         <input
           className="idea-chat-title"
           value={section.title}

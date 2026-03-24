@@ -11,6 +11,8 @@ export function renderMarkdown(text: string): string {
     .replace(/^# (.+)$/gm, "<h1>$1</h1>")
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
     .replace(/\*(.+?)\*/g, "<em>$1</em>")
+    // Section links: [text](ccdoc:ID_OR_SLUG) → clickable link to navigate to section
+    .replace(/\[([^\]]+)\]\(ccdoc:([a-z0-9-]+)\)/g, '<a href="#section:$2" class="llm-section-link">📄 $1</a>')
     .replace(/^[-*] (.+)$/gm, "<li>$1</li>")
     .replace(/\n\n/g, "</p><p>")
     .replace(/\n/g, "<br/>");

@@ -82,6 +82,23 @@ export class FtsRepo {
     await this.db.batch(statements, "write");
   }
 
+  async getByIds(ids: string[]): Promise<Map<string, { title: string; breadcrumbs: string }>> {
+    if (ids.length === 0) return new Map();
+    const placeholders = ids.map(() => "?").join(",");
+    const result = await this.db.execute({
+      sql: `SELECT section_id, title, breadcrumbs FROM sections_text WHERE section_id IN (${placeholders})`,
+      args: ids,
+    });
+    const map = new Map<string, { title: string; breadcrumbs: string }>();
+    for (const row of result.rows) {
+      map.set(row.section_id as string, {
+        title: row.title as string,
+        breadcrumbs: (row.breadcrumbs as string) ?? "",
+      });
+    }
+    return map;
+  }
+
   async count(): Promise<number> {
     const res = await this.db.execute("SELECT COUNT(*) as cnt FROM sections_text");
     return (res.rows[0]?.cnt as number) ?? 0;

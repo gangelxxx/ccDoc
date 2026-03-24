@@ -2,11 +2,10 @@
  * Builds the system prompt parts for the main LLM chat and plan modes.
  */
 
-import type { AppState } from "./types.js";
+import type { AppState, CustomAgent } from "./types.js";
 
 interface SystemPromptParams {
   planMode: boolean;
-  useSubAgents: boolean;
   includeContext: boolean;
   includeSourceCode: boolean;
   webSearchEnabled: boolean;
@@ -14,24 +13,20 @@ interface SystemPromptParams {
   currentSection: AppState["currentSection"];
   currentProject: AppState["currentProject"];
   theme: AppState["theme"];
+  customAgents?: CustomAgent[];
 }
 
 export function buildSystemPrompt(params: SystemPromptParams): string[] {
-  const { planMode, useSubAgents, includeContext, includeSourceCode, webSearchEnabled, docUpdateMode, currentSection, currentProject, theme } = params;
+  const { planMode, includeContext, includeSourceCode, webSearchEnabled, docUpdateMode, currentSection, currentProject, theme, customAgents } = params;
 
   const systemParts: string[] = planMode ? [
     `You are an AI assistant embedded in CCDoc — a documentation tool. Your task: create an implementation plan.
   CRITICAL — BEFORE writing a plan, check if the feature is ALREADY IMPLEMENTED in the codebase. Use find_symbols and search_project_files in Round 1 to verify. If the feature already exists, do NOT create a plan — instead create a short section explaining that the feature is already implemented, where it lives in the code, and how it works.`,
     `Section hierarchy: root → folder; folder → folder/file/idea/todo/kanban/drawing; file → section; section → section.`,
     `Content creation: ALWAYS pass 'content' parameter with full markdown text when creating sections. For plans, create ONE section with ALL content as rich markdown (## headings become child sections automatically).`,
-    `CRITICAL — Pre-seeded context: The documentation tree and source code file tree are ALREADY included in the user's message below. Do NOT call get_tree or get_project_tree — you already have this data. The 8-character IDs in brackets (e.g. [a4f66e9d]) are valid ID prefixes that work with all tools — use them directly.`,
+    `CRITICAL — Pre-seeded context: The documentation tree and source code file tree are ALREADY included in the user's message below. Do NOT call get_tree or get_project_tree — you already have this data. The slugs in brackets (e.g. [dokumentaciya], [arhitektura]) are human-readable section identifiers — use them directly as section_id in all tools.`,
     `Reading: To read content, use get_section or get_file_with_sections. Use get_sections_batch for multiple sections at once.`,
     `ROUND BUDGET — you have a STRICT budget of tool-use rounds:
-  - If sub-agents are available (delegate_research, delegate_writing):
-    * Round 1: delegate_research — gather ALL info (documentation, source code, existing implementations). One call covers everything.
-    * Round 2: Create the plan via create_section based on research results.
-    * If the feature is already implemented, create a short "already implemented" section instead.
-  - If sub-agents are NOT available (direct tool use):
     * Round 1: RESEARCH — batch ALL reads in ONE round. Use get_file_outlines + find_symbols + search_project_files IN PARALLEL. Do NOT spread across multiple rounds.
     * Round 2: RESEARCH — targeted reads only. read_project_file with startLine/endLine for specific insertion points found in Round 1. AFTER Round 2, you will receive a "RESEARCH BUDGET EXHAUSTED" warning — this means your NEXT response must call create_section.
     * Round 3: WRITE — call create_section with the full plan. No more reading allowed.
@@ -67,11 +62,13 @@ export function buildSystemPrompt(params: SystemPromptParams): string[] {
     - Every diagram MUST have ## Arrows section with connections between shapes. Arrows drive the auto-layout — without them shapes will be placed in a flat row.`,
     "When creating a section, default type is 'file' unless the user specifies otherwise.",
     `CRITICAL — content creation:
-  - ALWAYS pass full markdown in 'content' parameter. Never leave empty, never describe content only in chat.
+  - ALWAYS pass full markdown in 'content' parameter. Never leave empty, never describe content only in chat. The tool will REJECT calls without content for file/section/idea/todo types.
   - For large docs: create ONE 'file' with all content; ## headings auto-split into sections, ### into sub-sections.
     Example: create_section(title="My Plan", type="file", content="## Overview\\nText...\\n\\n### Details\\nMore...\\n\\n## Part 2\\nText...")
-  - For 2+ sections: use bulk_create_sections with '$0','$1' references.`,
+  - For 2+ sections: use bulk_create_sections with '$0','$1' references.
+  - LINKS: After creating/updating a section, include a clickable link in your response using the 'link' field from the tool result. Format: [Title](ccdoc:SECTION_ID). The user can click it to navigate directly to the section.`,
     `Versioning: commit_version after significant changes. get_history/restore_version for rollback. create_backup for DB backup before risky ops, list_backups to check.`,
+    `Section IDs: The tree shows human-readable slugs in brackets (e.g. [dokumentaciya], [arhitektura]). Use these slugs directly as section_id in ALL tools — they are automatically resolved to UUIDs. Do NOT try to guess or construct UUIDs.`,
     `Reading content:
   - When the user's message includes '--- Section content ---', the full text is ALREADY PROVIDED. Do NOT call get_section to re-read it. Analyze directly. Only use tools for ADDITIONAL data.
   - get_tree returns ONLY titles, not content. To read: use get_file_with_sections (only type='file') or get_sections_batch (up to 20 sections).
@@ -90,37 +87,11 @@ export function buildSystemPrompt(params: SystemPromptParams): string[] {
   CRITICAL: ALWAYS provide the 'options' array with 2-5 short suggested answers. The user sees options as clickable buttons and can pick one instantly. Keep each option concise (<60 chars). The user can also type a custom answer. Example: ask_user(question="Какой формат документации предпочитаете?", options=["Подробный с примерами", "Краткий справочник", "README-стиль"])`,
   ];
 
-  if (useSubAgents) {
-    systemParts.push(
-      `\nCRITICAL — SUB-AGENT ARCHITECTURE:
-  You are a TEAM LEAD / ORCHESTRATOR. Decompose tasks and delegate to sub-agents.
-
-  Sub-agents: delegate_research (reads docs, searches, explores tree, reads source code), delegate_writing (reads+writes sections), delegate_review (quality analysis), delegate_planning (structure proposals).
-
-  DELEGATION RULES:
-  - When section content is PROVIDED INLINE (between '--- Section content ---' markers) and user asks for analysis/review:
-    → delegate_review IMMEDIATELY. Do NOT call delegate_research first.
-    → Pass the inline content in the task description.
-  - delegate_research: ONLY when you need to gather info from MULTIPLE sections or source code that you don't have yet.
-  - 1-2 simple questions about inline content → answer yourself, no delegation.
-  - Create/update content → delegate_writing. Pass section_id + list of specific changes (bullet points only). NEVER compose the full updated content yourself — that DOUBLES token cost. Keep task under 1000 chars. BAD: delegate_writing(task="Update section X with this content: [full markdown...]"). GOOD: delegate_writing(task="Update section X (section_id: abc123): add Y, fix Z, remove W").
-  - PARALLEL WRITING: When updating multiple INDEPENDENT sections, call several delegate_writing in ONE response. They execute in parallel. Do NOT wait for one to finish before starting the next.
-  - Direct tools ONLY: get_tree, get_section, commit_version, get_history, restore_version, create_backup, list_backups, update_icon, duplicate_section, restore_section.
-  - Source code tools (find_symbols, get_file_outlines, read_project_file, search_project_files, get_project_tree) → ALWAYS via delegate_research. NEVER call these directly from the orchestrator — it bloats shared context with raw file contents.
-  - Everything else → delegate.
-
-  Complex tasks: research → planning → user review → writing → review → commit.
-  RESEARCH BUDGET: Max 3 delegate_research calls before you MUST start writing. Research reports contain concrete data (function names, tool lists, etc.) — trust them and act on them. Do NOT re-research to "verify" or "get more details" — the data in the report IS the data from the code. If a report says "tools: A, B, C" — use A, B, C directly.
-  SKIP REVIEW: For trivial updates (≤3 changes in ≤2 sections), go straight to commit after writing — no delegate_review needed.
-  EFFICIENCY: When verifying a delegate report, batch ALL section reads into ONE get_sections_batch call (up to 20 IDs). Do NOT spread reads across multiple rounds — each round is a full API call.
-
-  ANALYSIS PRIORITY (when section content is provided inline):
-  1. FIRST: Analyze the provided text directly — find issues, inconsistencies, missing pieces.
-  2. If the text references other sections or needs context — use documentation tools (get_section, search).
-  3. If the text references source code — use code tools (find_symbols, read_project_file).
-  4. For 1-2 simple questions about inline content: answer yourself, do NOT delegate.
-  5. For deep analysis (3+ issues to find, multi-section review): delegate to sub-agent, passing the inline content in the task description. Do NOT just pass section_id — sub-agent will waste rounds re-reading.`
-    );
+  if (!planMode) {
+    systemParts.push(`Planning: For complex tasks (3+ distinct steps), use create_plan to create a visible work plan in the chat. Then follow it step by step.
+CRITICAL — update_plan efficiency: ALWAYS combine update_plan with real work in the SAME response. Pattern: update_plan(prev_step, "done") + update_plan(next_step, "in_progress") + actual_tool (update_section, create_section, etc.) — all in ONE response. NEVER send update_plan as the only tool call.
+Context reuse: If you already read content in previous rounds and it hasn't changed, do NOT re-read it. Use data from context. Only re-read sections you've actually modified.
+For simple tasks (1-2 steps), just do the work directly.`);
   }
 
   if (includeContext && currentSection) {
@@ -140,7 +111,7 @@ export function buildSystemPrompt(params: SystemPromptParams): string[] {
   }
 
   if (webSearchEnabled) {
-    systemParts.push(`\nweb_search: use for external APIs/libraries, current events, or explicit user request. Do NOT use for project docs or general knowledge. Queries in English.`);
+    systemParts.push(`\nweb_search: use ONLY when user explicitly asks to search the web, or when the task requires information NOT available in project documentation (external APIs, current events, reference articles). Do NOT use web_search to look up the project itself — all project info is in the documentation tree. URLs in user messages are for reference only — do NOT fetch them unless the user says "посмотри эту ссылку" or similar.`);
   }
 
   if (docUpdateMode) {
@@ -179,6 +150,39 @@ After finishing, output a brief report: what was updated, what was added, and wh
   - Use include/exclude globs to narrow search scope (e.g. include="src/**/*.ts").
   - For regex search, set is_regex=true. Default is plain text.
   - NEVER read the same file multiple times across rounds. Plan all reads upfront and batch them in ONE round with appropriate startLine/endLine ranges.`);
+  }
+
+  if (!planMode) {
+    systemParts.push(`\n## Session Buffer
+You have a shared Session Buffer — a key-value store that persists within the current conversation session. Both you and all agents can read and write to it.
+
+Tools: write_buffer(key, content, summary, tags?), read_buffer(key), list_buffer(tag?)
+
+USE write_buffer when:
+- You want to store data for agents to use later
+- Before calling run_agent, to pre-load data the agent will need
+- To preserve large analysis results without cluttering the conversation
+
+USE read_buffer when:
+- An agent wrote findings to the buffer (you'll see a note about buffer entries in the agent's response)
+- You need data stored earlier in the conversation
+
+RULES:
+- When calling run_agent, mention relevant buffer keys in the task so the agent knows to read them
+- Agents have buffer access automatically — they can read and write
+- write_buffer returns only a confirmation with summary, NOT the full content — this saves context
+- Prefer buffer over including large text in agent task descriptions`);
+  }
+
+  if (customAgents && customAgents.length > 0) {
+    const agentDescs = customAgents.map(a => {
+      const rating = a.rating ?? 10;
+      const ratingInfo = rating < 4
+        ? " \u26A0\uFE0F LOW RATING \u2014 avoid, do it yourself"
+        : ` (rating: ${rating}/10)`;
+      return `- run_agent(agent_id="${a.id}", task="...") \u2192 ${a.name}: ${a.description}${ratingInfo}`;
+    }).join("\n");
+    systemParts.push(`\nCustom agents available (use run_agent tool to call them):\n${agentDescs}\nUse an agent when the task matches its specialization. After using an agent, ALWAYS call rate_agent to rate its performance (0-10).`);
   }
 
   return systemParts;

@@ -9,11 +9,11 @@ import { registerAllIpcHandlers } from "./ipc";
 import { createSettingsService } from "./services/settings.service";
 
 app.whenReady().then(async () => {
-  await initServices();
-  setMainWindowGetter(getMainWindow);
-
   // Settings service must be created after ready (safeStorage requires it)
   const settingsService = createSettingsService();
+
+  await initServices(settingsService);
+  setMainWindowGetter(getMainWindow);
 
   registerAllIpcHandlers(settingsService);
   createWindow();

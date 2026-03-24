@@ -3,6 +3,7 @@ import { sendLlmMessageImpl } from "../llm-engine.js";
 import { buildDocTreeSummary, buildDocUpdatePrompt } from "../llm/doc-update-prompt.js";
 
 export interface LlmChatSlice {
+  llmCurrentPlan: import("../llm/types.js").LlmPlan | null;
   llmMessages: LlmMessage[];
   llmLoading: boolean;
   llmAborted: boolean;
@@ -30,6 +31,7 @@ export interface LlmChatSlice {
 }
 
 export const createLlmChatSlice: SliceCreator<LlmChatSlice> = (set, get) => ({
+  llmCurrentPlan: null,
   llmMessages: [],
   llmLoading: false,
   llmAborted: false,
@@ -110,8 +112,11 @@ export const createLlmChatSlice: SliceCreator<LlmChatSlice> = (set, get) => ({
     } else {
       text = "";
     }
-    // Remove this message and everything after it, then resend
-    set({ llmMessages: llmMessages.slice(0, idx) });
+    // Remove this message and everything after it, reset token counter, then resend
+    set({
+      llmMessages: llmMessages.slice(0, idx),
+      llmTokensUsed: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
+    });
     get().sendLlmMessage(text, true, userMsg.attachments);
   },
 
@@ -129,6 +134,8 @@ export const createLlmChatSlice: SliceCreator<LlmChatSlice> = (set, get) => ({
       llmMessages: [],
       llmTokensUsed: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
       llmCurrentSessionId: null,
+      llmCurrentPlan: null,
+      sessionBuffer: { entries: {}, totalChars: 0 },
       llmLoading: false,
       llmAborted: llmLoading, // signal stale engine to exit
       llmWaitingForUser: false,
@@ -163,6 +170,7 @@ export const createLlmChatSlice: SliceCreator<LlmChatSlice> = (set, get) => ({
       llmMessages: [],
       llmTokensUsed: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
       llmCurrentSessionId: null,
+      sessionBuffer: { entries: {}, totalChars: 0 },
       llmAborted: false,
       llmWaitingForUser: false,
       llmPendingQuestion: null,

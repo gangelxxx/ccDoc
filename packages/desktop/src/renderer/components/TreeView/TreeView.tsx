@@ -1,9 +1,9 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useAppStore } from "../../stores/app.store.js";
 import { ContextMenu } from "../ContextMenu/ContextMenu.js";
 import { ChevronsDownUp, Sparkles } from "lucide-react";
 import { useT, type TranslationKey } from "../../i18n.js";
-import { getAncestorIds, findNode, validateDrop, computeMoveParams } from "./tree-utils.js";
+import { getAncestorIds, findNode, validateDrop, computeMoveParams, flattenVisibleTree } from "./tree-utils.js";
 import type { ContextState, DragState, DropState, DropPosition } from "./tree-utils.js";
 import { TreeItem } from "./TreeItem.js";
 import { CreateModal } from "./CreateModal.js";
@@ -21,6 +21,8 @@ export function TreeView() {
   const [dragItem, setDragItem] = useState<DragState | null>(null);
   const [dropTarget, setDropTarget] = useState<DropState | null>(null);
   const [fileDragOver, setFileDragOver] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const selectionAnchor = useRef<string | null>(null);
 
   const activeId = currentSection?.id || null;
   const expandForIds = useMemo(
@@ -82,6 +84,43 @@ export function TreeView() {
     );
     if (!ok) return;
     deleteSection(id);
+  };
+
+  const handleMultiSelect = useCallback((id: string, ctrlKey: boolean, shiftKey: boolean) => {
+    if (shiftKey && selectionAnchor.current) {
+      const flat = flattenVisibleTree(tree, expandedNodes);
+      const anchorIdx = flat.indexOf(selectionAnchor.current);
+      const currentIdx = flat.indexOf(id);
+      if (anchorIdx !== -1 && currentIdx !== -1) {
+        const from = Math.min(anchorIdx, currentIdx);
+        const to = Math.max(anchorIdx, currentIdx);
+        setSelectedIds(new Set(flat.slice(from, to + 1)));
+      }
+    } else if (ctrlKey) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+      selectionAnchor.current = id;
+    } else {
+      setSelectedIds(new Set());
+      selectionAnchor.current = id;
+    }
+  }, [tree, expandedNodes]);
+
+  const handleBulkDelete = async (ids: Set<string>) => {
+    const count = ids.size;
+    const ok = await showConfirm(
+      t("deleteSelectedConfirm" as TranslationKey, count),
+      { title: t("deleteSelectedTitle" as TranslationKey), danger: true }
+    );
+    if (!ok) return;
+    for (const id of ids) {
+      await deleteSection(id);
+    }
+    setSelectedIds(new Set());
   };
 
   const handleContextMenu = async (x: number, y: number, node: { id: string; title: string; type: string }) => {
@@ -203,10 +242,12 @@ export function TreeView() {
           depth={0}
           activeId={activeId}
           editingId={editingId}
+          selectedIds={selectedIds}
           expandedNodes={expandedNodes}
           onToggleExpanded={toggleExpanded}
           onExpandNode={expandNode}
           onSelect={selectSection}
+          onMultiSelect={handleMultiSelect}
           onDelete={handleDelete}
           onRename={renameSection}
           onStartEdit={setEditingId}
@@ -244,7 +285,21 @@ export function TreeView() {
       )}
 
       {/* Context menu */}
-      {contextMenu && (
+      {contextMenu && selectedIds.size >= 2 && selectedIds.has(contextMenu.nodeId) ? (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={() => setContextMenu(null)}
+          items={[
+            {
+              label: t("deleteSelected" as TranslationKey, selectedIds.size),
+              icon: "\uD83D\uDDD1\uFE0F",
+              danger: true,
+              onClick: () => handleBulkDelete(selectedIds),
+            },
+          ]}
+        />
+      ) : contextMenu ? (
         <ContextMenu
           x={contextMenu.x}
           y={contextMenu.y}
@@ -340,7 +395,7 @@ export function TreeView() {
             },
           ]}
         />
-      )}
+      ) : null}
 
       {/* Icon picker modal */}
       {iconPickerId && (

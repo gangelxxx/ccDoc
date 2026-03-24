@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from "react";
-import { X, RotateCcw, Clock, FileText, Search, Filter } from "lucide-react";
+import { createPortal } from "react-dom";
+import { X, RotateCcw, Clock, FileText, Search, Filter, Loader2 } from "lucide-react";
 import { diffWords } from "diff";
 import { useAppStore } from "../../stores/app.store.js";
 import { useT } from "../../i18n.js";
@@ -274,5 +275,44 @@ function HistoryTreeNodes({ nodes, depth, typeIcons, activeId, onSelect, forceEx
         );
       })}
     </>
+  );
+}
+
+// --- Restore Progress Modal ---
+export function RestoreProgressModal() {
+  const restoreProgress = useAppStore((s) => s.restoreProgress);
+  const th = useT();
+
+  if (!restoreProgress) return null;
+
+  const { current, total, title } = restoreProgress;
+  const percent = total > 0 ? Math.round((current / total) * 100) : 0;
+
+  return createPortal(
+    <div className="modal-overlay" style={{ zIndex: 9999 }}>
+      <div className="modal" style={{ maxWidth: 420, textAlign: "center" }}>
+        <Loader2 size={32} className="spin" style={{ color: "var(--accent)", marginBottom: 12 }} />
+        <h3 style={{ margin: "0 0 4px" }}>{th("restoringVersion")}</h3>
+        <p style={{ margin: "0 0 16px", color: "var(--text-secondary)", fontSize: 13 }}>
+          {th("restoreProcessing")}
+        </p>
+        <div style={{
+          width: "100%", height: 6, borderRadius: 3,
+          background: "var(--bg-secondary)", overflow: "hidden", marginBottom: 8,
+        }}>
+          <div style={{
+            width: `${percent}%`, height: "100%", borderRadius: 3,
+            background: "var(--accent)", transition: "width 0.15s ease",
+          }} />
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "var(--text-secondary)" }}>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "70%" }}>
+            {title}
+          </span>
+          <span>{current} / {total}</span>
+        </div>
+      </div>
+    </div>,
+    document.body
   );
 }

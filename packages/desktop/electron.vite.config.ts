@@ -9,6 +9,7 @@ export default defineConfig({
       outDir: "dist/main",
       rollupOptions: {
         input: resolve(__dirname, "src/main/index.ts"),
+        external: ["onnxruntime-node", "onnxruntime-web"],
       },
     },
   },

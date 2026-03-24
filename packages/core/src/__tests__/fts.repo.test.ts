@@ -155,3 +155,34 @@ describe("FtsRepo.search", () => {
     expect(await fts.search("fresh")).toHaveLength(1);
   });
 });
+
+describe("FtsRepo.getByIds", () => {
+  it("возвращает title и breadcrumbs по ID", async () => {
+    await insertSection(db, "id-1", "First Section");
+    await fts.upsert("id-1", "First Section", "", "Parent Folder", "body text");
+
+    await insertSection(db, "id-2", "Second Section");
+    await fts.upsert("id-2", "Second Section", "", "Other Folder", "more text");
+
+    const result = await fts.getByIds(["id-1", "id-2"]);
+    expect(result.size).toBe(2);
+
+    const first = result.get("id-1");
+    expect(first?.title).toBe("First Section");
+    expect(first?.breadcrumbs).toBe("Parent Folder");
+
+    const second = result.get("id-2");
+    expect(second?.title).toBe("Second Section");
+    expect(second?.breadcrumbs).toBe("Other Folder");
+  });
+
+  it("для несуществующих ID возвращает пустую Map", async () => {
+    const result = await fts.getByIds(["nonexistent-1", "nonexistent-2"]);
+    expect(result.size).toBe(0);
+  });
+
+  it("для пустого массива возвращает пустую Map", async () => {
+    const result = await fts.getByIds([]);
+    expect(result.size).toBe(0);
+  });
+});

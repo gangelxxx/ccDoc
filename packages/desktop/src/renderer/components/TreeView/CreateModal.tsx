@@ -45,6 +45,7 @@ export function CreateModal({ parentId, defaultType, tree, onCreate, onClose }: 
         ["todo", "\u2611\uFE0F", t("typeTodo")],
         ["kanban", "\uD83D\uDCCA", t("typeKanban")],
         ["drawing", "\u270F\uFE0F", t("typeWhiteboard")],
+        ["knowledge_graph", "\uD83D\uDD2E", t("typeKnowledgeGraph")],
       ] as const;
     }
     // Root level -- only folders

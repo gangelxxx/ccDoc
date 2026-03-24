@@ -20,6 +20,8 @@ export function SettingsPanel({
   const [addingProp, setAddingProp] = useState(false);
   const [newPropName, setNewPropName] = useState("");
   const [newPropType, setNewPropType] = useState<PropertyType>("text");
+  const [addingOptionForProp, setAddingOptionForProp] = useState<string | null>(null);
+  const [newOptionName, setNewOptionName] = useState("");
 
   const selectProps = properties.filter((p) => p.type === "select" || p.type === "multi_select");
   const numberProps = properties.filter((p) => p.type === "number");
@@ -117,18 +119,36 @@ export function SettingsPanel({
               <span className="kanban-settings-prop-name">{prop.name}</span>
               <span className="kanban-settings-prop-type">{t(PROPERTY_TYPE_KEYS[prop.type])}</span>
               {prop.type === "select" || prop.type === "multi_select" ? (
-                <button
-                  className="kanban-toolbar-btn"
-                  onClick={() => {
-                    const name = prompt(t("kanbanOptionNamePrompt"));
-                    if (!name) return;
-                    const color = LABEL_COLORS[(prop.options?.length ?? 0) % LABEL_COLORS.length].color;
-                    const opt: SelectOption = { id: uid("opt"), name, color };
-                    onPropertiesChange(properties.map((p) => p.id === prop.id ? { ...p, options: [...(p.options ?? []), opt] } : p));
-                  }}
-                >
-                  {t("kanbanAddOption")}
-                </button>
+                addingOptionForProp === prop.id ? (
+                  <span className="kanban-settings-inline-input">
+                    <input
+                      placeholder={t("kanbanOptionNamePrompt")}
+                      value={newOptionName}
+                      onChange={(e) => setNewOptionName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && newOptionName.trim()) {
+                          const color = LABEL_COLORS[(prop.options?.length ?? 0) % LABEL_COLORS.length].color;
+                          const opt: SelectOption = { id: uid("opt"), name: newOptionName.trim(), color };
+                          onPropertiesChange(properties.map((p) => p.id === prop.id ? { ...p, options: [...(p.options ?? []), opt] } : p));
+                          setNewOptionName("");
+                          setAddingOptionForProp(null);
+                        } else if (e.key === "Escape") {
+                          setNewOptionName("");
+                          setAddingOptionForProp(null);
+                        }
+                      }}
+                      onBlur={() => { setNewOptionName(""); setAddingOptionForProp(null); }}
+                      autoFocus
+                    />
+                  </span>
+                ) : (
+                  <button
+                    className="kanban-toolbar-btn"
+                    onClick={() => { setAddingOptionForProp(prop.id); setNewOptionName(""); }}
+                  >
+                    {t("kanbanAddOption")}
+                  </button>
+                )
               ) : null}
               <button
                 className="btn-icon"

@@ -20,7 +20,7 @@ export interface Section {
   updated_at: string;
 }
 
-export type SectionType = "folder" | "file" | "section" | "idea" | "drawing" | "kanban" | "todo";
+export type SectionType = "folder" | "file" | "section" | "idea" | "drawing" | "kanban" | "todo" | "knowledge_graph";
 
 export type PropertyType =
   | "text"

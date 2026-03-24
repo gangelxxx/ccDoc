@@ -1,8 +1,8 @@
 import type { LlmConfig, SliceCreator } from "../types.js";
+import type { CustomAgent } from "../llm/types.js";
 import { localizeApiError } from "../../i18n.js";
 import { toLlmConfigData,
   INITIAL_CHAT_CONFIG, INITIAL_PASSPORT_CONFIG, INITIAL_SUMMARY_CONFIG,
-  INITIAL_RESEARCH_CONFIG, INITIAL_WRITER_CONFIG, INITIAL_CRITIC_CONFIG, INITIAL_PLANNER_CONFIG,
 } from "../llm-config.js";
 
 export type WebSearchProvider = "tavily" | "brave" | "none";
@@ -20,20 +20,21 @@ export interface LlmConfigSlice {
   setLlmPassportConfig: (cfg: Partial<LlmConfig>) => void;
   llmSummaryConfig: LlmConfig;
   setLlmSummaryConfig: (cfg: Partial<LlmConfig>) => void;
-  llmResearchConfig: LlmConfig;
-  setLlmResearchConfig: (cfg: Partial<LlmConfig>) => void;
-  llmWriterConfig: LlmConfig;
-  setLlmWriterConfig: (cfg: Partial<LlmConfig>) => void;
-  llmCriticConfig: LlmConfig;
-  setLlmCriticConfig: (cfg: Partial<LlmConfig>) => void;
-  llmPlannerConfig: LlmConfig;
-  setLlmPlannerConfig: (cfg: Partial<LlmConfig>) => void;
-  useSubAgents: boolean;
-  setUseSubAgents: (enabled: boolean) => void;
   webSearchProvider: WebSearchProvider;
   webSearchApiKey: string;
   setWebSearchProvider: (provider: WebSearchProvider) => void;
   setWebSearchApiKey: (key: string) => void;
+  // Custom agents
+  customAgents: CustomAgent[];
+  setCustomAgents: (agents: CustomAgent[]) => void;
+  addCustomAgent: (agent: CustomAgent) => void;
+  updateCustomAgent: (id: string, updates: Partial<CustomAgent>) => void;
+  deleteCustomAgent: (id: string) => void;
+  // Developer mode
+  devMode: boolean;
+  devTrackToolIssues: boolean;
+  setDevMode: (v: boolean) => void;
+  setDevTrackToolIssues: (v: boolean) => void;
 }
 
 export const createLlmConfigSlice: SliceCreator<LlmConfigSlice> = (set, get) => ({
@@ -78,31 +79,6 @@ export const createLlmConfigSlice: SliceCreator<LlmConfigSlice> = (set, get) => 
     set((s) => ({ llmSummaryConfig: { ...s.llmSummaryConfig, ...cfg } }));
     window.api.settingsPatch({ llmSummary: toLlmConfigData(cfg) });
   },
-  llmResearchConfig: INITIAL_RESEARCH_CONFIG,
-  setLlmResearchConfig: (cfg) => {
-    set((s) => ({ llmResearchConfig: { ...s.llmResearchConfig, ...cfg } }));
-    window.api.settingsPatch({ llmResearch: toLlmConfigData(cfg) });
-  },
-  llmWriterConfig: INITIAL_WRITER_CONFIG,
-  setLlmWriterConfig: (cfg) => {
-    set((s) => ({ llmWriterConfig: { ...s.llmWriterConfig, ...cfg } }));
-    window.api.settingsPatch({ llmWriter: toLlmConfigData(cfg) });
-  },
-  llmCriticConfig: INITIAL_CRITIC_CONFIG,
-  setLlmCriticConfig: (cfg) => {
-    set((s) => ({ llmCriticConfig: { ...s.llmCriticConfig, ...cfg } }));
-    window.api.settingsPatch({ llmCritic: toLlmConfigData(cfg) });
-  },
-  llmPlannerConfig: INITIAL_PLANNER_CONFIG,
-  setLlmPlannerConfig: (cfg) => {
-    set((s) => ({ llmPlannerConfig: { ...s.llmPlannerConfig, ...cfg } }));
-    window.api.settingsPatch({ llmPlanner: toLlmConfigData(cfg) });
-  },
-  useSubAgents: true, // overwritten by boot
-  setUseSubAgents: (enabled) => {
-    set({ useSubAgents: enabled });
-    window.api.settingsPatch({ useSubAgents: enabled });
-  },
   webSearchProvider: "none" as WebSearchProvider, // overwritten by boot
   webSearchApiKey: "", // overwritten by boot
   setWebSearchProvider: (provider) => {
@@ -113,5 +89,37 @@ export const createLlmConfigSlice: SliceCreator<LlmConfigSlice> = (set, get) => 
     const cleaned = key.trim().replace(/[^\x20-\x7E]/g, "");
     set({ webSearchApiKey: cleaned });
     window.api.settingsPatch({ webSearchApiKey: cleaned });
+  },
+  // Custom agents
+  customAgents: [], // overwritten by boot
+  setCustomAgents: (agents) => {
+    set({ customAgents: agents });
+    window.api.settingsPatch({ customAgents: agents });
+  },
+  addCustomAgent: (agent) => {
+    const next = [...get().customAgents, agent];
+    set({ customAgents: next });
+    window.api.settingsPatch({ customAgents: next });
+  },
+  updateCustomAgent: (id, updates) => {
+    const next = get().customAgents.map(a => a.id === id ? { ...a, ...updates } : a);
+    set({ customAgents: next });
+    window.api.settingsPatch({ customAgents: next });
+  },
+  deleteCustomAgent: (id) => {
+    const next = get().customAgents.filter(a => a.id !== id);
+    set({ customAgents: next });
+    window.api.settingsPatch({ customAgents: next });
+  },
+  // Developer mode
+  devMode: false, // overwritten by boot
+  devTrackToolIssues: false, // overwritten by boot
+  setDevMode: (v) => {
+    set({ devMode: v });
+    window.api.settingsPatch({ devMode: v });
+  },
+  setDevTrackToolIssues: (v) => {
+    set({ devTrackToolIssues: v });
+    window.api.settingsPatch({ devTrackToolIssues: v });
   },
 });

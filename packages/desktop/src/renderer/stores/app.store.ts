@@ -22,6 +22,7 @@ import { createVoiceSlice } from "./slices/voice.slice.js";
 import { createBgTasksSlice } from "./slices/bg-tasks.slice.js";
 import { createTreeUiSlice } from "./slices/tree-ui.slice.js";
 import { createExternalChangesSlice } from "./slices/external-changes.slice.js";
+import { createSessionBufferSlice } from "./slices/session-buffer.slice.js";
 
 export const useAppStore = create<AppState>()((...a) => ({
   ...createUiSlice(...a),
@@ -40,4 +41,5 @@ export const useAppStore = create<AppState>()((...a) => ({
   ...createBgTasksSlice(...a),
   ...createTreeUiSlice(...a),
   ...createExternalChangesSlice(...a),
+  ...createSessionBufferSlice(...a),
 }));

@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { Client } from "@libsql/client";
 import { FtsRepo } from "../db/fts.repo.js";
 import { EmbeddingRepo } from "../db/embedding.repo.js";
 import { IndexService } from "../services/index.service.js";
+import type { IEmbeddingProvider } from "../services/embedding.service.js";
 import { createTestDb, insertSection } from "./helpers/db.js";
 
 let db: Client;
@@ -164,5 +165,108 @@ describe("IndexService — breadcrumbs", () => {
     // Поиск по имени родителя должен находить дочернюю секцию через breadcrumbs
     const results = await ftsRepo.search("Backend");
     expect(results.some((r) => r.id === "child-id")).toBe(true);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Тесты для IndexService с embedding                                 */
+/* ------------------------------------------------------------------ */
+
+function makeMockEmbeddingModel(): IEmbeddingProvider {
+  const enc = vi.fn().mockImplementation(async (_text: string) => {
+    return new Float32Array([0.6, 0.8]);
+  });
+  return {
+    isAvailable: vi.fn().mockReturnValue(true),
+    load: vi.fn().mockResolvedValue(true),
+    encode: enc,
+    encodeQuery: enc,
+    dimension: 2,
+  } as unknown as IEmbeddingProvider;
+}
+
+function makeSection(id: string, title: string) {
+  return {
+    id,
+    title,
+    content: '{"type":"doc","content":[]}',
+    parent_id: null,
+    type: "file" as const,
+    sort_key: "a0",
+    icon: null,
+    deleted_at: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    summary: null,
+  };
+}
+
+describe("IndexService — embedding через indexSection", () => {
+  it("indexSection() с embeddingModel вычисляет embedding", async () => {
+    const mockModel = makeMockEmbeddingModel();
+    const embDb = await createTestDb();
+    const embFtsRepo = new FtsRepo(embDb);
+    const embEmbeddingRepo = new EmbeddingRepo(embDb);
+    const embIndexService = new IndexService(embDb, undefined, embFtsRepo, mockModel, embEmbeddingRepo);
+
+    await insertSection(embDb, "s1", "Sprint planning");
+    await embIndexService.indexSection(makeSection("s1", "Sprint planning"));
+
+    expect(mockModel.encode).toHaveBeenCalled();
+    expect(await embEmbeddingRepo.count()).toBe(1);
+  });
+
+  it("updateEmbedding пропускает если textHash не изменился", async () => {
+    const mockModel = makeMockEmbeddingModel();
+    const embDb = await createTestDb();
+    const embFtsRepo = new FtsRepo(embDb);
+    const embEmbeddingRepo = new EmbeddingRepo(embDb);
+    const embIndexService = new IndexService(embDb, undefined, embFtsRepo, mockModel, embEmbeddingRepo);
+
+    await insertSection(embDb, "s1", "Stable section");
+    const section = makeSection("s1", "Stable section");
+
+    // Первый вызов — encode вызывается
+    await embIndexService.indexSection(section);
+    expect(mockModel.encode).toHaveBeenCalledTimes(1);
+
+    // Второй вызов с тем же контентом — encode НЕ вызывается повторно
+    await embIndexService.indexSection(section);
+    expect(mockModel.encode).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("IndexService — embedding через reindexAll", () => {
+  it("reindexAll() с embeddingModel заполняет section_embeddings", async () => {
+    const mockModel = makeMockEmbeddingModel();
+    const embDb = await createTestDb();
+    const embFtsRepo = new FtsRepo(embDb);
+    const embEmbeddingRepo = new EmbeddingRepo(embDb);
+    const embIndexService = new IndexService(embDb, undefined, embFtsRepo, mockModel, embEmbeddingRepo);
+
+    await insertSection(embDb, "s1", "Section One");
+    await insertSection(embDb, "s2", "Section Two");
+
+    await embIndexService.reindexAll();
+
+    expect(await embEmbeddingRepo.count()).toBe(2);
+    expect(mockModel.encode).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("IndexService — removeSection с embedding", () => {
+  it("removeSection() удаляет embedding", async () => {
+    const mockModel = makeMockEmbeddingModel();
+    const embDb = await createTestDb();
+    const embFtsRepo = new FtsRepo(embDb);
+    const embEmbeddingRepo = new EmbeddingRepo(embDb);
+    const embIndexService = new IndexService(embDb, undefined, embFtsRepo, mockModel, embEmbeddingRepo);
+
+    await insertSection(embDb, "s1", "To be removed");
+    await embIndexService.indexSection(makeSection("s1", "To be removed"));
+    expect(await embEmbeddingRepo.count()).toBe(1);
+
+    await embIndexService.removeSection("s1");
+    expect(await embEmbeddingRepo.count()).toBe(0);
   });
 });

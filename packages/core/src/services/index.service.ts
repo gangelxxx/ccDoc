@@ -6,7 +6,7 @@ import { EmbeddingRepo } from "../db/embedding.repo.js";
 import { extractTextForSearch } from "../converters/prosemirror-text-extractor.js";
 import { kanbanToPlain } from "../converters/kanban.js";
 import { ideaToPlain } from "../converters/idea.js";
-import type { EmbeddingModel } from "./embedding.service.js";
+import type { IEmbeddingProvider } from "./embedding.service.js";
 import { textHash } from "./embedding.service.js";
 
 /** Bump this when extractBody() logic changes to trigger automatic reindex. */
@@ -21,7 +21,7 @@ export class IndexService {
     private db: Client,
     sectionsRepo?: SectionsRepo,
     ftsRepo?: FtsRepo,
-    private embeddingModel?: EmbeddingModel | null,
+    private embeddingModel?: IEmbeddingProvider | null,
     embeddingRepo?: EmbeddingRepo
   ) {
     this.sectionsRepo = sectionsRepo ?? new SectionsRepo(db);
@@ -183,13 +183,15 @@ export class IndexService {
 }
 
 export function extractBody(section: Section): string {
+  // Folders have no text content; empty/missing content is valid
+  if (section.type === "folder" || section.type === "drawing" || section.type === "knowledge_graph") {
+    return section.title;
+  }
+  if (!section.content) return section.title;
   try {
     if (section.type === "kanban") {
       const data: KanbanData = JSON.parse(section.content);
       return kanbanToPlain(data);
-    }
-    if (section.type === "drawing") {
-      return section.title;
     }
     if (section.type === "idea") {
       return ideaToPlain(section.content);

@@ -6,7 +6,6 @@ import type { Lang } from "./i18n.js";
 import { fromLlmConfigData } from "./stores/llm-config.js";
 import {
   INITIAL_CHAT_CONFIG, INITIAL_PASSPORT_CONFIG, INITIAL_SUMMARY_CONFIG,
-  INITIAL_RESEARCH_CONFIG, INITIAL_WRITER_CONFIG, INITIAL_CRITIC_CONFIG, INITIAL_PLANNER_CONFIG,
 } from "./stores/llm-config.js";
 import "./styles.css";
 
@@ -22,15 +21,13 @@ interface SettingsData {
   llmChat: any;
   llmPassport: any;
   llmSummary: any;
-  llmResearch: any;
-  llmWriter: any;
-  llmCritic: any;
-  llmPlanner: any;
-  useSubAgents: boolean;
   webSearchProvider: "tavily" | "brave" | "none";
   webSearchApiKey: string;
+  customAgents: any[];
   embedding: any;
   voiceModelId: string;
+  devMode: boolean;
+  devTrackToolIssues: boolean;
   _version: number;
 }
 
@@ -45,15 +42,13 @@ function mapSettingsToState(s: SettingsData, sessions: LlmSession[]) {
     llmChatConfig: fromLlmConfigData(s.llmChat, INITIAL_CHAT_CONFIG),
     llmPassportConfig: fromLlmConfigData(s.llmPassport, INITIAL_PASSPORT_CONFIG),
     llmSummaryConfig: fromLlmConfigData(s.llmSummary, INITIAL_SUMMARY_CONFIG),
-    llmResearchConfig: fromLlmConfigData(s.llmResearch, INITIAL_RESEARCH_CONFIG),
-    llmWriterConfig: fromLlmConfigData(s.llmWriter, INITIAL_WRITER_CONFIG),
-    llmCriticConfig: fromLlmConfigData(s.llmCritic, INITIAL_CRITIC_CONFIG),
-    llmPlannerConfig: fromLlmConfigData(s.llmPlanner, INITIAL_PLANNER_CONFIG),
-    useSubAgents: s.useSubAgents,
     webSearchProvider: s.webSearchProvider,
     webSearchApiKey: s.webSearchApiKey,
+    customAgents: Array.isArray(s.customAgents) ? s.customAgents : [],
     embeddingConfig: s.embedding,
     voiceModelId: s.voiceModelId || "",
+    devMode: !!s.devMode,
+    devTrackToolIssues: !!s.devTrackToolIssues,
     llmSessions: sessions,
   };
 }
@@ -99,18 +94,7 @@ function migrateFromLocalStorage(): Partial<SettingsData> {
   if (passport) result.llmPassport = passport;
   const summary = migrateConfig("ccdoc-llm-summary");
   if (summary) result.llmSummary = summary;
-  const research = migrateConfig("ccdoc-llm-research");
-  if (research) result.llmResearch = research;
-  const writer = migrateConfig("ccdoc-llm-writer");
-  if (writer) result.llmWriter = writer;
-  const critic = migrateConfig("ccdoc-llm-critic");
-  if (critic) result.llmCritic = critic;
-  const planner = migrateConfig("ccdoc-llm-planner");
-  if (planner) result.llmPlanner = planner;
-
-  // Sub-agents & web search
-  const useSubRaw = str("ccdoc-use-subagents");
-  if (useSubRaw !== null) result.useSubAgents = useSubRaw !== "false";
+  // Web search
   if (val("ccdoc-web-search-provider")) result.webSearchProvider = str("ccdoc-web-search-provider");
   if (val("ccdoc-web-search-key")) result.webSearchApiKey = str("ccdoc-web-search-key")!.trim().replace(/[^\x20-\x7E]/g, "");
 

@@ -2,8 +2,8 @@
  * Tool definitions array for the LLM chat engine.
  */
 
-import type { ToolDefinition } from "./types.js";
-import { isPlanModeTool, ORCHESTRATOR_TOOLS } from "../../llm-utils.js";
+import type { ToolDefinition, CustomAgent } from "./types.js";
+import { isPlanModeTool } from "../../llm-utils.js";
 
 /**
  * Builds the core documentation tools (always available).
@@ -59,6 +59,7 @@ function buildCoreTools(): ToolDefinition[] {
           type: { type: "string", enum: ["folder", "file", "section", "idea", "todo", "kanban", "drawing"], description: "Type" },
           content: { type: "string", description: "Markdown content." },
           icon: { type: "string", description: "One emoji icon." },
+          after_id: { type: "string", description: "Place after this sibling. Omit to append at end." },
         },
         required: ["title", "type"],
       },
@@ -102,6 +103,29 @@ function buildCoreTools(): ToolDefinition[] {
       },
     },
     {
+      name: "bulk_update_sections",
+      description: "Update multiple sections at once (title and/or content).",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          sections: {
+            type: "array",
+            description: "Sections to update",
+            items: {
+              type: "object",
+              properties: {
+                section_id: { type: "string", description: "Section UUID" },
+                title: { type: "string", description: "New title (omit to keep)" },
+                content: { type: "string", description: "New markdown (omit to keep)" },
+              },
+              required: ["section_id"],
+            },
+          },
+        },
+        required: ["sections"],
+      },
+    },
+    {
       name: "move_section",
       description: "Move section to new parent and/or reorder.",
       input_schema: {
@@ -112,6 +136,18 @@ function buildCoreTools(): ToolDefinition[] {
           after_id: { type: "string", description: "Place after this sibling (null=first)" },
         },
         required: ["section_id"],
+      },
+    },
+    {
+      name: "reorder_children",
+      description: "Reorder children of a parent section. Provide IDs in desired order.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          parent_id: { type: "string", description: "Parent section ID (null for root)" },
+          ordered_ids: { type: "array", items: { type: "string" }, description: "Child IDs in desired order" },
+        },
+        required: ["ordered_ids"],
       },
     },
     {
@@ -321,43 +357,6 @@ function buildWebSearchTools(): ToolDefinition[] {
 }
 
 /**
- * Builds sub-agent delegation tools.
- */
-function buildSubAgentTools(): ToolDefinition[] {
-  const subAgentInputSchema = {
-    type: "object" as const,
-    properties: {
-      task: { type: "string", description: "Clear description of what to do. Be specific." },
-      context: { type: "string", description: "Optional: relevant section IDs, search terms, constraints." },
-    },
-    required: ["task"],
-  };
-
-  return [
-    {
-      name: "delegate_research",
-      description: "Delegate research to sub-agent (reads docs, searches, explores code).",
-      input_schema: subAgentInputSchema,
-    },
-    {
-      name: "delegate_writing",
-      description: "Delegate writing to sub-agent (reads+writes sections).",
-      input_schema: subAgentInputSchema,
-    },
-    {
-      name: "delegate_review",
-      description: "Delegate review to sub-agent (quality, completeness analysis).",
-      input_schema: subAgentInputSchema,
-    },
-    {
-      name: "delegate_planning",
-      description: "Delegate planning to sub-agent (structure proposals).",
-      input_schema: subAgentInputSchema,
-    },
-  ];
-}
-
-/**
  * Builds the ask_user tool (always available for the main agent).
  */
 function buildAskUserTool(): ToolDefinition {
@@ -383,18 +382,144 @@ function buildAskUserTool(): ToolDefinition {
 }
 
 /**
+ * Builds the run_agent tool (only when custom agents exist).
+ */
+function buildAgentTool(agents: CustomAgent[]): ToolDefinition[] {
+  if (agents.length === 0) return [];
+  return [{
+    name: "run_agent",
+    description: "Run a custom agent in isolated context. " +
+      agents.map(a => `${a.name} (id:${a.id}): ${a.description}`).join("; "),
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        agent_id: {
+          type: "string",
+          description: "Agent ID",
+          enum: agents.map(a => a.id),
+        },
+        task: {
+          type: "string",
+          description: "Task description for the agent",
+        },
+      },
+      required: ["agent_id", "task"],
+    },
+  }];
+}
+
+/**
+ * Builds the rate_agent tool (only when custom agents exist).
+ */
+function buildRateAgentTool(agents: CustomAgent[]): ToolDefinition[] {
+  if (agents.length === 0) return [];
+  return [{
+    name: "rate_agent",
+    description: "Rate an agent's performance after using it. Score 0-10, optionally describe issues.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        agent_id: { type: "string", description: "Agent ID to rate" },
+        score: { type: "number", description: "Score 0-10 (10=perfect, 0=useless)" },
+        issues: { type: "string", description: "Problems encountered (optional)" },
+      },
+      required: ["agent_id", "score"],
+    },
+  }];
+}
+
+/**
+ * Builds session buffer tools (always available — shared between assistant and agents).
+ */
+function buildBufferTools(): ToolDefinition[] {
+  return [
+    {
+      name: "write_buffer",
+      description: "Write data to the session buffer (shared between assistant and all agents). Use for findings, analysis results, or data that other agents may need later. Returns a brief confirmation — the content itself stays in the buffer.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          key: { type: "string", description: "Unique key (e.g. 'db-schema', 'api-analysis'). Overwrites if key exists." },
+          content: { type: "string", description: "The data to store (up to 30K chars)." },
+          summary: { type: "string", description: "1-2 sentence summary. Shown in list_buffer." },
+          tags: { type: "array", items: { type: "string" }, description: "Optional tags for categorization." },
+        },
+        required: ["key", "content", "summary"],
+      },
+    },
+    {
+      name: "read_buffer",
+      description: "Read a specific entry from the session buffer by key. Supports offset/limit pagination for large entries.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          key: { type: "string", description: "Buffer entry key to read." },
+          offset: { type: "number", description: "Char offset to continue reading (default 0)." },
+          limit: { type: "number", description: "Max chars to return (default 6000, max 10000)." },
+        },
+        required: ["key"],
+      },
+    },
+    {
+      name: "list_buffer",
+      description: "List all session buffer entries (keys, summaries, authors, sizes). Does NOT return content — use read_buffer for that.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          tag: { type: "string", description: "Optional: filter entries by tag." },
+        },
+        required: [] as string[],
+      },
+    },
+  ];
+}
+
+/**
+ * Builds plan management tools (always available).
+ */
+function buildPlanTools(): ToolDefinition[] {
+  return [
+    {
+      name: "create_plan",
+      description: "Create a work plan for a complex task. Shows as a checklist in chat. Use for tasks with 3+ steps.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          steps: { type: "array", items: { type: "string" }, description: "List of plan steps" },
+        },
+        required: ["steps"],
+      },
+    },
+    {
+      name: "update_plan",
+      description: "Mark a plan step as done or in_progress. Call after completing each step.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          step_index: { type: "number", description: "Step index (0-based)" },
+          status: { type: "string", enum: ["in_progress", "done"], description: "New status" },
+        },
+        required: ["step_index", "status"],
+      },
+    },
+  ];
+}
+
+/**
  * Assembles the full tool set based on configuration flags.
  */
 export function buildTools(params: {
   includeSourceCode: boolean;
-  useSubAgents: boolean;
   planMode: boolean;
   webSearchEnabled?: boolean;
+  customAgents?: CustomAgent[];
 }): ToolDefinition[] {
-  const { includeSourceCode, useSubAgents, planMode, webSearchEnabled } = params;
+  const { includeSourceCode, planMode, webSearchEnabled, customAgents } = params;
 
   const tools: ToolDefinition[] = [
     ...buildCoreTools(),
+    ...buildBufferTools(),
+    ...buildPlanTools(),
     buildAskUserTool(),
     ...(includeSourceCode ? buildSourceCodeTools() : []),
   ];
@@ -403,15 +528,12 @@ export function buildTools(params: {
     tools.push(...buildWebSearchTools());
   }
 
-  if (useSubAgents) {
-    tools.push(...buildSubAgentTools());
+  if (customAgents && customAgents.length > 0) {
+    tools.push(...buildAgentTool(customAgents));
+    tools.push(...buildRateAgentTool(customAgents));
   }
 
   if (planMode) return tools.filter(t => isPlanModeTool(t.name));
-
-  // When sub-agents are enabled, the orchestrator should not get source code tools
-  // (they must go through delegate_research). This saves ~2K chars of tool definitions.
-  if (useSubAgents) return tools.filter(t => ORCHESTRATOR_TOOLS.has(t.name));
 
   return tools;
 }
@@ -430,6 +552,8 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
   update_section: "Обновляю секцию",
   delete_section: "Удаляю секцию",
   move_section: "Перемещаю секцию",
+  bulk_update_sections: "Обновляю несколько секций",
+  reorder_children: "Переупорядочиваю секции",
   duplicate_section: "Дублирую секцию",
   restore_section: "Восстанавливаю секцию",
   update_icon: "Меняю иконку",
@@ -444,10 +568,13 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
   read_project_file: "Читаю исходный код",
   search_project_files: "Ищу в коде",
   find_symbols: "Ищу символы в коде",
-  delegate_research: "Делегирую исследование субагенту",
-  delegate_writing: "Делегирую написание субагенту",
-  delegate_review: "Делегирую ревью субагенту",
-  delegate_planning: "Делегирую планирование субагенту",
   web_search: "Ищу в интернете",
   ask_user: "Задаю уточняющий вопрос",
+  run_agent: "Запускаю агента",
+  rate_agent: "Оцениваю работу агента",
+  create_plan: "Составляю план работ",
+  update_plan: "Обновляю план работ",
+  write_buffer: "Записываю в буфер сессии",
+  read_buffer: "Читаю из буфера сессии",
+  list_buffer: "Просматриваю буфер сессии",
 };

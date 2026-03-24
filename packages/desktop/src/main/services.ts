@@ -19,8 +19,13 @@ import {
   INDEX_VERSION,
   ProjectPassportRepo,
   projectDbPath,
+  FtsRepo,
+  EmbeddingRepo,
+  FindService,
 } from "@ccdoc/core";
 import type { Client } from "@libsql/client";
+import { EmbeddingManager } from "./embedding-manager";
+import type { SettingsService } from "./services/settings.service";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -33,6 +38,8 @@ export interface ProjectServices {
   fts: FtsService;
   index: IndexService;
   passport: ProjectPassportRepo;
+  find: FindService;
+  embeddingRepo: EmbeddingRepo;
 }
 
 // ── Module state ───────────────────────────────────────────────────
@@ -41,6 +48,7 @@ let appDb: Client;
 let projectsService: ProjectsService;
 let searchService: SearchService;
 let backupService: BackupService;
+let embeddingManager: EmbeddingManager;
 
 const projectDbs = new Map<string, ProjectServices>();
 const pendingInits = new Map<string, Promise<ProjectServices>>();
@@ -61,7 +69,7 @@ let bgTaskCounter = 0;
 
 // We need a reference to mainWindow for sending IPC events.
 // Set via setMainWindowGetter from index.ts after window creation.
-let getMainWindow: () => BrowserWindow | null = () => null;
+export let getMainWindow: () => BrowserWindow | null = () => null;
 
 export function setMainWindowGetter(fn: () => BrowserWindow | null): void {
   getMainWindow = fn;
@@ -121,8 +129,12 @@ export function getProjectServices(token: string): Promise<ProjectServices> {
         const db = await openProjectDb(token);
         const sections = new SectionsService(db);
         const fts = new FtsService(db);
-        const index = new IndexService(db);
+        const ftsRepo = new FtsRepo(db);
+        const embeddingRepo = new EmbeddingRepo(db);
+        const model = embeddingManager?.getProvider() ?? null;
+        const index = new IndexService(db, undefined, ftsRepo, model, embeddingRepo);
         const passport = new ProjectPassportRepo(db);
+        const find = new FindService(ftsRepo, embeddingRepo, model);
         const services: ProjectServices = {
           db,
           sections,
@@ -132,6 +144,8 @@ export function getProjectServices(token: string): Promise<ProjectServices> {
           fts,
           index,
           passport,
+          find,
+          embeddingRepo,
         };
         projectDbs.set(token, services);
         backupService.registerDb(token, db);
@@ -163,11 +177,14 @@ export function getProjectServices(token: string): Promise<ProjectServices> {
 
 // ── Service initialization ─────────────────────────────────────────
 
-export async function initServices(): Promise<void> {
+export async function initServices(settingsService?: SettingsService): Promise<void> {
   appDb = await openAppDb();
   projectsService = new ProjectsService(appDb);
   searchService = new SearchService();
   backupService = new BackupService();
+  if (settingsService) {
+    embeddingManager = new EmbeddingManager(settingsService);
+  }
   // Clean up orphaned project directories from previous failed removals
   projectsService.cleanupOrphans().catch((e) => console.warn("[init] orphan cleanup failed:", e));
 }
@@ -188,6 +205,10 @@ export function getSearchService(): SearchService {
 
 export function getBackupService(): BackupService {
   return backupService;
+}
+
+export function getEmbeddingManager(): EmbeddingManager {
+  return embeddingManager;
 }
 
 export function getProjectDbsMap(): Map<string, ProjectServices> {

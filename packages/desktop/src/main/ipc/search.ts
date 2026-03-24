@@ -2,10 +2,10 @@ import { ipcMain } from "electron";
 import { getProjectServices, getProjectsService, getSearchService } from "../services";
 
 export function registerSearchIpc(): void {
-  // FTS Search
+  // Hybrid search (FTS5 + embeddings via FindService)
   ipcMain.handle("search:fts", async (_e, token: string, query: string, limit?: number) => {
-    const { fts } = await getProjectServices(token);
-    return fts.search(query, limit);
+    const { find } = await getProjectServices(token);
+    return find.search(query, limit ?? 20);
   });
 
   // Search (MiniSearch, legacy)

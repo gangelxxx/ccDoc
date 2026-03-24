@@ -1,5 +1,5 @@
 import type { LlmConfig, LlmEffort } from "./types.js";
-import { DEFAULT_MODEL, CAPABLE_MODEL } from "../llm-utils.js";
+import { DEFAULT_MODEL } from "../llm-utils.js";
 
 // ─── Effort presets ─────────────────────────────────────────
 
@@ -64,19 +64,3 @@ export const INITIAL_SUMMARY_CONFIG: LlmConfig = {
   model: DEFAULT_MODEL, effort: "low", maxTokens: 2048, temperature: 0, thinking: false, thinkingBudget: 4000,
 };
 
-// Sub-agent defaults (aligned with Claude Code):
-export const INITIAL_RESEARCH_CONFIG: LlmConfig = {
-  model: DEFAULT_MODEL, effort: "low", maxTokens: 2048, temperature: 0, thinking: false, thinkingBudget: 4000,
-};
-
-export const INITIAL_WRITER_CONFIG: LlmConfig = {
-  model: CAPABLE_MODEL, effort: "high", maxTokens: 16384, temperature: 1.0, thinking: false, thinkingBudget: 16000, inheritFromParent: true,
-};
-
-export const INITIAL_CRITIC_CONFIG: LlmConfig = {
-  model: CAPABLE_MODEL, effort: "high", maxTokens: 16384, temperature: 1.0, thinking: false, thinkingBudget: 16000, inheritFromParent: true,
-};
-
-export const INITIAL_PLANNER_CONFIG: LlmConfig = {
-  model: CAPABLE_MODEL, effort: "high", maxTokens: 16384, temperature: 1.0, thinking: false, thinkingBudget: 16000, inheritFromParent: true,
-};

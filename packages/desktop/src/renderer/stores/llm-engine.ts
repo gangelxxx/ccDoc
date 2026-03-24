@@ -1,11 +1,10 @@
 /**
- * LLM chat engine -- orchestrates system prompt, tools, sub-agents, and the round loop.
+ * LLM chat engine -- orchestrates system prompt, tools, and the round loop.
  *
  * Sub-modules in ./llm/:
  *   system-prompt.ts    — buildSystemPrompt
  *   tool-definitions.ts — buildTools, TOOL_DESCRIPTIONS
  *   tool-executor.ts    — createToolExecutor
- *   sub-agent.ts        — createSubAgentExecutor
  *   compact-messages.ts — createCompactMessages
  *   split-markdown.ts   — splitMarkdownIntoSections
  *   types.ts            — shared types
@@ -18,24 +17,21 @@ import {
   estimateInputTokens,
   truncateToolResult,
   compressToolResult,
-  compressDelegateReport,
   shrinkToolResults,
-  shrinkConsumedDelegates,
   optimizeBetweenRounds,
   CONTEXT_LIMIT,
   COMPRESS_AT,
   HARD_STOP_AT,
   ABSOLUTE_MAX_ROUNDS,
+  ROUNDS_WARNING_AT,
   TOOL_RESULT_LIMIT,
   READ_ONLY_TOOLS,
   PLAN_RESEARCH_MAX_ROUNDS,
-  ORCHESTRATOR_COMPRESS_AT,
 } from "../llm-utils.js";
 
 import { buildSystemPrompt } from "./llm/system-prompt.js";
 import { buildTools, TOOL_DESCRIPTIONS } from "./llm/tool-definitions.js";
 import { createToolExecutor } from "./llm/tool-executor.js";
-import { createSubAgentExecutor, SUB_AGENT_EMOJIS } from "./llm/sub-agent.js";
 import { createCompactMessages } from "./llm/compact-messages.js";
 import { localizeApiError } from "../i18n.js";
 
@@ -58,16 +54,9 @@ export async function sendLlmMessageImpl(
   displayText?: string,
   planMode?: boolean,
 ): Promise<string | null> {
-  const { llmApiKey, llmChatConfig, llmResearchConfig, llmWriterConfig, llmCriticConfig, llmPlannerConfig, llmMessages, currentSection, currentProject, theme, useSubAgents, language, editorSelectedText, webSearchProvider, webSearchApiKey, llmSessionMode } = get();
+  const { llmApiKey, llmChatConfig, llmMessages, currentSection, currentProject, theme, language, editorSelectedText, webSearchProvider, webSearchApiKey, llmSessionMode, customAgents } = get();
   const { model, maxTokens, temperature, thinking, thinkingBudget } = llmChatConfig;
 
-  // Resolve inherited sub-agent configs: when inheritFromParent is set, use the main chat config
-  const resolveConfig = (cfg: LlmConfig): LlmConfig =>
-    cfg.inheritFromParent ? llmChatConfig : cfg;
-  const effectiveResearchConfig = resolveConfig(llmResearchConfig);
-  const effectiveWriterConfig = resolveConfig(llmWriterConfig);
-  const effectiveCriticConfig = resolveConfig(llmCriticConfig);
-  const effectivePlannerConfig = resolveConfig(llmPlannerConfig);
   if (!llmApiKey || (!text.trim() && (!attachments || attachments.length === 0))) return null;
 
   const token = currentProject?.token;
@@ -77,7 +66,6 @@ export async function sendLlmMessageImpl(
   // --- Build system prompt ---
   const systemParts = buildSystemPrompt({
     planMode: !!planMode,
-    useSubAgents,
     includeContext,
     includeSourceCode: !!includeSourceCode,
     webSearchEnabled,
@@ -85,21 +73,16 @@ export async function sendLlmMessageImpl(
     currentSection,
     currentProject,
     theme,
+    customAgents,
   });
 
   // --- Build tools ---
   const finalTools = buildTools({
     includeSourceCode: !!includeSourceCode,
-    useSubAgents,
     planMode: !!planMode,
     webSearchEnabled,
+    customAgents,
   });
-
-  // Sub-agents always get source code tools (they do the actual research/writing,
-  // even when the main orchestrator model doesn't need them directly).
-  const subAgentTools = useSubAgents
-    ? buildTools({ includeSourceCode: true, useSubAgents: false, planMode: false, webSearchEnabled })
-    : finalTools;
 
   // --- Mutable state for tool execution ---
   const toolState = { mutated: false, lastCreatedId: null as string | null };
@@ -128,21 +111,7 @@ export async function sendLlmMessageImpl(
     set(s => ({ fileSectionsVersion: s.fileSectionsVersion + 1 }));
   }
 
-  // --- Create sub-agent executor (needs executeTool, which needs executeSubAgent — resolve via closure) ---
-  let executeTool: (name: string, input: any) => Promise<string>;
-
-  const executeSubAgent = createSubAgentExecutor({
-    set, get, llmApiKey: llmApiKey!, token: token!, language,
-    llmResearchConfig: effectiveResearchConfig,
-    llmWriterConfig: effectiveWriterConfig,
-    llmCriticConfig: effectiveCriticConfig,
-    llmPlannerConfig: effectivePlannerConfig,
-    finalTools: subAgentTools,
-    executeTool: (name, input) => executeTool(name, input),
-    llmTaskTokens,
-  });
-
-  executeTool = createToolExecutor(token!, get, toolState, executeSubAgent);
+  const executeTool = createToolExecutor(token!, get, set, toolState, "assistant");
 
   // --- Build API messages ---
   const toApiMessages = (msgs: LlmMessage[]) =>
@@ -219,6 +188,8 @@ export async function sendLlmMessageImpl(
 
     let round = 0;
     let lastInputTokens = 0;
+    let freePlanRounds = 0;
+    let roundWarningIssued = false;
 
     while (round < ABSOLUTE_MAX_ROUNDS) {
       // Check if user cancelled or a new engine superseded this one
@@ -234,15 +205,6 @@ export async function sendLlmMessageImpl(
       // Between-round optimization: deduplicate repeated content + compress source code
       if (round > 1) {
         apiMessages = optimizeBetweenRounds(apiMessages);
-
-        // Orchestrator: compress old delegate results that have been consumed
-        if (useSubAgents) {
-          const est = estimateInputTokens(systemPrompt, apiMessages);
-          if (est > ORCHESTRATOR_COMPRESS_AT) {
-            console.log(`[LLM] Orchestrator context ${est} > ${ORCHESTRATOR_COMPRESS_AT}, compressing consumed delegates`);
-            apiMessages = shrinkConsumedDelegates(apiMessages, 2);
-          }
-        }
       }
 
       // Pre-send context estimation — compress before sending if needed
@@ -368,7 +330,7 @@ export async function sendLlmMessageImpl(
           // Show text (if any) + question as assistant messages in UI
           set((s) => ({
             llmMessages: [
-              ...s.llmMessages.filter((m) => typeof m.content !== "string" || (!m.content.startsWith("🔧") && !m.content.startsWith("🔄") && !SUB_AGENT_EMOJIS.some(e => (m.content as string).startsWith(e)))),
+              ...s.llmMessages.filter((m) => typeof m.content !== "string" || (!m.content.startsWith("🔧") && !m.content.startsWith("🔄") && !m.content.startsWith("\uD83E\uDD16"))),
               ...(textParts ? [{ role: "assistant" as const, content: textParts }] : []),
               { role: "assistant" as const, content: `❓ ${question}`, isQuestion: true },
             ],
@@ -407,7 +369,14 @@ export async function sendLlmMessageImpl(
           continue;
         }
 
-        // Show tool calls in UI
+        // Extract any intermediate text the model wrote alongside tool calls
+        const intermediateText = contentBlocks
+          .filter((b: any) => b.type === "text")
+          .map((b: any) => b.text)
+          .join("\n")
+          .trim();
+
+        // Show tool calls in UI (with preceding text if any)
         const descCounts = new Map<string, number>();
         for (const b of toolBlocks) {
           const d = TOOL_DESCRIPTIONS[b.name] || b.name;
@@ -416,10 +385,13 @@ export async function sendLlmMessageImpl(
         const descriptions = [...descCounts.entries()].map(([d, n]) => n > 1 ? `${d} (×${n})` : d);
         const pctLabel = pct > 30 ? ` · 📊 ${pct}%` : "";
         set((s) => ({
-          llmMessages: [...s.llmMessages, {
-            role: "assistant",
-            content: `🔧 ${descriptions.join(" · ")}${pctLabel}`,
-          }],
+          llmMessages: [...s.llmMessages,
+            ...(intermediateText ? [{ role: "assistant" as const, content: intermediateText }] : []),
+            {
+              role: "assistant",
+              content: `🔧 ${descriptions.join(" · ")}${pctLabel}`,
+            },
+          ],
         }));
 
         // In planMode after budget, block read-only tool calls at executor level
@@ -428,11 +400,6 @@ export async function sendLlmMessageImpl(
         // Execute tools — parallel for read-only, sequential if any mutating
         const allReadOnly = toolBlocks.every((b: any) => READ_ONLY_TOOLS.has(b.name));
         const toolResults: any[] = [];
-
-        // No special truncation for delegate results — let them arrive in full so the
-        // orchestrator makes informed decisions without redundant re-delegation.
-        // Context growth is handled adaptively by shrinkToolResults (at 60%/85% thresholds)
-        // which compresses ALL old tool_results proportionally when context gets large.
 
         if (allReadOnly) {
           const results = await Promise.all(
@@ -459,11 +426,7 @@ export async function sendLlmMessageImpl(
               }
               console.log(`[LLM] Executing tool: ${block.name}`, JSON.stringify(block.input).slice(0, 300));
               const raw = await executeTool(block.name, block.input);
-              // Delegate results: smart compression preserving Summary; other tools: standard truncation
-              const isDelegate = block.name.startsWith("delegate_");
-              const result = isDelegate
-                ? compressDelegateReport(raw)
-                : truncateToolResult(compressToolResult(raw));
+              const result = truncateToolResult(compressToolResult(raw));
               console.log(`[LLM] Tool result (${block.name}): ${raw.length}→${result.length} chars`, result.slice(0, 500));
               toolResults.push({ type: "tool_result", tool_use_id: block.id, content: result });
             }
@@ -475,6 +438,22 @@ export async function sendLlmMessageImpl(
           toolResults.push({
             type: "text",
             text: `⚠️ RESEARCH BUDGET EXHAUSTED. This was your LAST research round. Your NEXT response MUST call create_section to write the plan — ALL read-only tools are now blocked.`,
+          } as any);
+        }
+
+        // Don't count plan-only rounds against the limit (capped at 30 free rounds to prevent infinite loops)
+        const isPlanOnlyRound = toolBlocks.every((b: any) => b.name === "update_plan" || b.name === "create_plan");
+        if (isPlanOnlyRound && freePlanRounds < 30) {
+          freePlanRounds++;
+          round--;
+        }
+
+        // Warn model when approaching the round limit (fire only once)
+        if (round >= ROUNDS_WARNING_AT && !roundWarningIssued) {
+          roundWarningIssued = true;
+          toolResults.push({
+            type: "text",
+            text: `⚠️ ROUND LIMIT WARNING: You have used ${round} of ${ABSOLUTE_MAX_ROUNDS} rounds. Only ${ABSOLUTE_MAX_ROUNDS - round} rounds remain. Prioritize the most important remaining work and wrap up. Call commit_version when done.`,
           } as any);
         }
 
@@ -534,7 +513,7 @@ export async function sendLlmMessageImpl(
             : "⚠️ Ответ обрезан лимитом токенов. Увеличьте maxTokens в настройках LLM или разбейте задачу на части.";
           set((s) => ({
             llmMessages: [
-              ...s.llmMessages.filter((m) => typeof m.content !== "string" || (!m.content.startsWith("🔧") && !m.content.startsWith("🔄") && !SUB_AGENT_EMOJIS.some(e => (m.content as string).startsWith(e)))),
+              ...s.llmMessages.filter((m) => typeof m.content !== "string" || (!m.content.startsWith("🔧") && !m.content.startsWith("🔄") && !m.content.startsWith("\uD83E\uDD16"))),
               { role: "assistant", content: warning },
             ],
             llmLoading: false,
@@ -559,7 +538,7 @@ export async function sendLlmMessageImpl(
         // Remove tool-status messages and add final reply
         set((s) => ({
           llmMessages: [
-            ...s.llmMessages.filter((m) => typeof m.content !== "string" || (!m.content.startsWith("🔧") && !m.content.startsWith("🔄") && !SUB_AGENT_EMOJIS.some(e => (m.content as string).startsWith(e)))),
+            ...s.llmMessages.filter((m) => typeof m.content !== "string" || (!m.content.startsWith("🔧") && !m.content.startsWith("🔄") && !m.content.startsWith("\uD83E\uDD16"))),
             { role: "assistant", content: reply },
           ],
           llmLoading: false,

@@ -17,6 +17,21 @@ export interface EmbeddingConfigData {
   onlineApiKey: string;
 }
 
+// SYNC: duplicated in renderer stores/llm/types.ts as CustomAgent
+export interface CustomAgentData {
+  id: string;
+  name: string;
+  description: string;
+  systemPrompt: string;
+  prompt: string;
+  tools: string[];
+  model: string;
+  thinking: boolean;
+  effort: "low" | "medium" | "high";
+  rating: number;       // 0-10, default 10 (set by assistant via rate_agent)
+  ratingLog: string[];  // last problems reported by assistant
+}
+
 export interface Settings {
   // UI
   theme: "light" | "dark";
@@ -29,17 +44,17 @@ export interface Settings {
   llmChat: LlmConfigData;
   llmPassport: LlmConfigData;
   llmSummary: LlmConfigData;
-  llmResearch: LlmConfigData;
-  llmWriter: LlmConfigData;
-  llmCritic: LlmConfigData;
-  llmPlanner: LlmConfigData;
-  useSubAgents: boolean;
   webSearchProvider: "tavily" | "brave" | "none";
   webSearchApiKey: string;
+  // Custom agents
+  customAgents: CustomAgentData[];
   // Embedding
   embedding: EmbeddingConfigData;
   // Voice STT
   voiceModelId: string;
+  // Developer mode
+  devMode: boolean;
+  devTrackToolIssues: boolean;
   // Version (0 = not migrated yet)
   _version: number;
 }
@@ -47,7 +62,6 @@ export interface Settings {
 // ─── Defaults ───────────────────────────────────────────────
 
 const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
-const CAPABLE_MODEL = "claude-sonnet-4-6";
 
 export const SETTINGS_DEFAULTS: Settings = {
   theme: "light",
@@ -59,13 +73,9 @@ export const SETTINGS_DEFAULTS: Settings = {
   llmChat: { model: "claude-opus-4-6", effort: "medium", thinking: true },
   llmPassport: { model: DEFAULT_MODEL, effort: "low", thinking: false },
   llmSummary: { model: DEFAULT_MODEL, effort: "low", thinking: false },
-  llmResearch: { model: DEFAULT_MODEL, effort: "low", thinking: false },
-  llmWriter: { model: CAPABLE_MODEL, effort: "high", thinking: false, inheritFromParent: true },
-  llmCritic: { model: CAPABLE_MODEL, effort: "high", thinking: false, inheritFromParent: true },
-  llmPlanner: { model: CAPABLE_MODEL, effort: "high", thinking: false, inheritFromParent: true },
-  useSubAgents: true,
   webSearchProvider: "none",
   webSearchApiKey: "",
+  customAgents: [],
   embedding: {
     mode: "none",
     localModelId: "multilingual-e5-small",
@@ -74,6 +84,8 @@ export const SETTINGS_DEFAULTS: Settings = {
     onlineApiKey: "",
   },
   voiceModelId: "",
+  devMode: false,
+  devTrackToolIssues: false,
   _version: 0,
 };
 
@@ -81,7 +93,6 @@ export const SETTINGS_DEFAULTS: Settings = {
 
 export const LLM_CONFIG_KEYS = [
   "llmChat", "llmPassport", "llmSummary",
-  "llmResearch", "llmWriter", "llmCritic", "llmPlanner",
 ] as const;
 
 // ─── Validation ─────────────────────────────────────────────
@@ -117,8 +128,31 @@ export function validateSettings(raw: any): Settings {
     if (!["openai", "voyage"].includes(s.embedding.onlineProvider)) s.embedding.onlineProvider = "openai";
   }
 
-  if (typeof s.useSubAgents !== "boolean") s.useSubAgents = true;
   if (!["tavily", "brave", "none"].includes(s.webSearchProvider)) s.webSearchProvider = "none";
+
+  // Validate customAgents
+  if (!Array.isArray(s.customAgents)) {
+    s.customAgents = [];
+  } else {
+    s.customAgents = s.customAgents.filter(
+      (a: any) => a && typeof a === "object" && typeof a.id === "string" && typeof a.name === "string"
+    ).map((a: any) => ({
+      id: a.id,
+      name: a.name || "",
+      description: a.description || "",
+      systemPrompt: a.systemPrompt || "",
+      prompt: a.prompt || "",
+      tools: Array.isArray(a.tools) ? a.tools : [],
+      model: a.model || "claude-haiku-4-5-20251001",
+      thinking: typeof a.thinking === "boolean" ? a.thinking : false,
+      effort: ["low", "medium", "high"].includes(a.effort) ? a.effort : "medium",
+      rating: typeof a.rating === "number" && !isNaN(a.rating) ? Math.max(0, Math.min(10, a.rating)) : 10,
+      ratingLog: Array.isArray(a.ratingLog) ? a.ratingLog.filter((x: any) => typeof x === "string").slice(0, 10) : [],
+    }));
+  }
+
+  if (typeof s.devMode !== "boolean") s.devMode = false;
+  if (typeof s.devTrackToolIssues !== "boolean") s.devTrackToolIssues = false;
 
   s._version = typeof s._version === "number" ? s._version : 0;
 

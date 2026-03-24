@@ -1,11 +1,12 @@
 import type { FtsRepo, FtsSearchResult } from "../db/fts.repo.js";
 import type { EmbeddingRepo } from "../db/embedding.repo.js";
-import type { EmbeddingModel } from "./embedding.service.js";
+import type { IEmbeddingProvider } from "./embedding.service.js";
 import { cosineSimilarity } from "./embedding.service.js";
 
 export interface FindResult {
   id: string;
   title: string;
+  titleHighlighted: string;
   snippet: string;
   score: number;
   breadcrumbs: string;
@@ -18,10 +19,10 @@ export class FindService {
   constructor(
     private ftsRepo: FtsRepo,
     private embeddingRepo: EmbeddingRepo,
-    private embeddingModel: EmbeddingModel | null
+    private embeddingModel: IEmbeddingProvider | null
   ) {}
 
-  async search(query: string, limit = 5): Promise<FindResult[]> {
+  async search(query: string, limit = 20): Promise<FindResult[]> {
     // Always run FTS5
     const ftsResults = await this.ftsRepo.search(query, limit * 2);
 
@@ -62,11 +63,11 @@ export class FindService {
     return scored.slice(0, limit);
   }
 
-  private mergeResults(
+  private async mergeResults(
     ftsResults: FtsSearchResult[],
     embeddingResults: { id: string; score: number }[],
     limit: number
-  ): FindResult[] {
+  ): Promise<FindResult[]> {
     // Normalize FTS scores to [0, 1]
     const ftsMax = ftsResults.length > 0 ? Math.max(...ftsResults.map((r) => r.score)) : 1;
     const ftsNorm = ftsMax > 0 ? ftsMax : 1;
@@ -108,17 +109,27 @@ export class FindService {
 
     merged.sort((a, b) => b.score - a.score);
 
-    return merged.slice(0, limit).map((m) => {
+    const results = merged.slice(0, limit);
+
+    // Collect embedding-only IDs that need enrichment
+    const embeddingOnlyIds = results.filter((m) => !m.ftsResult).map((m) => m.id);
+    const enriched = embeddingOnlyIds.length > 0
+      ? await this.ftsRepo.getByIds(embeddingOnlyIds)
+      : new Map<string, { title: string; breadcrumbs: string }>();
+
+    return results.map((m) => {
       if (m.ftsResult) {
         return { ...toFindResult(m.ftsResult), score: m.score };
       }
-      // Embedding-only result — no snippet available
+      // Embedding-only result — enrich from sections_text
+      const info = enriched.get(m.id);
       return {
         id: m.id,
-        title: "",
+        title: info?.title ?? "",
+        titleHighlighted: "",
         snippet: "",
         score: m.score,
-        breadcrumbs: "",
+        breadcrumbs: info?.breadcrumbs ?? "",
       };
     });
   }
@@ -128,6 +139,7 @@ function toFindResult(r: FtsSearchResult): FindResult {
   return {
     id: r.id,
     title: r.title,
+    titleHighlighted: r.titleHighlighted,
     snippet: r.snippet,
     score: r.score,
     breadcrumbs: r.breadcrumbs,

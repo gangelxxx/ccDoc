@@ -1,5 +1,6 @@
 import type { StateCreator } from "zustand";
 import type { Lang } from "../i18n.js";
+import type { CustomAgent, LlmPlan, SessionBuffer, SessionBufferEntry } from "./llm/types.js";
 
 // ─── Domain types ────────────────────────────────────────────
 
@@ -62,12 +63,30 @@ export interface LlmAttachment {
   data: string; // base64
 }
 
+export interface AgentCardAction {
+  tool: string;
+  description: string;
+  timestamp: number;
+  status: "running" | "done" | "error";
+}
+
+export interface AgentCard {
+  agentId: string;
+  agentName: string;
+  task: string;
+  actions: AgentCardAction[];
+  startedAt: number;
+  status: "running" | "done" | "stopped" | "error";
+}
+
 export interface LlmMessage {
   role: "user" | "assistant";
   content: any; // string or content blocks array (for tool use)
   displayContent?: string; // shown in UI instead of content (e.g. for agent prompts)
   attachments?: LlmAttachment[]; // for display in user messages
   isQuestion?: boolean; // true for ask_user questions
+  plan?: LlmPlan; // work plan with checkable steps
+  agentCard?: AgentCard; // live agent activity card
 }
 
 export interface LlmSession {
@@ -75,6 +94,7 @@ export interface LlmSession {
   title: string; // first user message preview
   messages: LlmMessage[];
   tokensUsed: { input: number; output: number; cacheRead: number; cacheCreation: number };
+  buffer?: SessionBuffer; // shared buffer between assistant and agents
   createdAt: number;
   updatedAt: number;
 }
@@ -157,6 +177,8 @@ export interface AppState {
   tree: TreeNode[];
   currentSection: Section | null;
   editorSelectedText: string;
+  _editorView: any;
+  setEditorView: (view: any) => void;
   setEditorSelectedText: (text: string) => void;
   loadTree: () => Promise<void>;
   selectSection: (id: string) => Promise<void>;
@@ -183,6 +205,7 @@ export interface AppState {
 
   // History
   history: HistoryCommit[];
+  restoreProgress: { current: number; total: number; title: string } | null;
   commitVersion: (message: string) => Promise<void>;
   loadHistory: () => Promise<void>;
   restoreVersion: (commitId: string) => Promise<void>;
@@ -276,20 +299,32 @@ export interface AppState {
   setLlmPassportConfig: (cfg: Partial<LlmConfig>) => void;
   llmSummaryConfig: LlmConfig;
   setLlmSummaryConfig: (cfg: Partial<LlmConfig>) => void;
-  llmResearchConfig: LlmConfig;
-  setLlmResearchConfig: (cfg: Partial<LlmConfig>) => void;
-  llmWriterConfig: LlmConfig;
-  setLlmWriterConfig: (cfg: Partial<LlmConfig>) => void;
-  llmCriticConfig: LlmConfig;
-  setLlmCriticConfig: (cfg: Partial<LlmConfig>) => void;
-  llmPlannerConfig: LlmConfig;
-  setLlmPlannerConfig: (cfg: Partial<LlmConfig>) => void;
-  useSubAgents: boolean;
-  setUseSubAgents: (enabled: boolean) => void;
   webSearchProvider: "tavily" | "brave" | "none";
   webSearchApiKey: string;
   setWebSearchProvider: (provider: "tavily" | "brave" | "none") => void;
   setWebSearchApiKey: (key: string) => void;
+
+  // Custom agents
+  customAgents: CustomAgent[];
+  setCustomAgents: (agents: CustomAgent[]) => void;
+  addCustomAgent: (agent: CustomAgent) => void;
+  updateCustomAgent: (id: string, updates: Partial<CustomAgent>) => void;
+  deleteCustomAgent: (id: string) => void;
+
+  // Session buffer (shared between assistant and agents)
+  sessionBuffer: SessionBuffer;
+  writeBuffer: (key: string, content: string, summary: string, author: string, tags?: string[]) => string;
+  readBuffer: (key: string) => SessionBufferEntry | null;
+  listBuffer: (tag?: string) => { key: string; summary: string; author: string; tags: string[]; charCount: number; updatedAt: number }[];
+  clearBuffer: () => void;
+
+  // Developer mode
+  devMode: boolean;
+  devTrackToolIssues: boolean;
+  setDevMode: (v: boolean) => void;
+  setDevTrackToolIssues: (v: boolean) => void;
+
+  llmCurrentPlan: LlmPlan | null;
   llmMessages: LlmMessage[];
   llmLoading: boolean;
   llmAborted: boolean;
@@ -327,6 +362,7 @@ export interface AppState {
   addIdeaMessage: (sectionId: string, text: string, images?: { id: string; name: string; mediaType: string; data: string }[]) => Promise<{ id: string; text: string; createdAt: number }>;
   deleteIdeaMessage: (sectionId: string, messageId: string) => Promise<void>;
   getIdeaMessages: (sectionId: string) => Promise<{ id: string; text: string; createdAt: number; planId?: string; completed?: boolean; images?: { id: string; name: string; mediaType: string; data: string }[] }[]>;
+  processIdeaWithLLM: (ideaId: string) => Promise<void>;
 
   // Background tasks
   bgTasks: BackgroundTask[];

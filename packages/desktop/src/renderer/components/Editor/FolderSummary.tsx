@@ -28,6 +28,7 @@ export function FolderSummary({ folderId, tree, projectName, onNavigate }: {
   const typeIcons: Record<string, string> = {
     folder: "\uD83D\uDCC1", file: "\uD83D\uDCC4", section: "\u00A7",
     idea: "\uD83D\uDCA1", todo: "\u2611\uFE0F", kanban: "\uD83D\uDCCA", drawing: "\u270F\uFE0F",
+    knowledge_graph: "\uD83D\uDD2E",
   };
 
   const getIcon = (node: any) => node.icon || typeIcons[node.type] || "\uD83D\uDCC4";

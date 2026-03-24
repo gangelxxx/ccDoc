@@ -8,6 +8,7 @@ import { ToastContainer } from "./components/Toast/Toast.js";
 import { CommandPalette } from "./components/CommandPalette/CommandPalette.js";
 import { StatusBar } from "./components/StatusBar/StatusBar.js";
 import { ConfirmModal } from "./components/ConfirmModal/ConfirmModal.js";
+import { RestoreProgressModal } from "./components/Editor/HistoryView.js";
 import { ResizeHandle } from "./components/ResizeHandle.js";
 import { QuickIdeaPopup } from "./components/QuickIdea/QuickIdea.js";
 
@@ -170,6 +171,7 @@ export function App() {
         <ToastContainer />
         <CommandPalette />
         <ConfirmModal />
+        <RestoreProgressModal />
         <QuickIdeaPopup />
       </div>
     </ErrorBoundary>

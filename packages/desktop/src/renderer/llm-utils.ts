@@ -7,24 +7,11 @@
 export const CONTEXT_LIMIT = 200_000;
 export const COMPRESS_AT = 0.6;
 export const HARD_STOP_AT = 0.85;
-export const ABSOLUTE_MAX_ROUNDS = 50;
+export const ABSOLUTE_MAX_ROUNDS = 200;
+export const ROUNDS_WARNING_AT = 180;
 export const TOOL_RESULT_LIMIT = 6000;
 export const DEFAULT_CONTENT_LIMIT = 6000;
 export const MAX_CONTENT_LIMIT = 10_000;
-export const SUB_AGENT_RESULT_LIMIT = 3000;
-export const SUB_AGENT_CONTEXT_LIMIT = 40_000;
-export const SUB_AGENT_MAX_ROUNDS_HAIKU = 4;
-export const SUB_AGENT_MAX_ROUNDS_DEFAULT = 6;
-/** When orchestrator context exceeds this, compress consumed delegate results. */
-export const ORCHESTRATOR_COMPRESS_AT = 25_000;
-/** Max chars for a consumed (old) delegate result after compression. */
-export const CONSUMED_DELEGATE_MAX_LEN = 800;
-
-/** Returns max tool-use rounds for a sub-agent based on the model. */
-export function getSubAgentMaxRounds(model: string): number {
-  if (model.includes("haiku")) return SUB_AGENT_MAX_ROUNDS_HAIKU;
-  return SUB_AGENT_MAX_ROUNDS_DEFAULT;
-}
 export const PLAN_RESEARCH_MAX_ROUNDS = 2; // After this many rounds, strip read-only tools in planMode to force writing
 
 export const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
@@ -35,11 +22,7 @@ export const READ_ONLY_TOOLS = new Set([
   "search", "get_history", "list_backups",
   "get_project_tree", "get_file_outlines", "read_project_file", "search_project_files", "find_symbols",
   "web_search",
-]);
-
-export const WRITER_TOOLS = new Set([
-  ...READ_ONLY_TOOLS,
-  "create_section", "update_section", "delete_section", "move_section", "update_icon",
+  "read_buffer", "list_buffer",
 ]);
 
 export const PLAN_TOOLS = new Set([
@@ -48,20 +31,7 @@ export const PLAN_TOOLS = new Set([
   "web_search",
   "create_section",
   "ask_user",
-]);
-
-/** Tools the orchestrator may call directly when sub-agents are enabled.
- *  Source code tools are excluded — they must go through delegate_research. */
-export const ORCHESTRATOR_TOOLS = new Set([
-  "get_tree", "get_section", "get_file_with_sections", "get_sections_batch", "search",
-  "create_section", "update_section", "delete_section", "move_section",
-  "duplicate_section", "restore_section", "update_icon",
-  "commit_version", "get_history", "restore_version",
-  "create_backup", "list_backups",
-  "web_search",
-  "ask_user",
-  // delegate_* tools are added separately by buildSubAgentTools()
-  "delegate_research", "delegate_writing", "delegate_review", "delegate_planning",
+  "write_buffer", "read_buffer", "list_buffer",
 ]);
 
 // ─── Token estimation ───────────────────────────────────────────
@@ -122,131 +92,7 @@ export function truncateToolResult(result: string, limit = TOOL_RESULT_LIMIT): s
   // Don't cut in the middle of a surrogate pair
   if ((result.charCodeAt(limit - 1) & 0xFC00) === 0xD800) limit--;
   return result.slice(0, limit) +
-    `\n\n[TRUNCATED — result is ${result.length} chars total. Use offset/limit parameters to read remaining content, or delegate_task for bulk operations.]`;
-}
-
-// ─── Delegate report compression ────────────────────────────────
-
-/** Max chars for the compressed delegate report delivered to the orchestrator. */
-export const DELEGATE_REPORT_LIMIT = 6000;
-
-/**
- * Compress a sub-agent report preserving key information.
- *
- * Strategy:
- * 1. If report has "## Summary" — keep it in full, compress the rest ("Details").
- * 2. In the Details part:
- *    - Keep ## headings
- *    - Bullet points → first sentence only
- *    - Code blocks → replace with "[code: N lines]"
- *    - Prose paragraphs → first sentence
- * 3. If still over DELEGATE_REPORT_LIMIT, hard-truncate Details.
- *
- * This eliminates the "[TRUNCATED]" message that triggers re-delegation.
- */
-export function compressDelegateReport(report: string, limit = DELEGATE_REPORT_LIMIT): string {
-  if (report.length <= limit) return report;
-
-  // Split into Summary and Details at "## " boundary after Summary
-  const summaryMatch = report.match(/^([\s\S]*?## Summary\b[\s\S]*?)(\n## (?!Summary))/i);
-  let summary: string;
-  let details: string;
-
-  if (summaryMatch) {
-    summary = summaryMatch[1];
-    details = report.slice(summaryMatch[1].length);
-  } else {
-    // No ## Summary header — treat entire report as details
-    summary = "";
-    details = report;
-  }
-
-  // Compress the details section
-  const compressed = compressDetailsSection(details, limit - summary.length);
-  const result = (summary + compressed).trim();
-
-  if (result.length <= limit) return result;
-
-  // Hard fallback — keep summary + truncated details
-  const remaining = limit - summary.length - 50;
-  if (remaining > 200) {
-    return (summary + compressed.slice(0, remaining) + "\n\n[Details compressed]").trim();
-  }
-  return summary.trim() || report.slice(0, limit);
-}
-
-/** Compress a details section: keep headings, shorten bullets and prose, replace code blocks. */
-function compressDetailsSection(text: string, budget: number): string {
-  const lines = text.split("\n");
-  const result: string[] = [];
-  let len = 0;
-  let inCodeBlock = false;
-  let codeLines = 0;
-
-  for (const line of lines) {
-    if (len >= budget) break;
-    const trimmed = line.trim();
-
-    // Code block handling
-    if (trimmed.startsWith("```")) {
-      if (inCodeBlock) {
-        // End of code block
-        result.push(`  [code block: ${codeLines} lines]`);
-        len += 30;
-        inCodeBlock = false;
-        codeLines = 0;
-      } else {
-        inCodeBlock = true;
-        codeLines = 0;
-      }
-      continue;
-    }
-    if (inCodeBlock) {
-      codeLines++;
-      continue;
-    }
-
-    // Always keep headings
-    if (trimmed.startsWith("#")) {
-      result.push(line);
-      len += line.length + 1;
-      continue;
-    }
-
-    // Bullet points — first sentence only
-    if (/^[-*•]\s/.test(trimmed)) {
-      const firstSentence = trimmed.split(/(?<=[.!?])\s/)[0];
-      const shortened = firstSentence.length < trimmed.length ? firstSentence : trimmed;
-      if (len + shortened.length < budget) {
-        result.push(shortened);
-        len += shortened.length + 1;
-      }
-      continue;
-    }
-
-    // Empty lines — keep one
-    if (trimmed === "") {
-      if (result.length > 0 && result[result.length - 1].trim() !== "") {
-        result.push("");
-        len += 1;
-      }
-      continue;
-    }
-
-    // Prose — first sentence only
-    const firstSentence = trimmed.split(/(?<=[.!?])\s/)[0];
-    if (len + firstSentence.length < budget) {
-      result.push(firstSentence);
-      len += firstSentence.length + 1;
-    }
-  }
-
-  // Handle unclosed code block
-  if (inCodeBlock && codeLines > 0) {
-    result.push(`  [code block: ${codeLines} lines]`);
-  }
-
-  return result.join("\n");
+    `\n\n[TRUNCATED — result is ${result.length} chars total. Use offset/limit parameters to read remaining content.]`;
 }
 
 export function shrinkToolResults(msgs: any[], maxLen: number): any[] {
@@ -290,70 +136,6 @@ export function shrinkToolResults(msgs: any[], maxLen: number): any[] {
     }
 
     return m;
-  });
-}
-
-// ─── Consumed delegate compression ──────────────────────────────
-
-/**
- * Compress old delegate results that the orchestrator has already acted on.
- * Keeps ## Summary intact, strips ## Details.
- *
- * "Consumed" = there are at least `minAge` assistant messages after the delegate result.
- * This means the orchestrator has read the result and moved on.
- */
-export function shrinkConsumedDelegates(msgs: any[], minAge = 2): any[] {
-  // Step 1: build tool_use_id → tool_name map
-  const toolNameMap = new Map<string, string>();
-  for (const m of msgs) {
-    if (m.role !== "assistant" || !Array.isArray(m.content)) continue;
-    for (const b of m.content) {
-      if (b.type === "tool_use" && b.id) toolNameMap.set(b.id, b.name);
-    }
-  }
-
-  // Step 2: compute age for each user message (how many assistant messages come AFTER it)
-  // Message pattern: [user, assistant, user(tool_result), assistant, user(tool_result), ...]
-  // Age of a user message at index i = number of assistant messages in msgs[i+1..]
-  const assistantAfter: number[] = new Array(msgs.length).fill(0);
-  let countFromEnd = 0;
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    assistantAfter[i] = countFromEnd;
-    if (msgs[i].role === "assistant") countFromEnd++;
-  }
-
-  return msgs.map((m, i) => {
-    if (m.role !== "user" || !Array.isArray(m.content)) return m;
-
-    const age = assistantAfter[i];
-    if (age < minAge) return m; // Too recent — keep full
-
-    let changed = false;
-    const newContent = m.content.map((block: any) => {
-      if (block.type !== "tool_result" || typeof block.content !== "string") return block;
-
-      const toolName = toolNameMap.get(block.tool_use_id) || "";
-      if (!toolName.startsWith("delegate_")) return block;
-
-      // Already compressed — skip
-      if (block.content.length <= CONSUMED_DELEGATE_MAX_LEN) return block;
-
-      changed = true;
-
-      // Extract ## Summary if present, strip the rest
-      const summaryMatch = block.content.match(/## Summary[\s\S]*?(?=\n## (?!Summary)|$)/i);
-      const summary = summaryMatch ? summaryMatch[0].trim() : "";
-
-      if (summary) {
-        const compressed = summary.slice(0, CONSUMED_DELEGATE_MAX_LEN - 30) + "\n\n[Details removed — already processed]";
-        return { ...block, content: compressed };
-      }
-
-      // No Summary — hard truncate
-      return { ...block, content: block.content.slice(0, CONSUMED_DELEGATE_MAX_LEN) + "...[compressed]" };
-    });
-
-    return changed ? { ...m, content: newContent } : m;
   });
 }
 
@@ -491,6 +273,45 @@ export function optimizeBetweenRounds(msgs: any[]): any[] {
   });
 }
 
+// ─── Slug generation ────────────────────────────────────────────
+
+const CYRILLIC_MAP: Record<string, string> = {
+  а:"a",б:"b",в:"v",г:"g",д:"d",е:"e",ё:"yo",ж:"zh",з:"z",и:"i",й:"j",к:"k",
+  л:"l",м:"m",н:"n",о:"o",п:"p",р:"r",с:"s",т:"t",у:"u",ф:"f",х:"h",ц:"c",
+  ч:"ch",ш:"sh",щ:"sch",ъ:"",ы:"y",ь:"",э:"e",ю:"yu",я:"ya",
+};
+
+export function generateSlug(title: string): string {
+  const transliterated = title.toLowerCase().split("").map(ch => CYRILLIC_MAP[ch] ?? ch).join("");
+  const slug = transliterated
+    .replace(/[^a-z0-9]+/g, "-")  // non-alphanumeric → hyphen
+    .replace(/^-+|-+$/g, "")       // trim hyphens
+    .slice(0, 40);                  // max length
+  return slug || "item";
+}
+
+/**
+ * Build a bidirectional slug↔UUID map from a tree.
+ * Slugs are globally unique (duplicates get -2, -3 suffixes).
+ */
+export function buildSlugMap(tree: TreeNode[]): Map<string, string> {
+  const slugToId = new Map<string, string>();
+  const baseCounts = new Map<string, number>();
+
+  function walk(nodes: TreeNode[]) {
+    for (const n of nodes) {
+      const base = generateSlug(n.title);
+      const count = baseCounts.get(base) || 0;
+      baseCounts.set(base, count + 1);
+      const slug = count === 0 ? base : `${base}-${count + 1}`;
+      slugToId.set(slug, n.id);
+      walk(n.children);
+    }
+  }
+  walk(tree);
+  return slugToId;
+}
+
 // ─── Tree formatting ────────────────────────────────────────────
 
 export interface TreeNode {
@@ -501,23 +322,39 @@ export interface TreeNode {
   children: TreeNode[];
 }
 
-export function formatCompactTree(nodes: TreeNode[], depth = 0, includeIds = true, maxDepth?: number): string {
-  const indent = "  ".repeat(depth);
-  const typeIcons: Record<string, string> = { folder: "📁", file: "📄", section: "§", idea: "💡", todo: "✅", kanban: "📋", drawing: "🎨" };
-  return nodes.map(n => {
-    const icon = n.icon || typeIcons[n.type] || "•";
-    const idSuffix = includeIds ? ` [${n.id.slice(0, 8)}]` : "";
-    const childCount = n.children?.length || 0;
+/**
+ * Format tree for LLM display.
+ * If slugMap is provided, shows slugs instead of UUID prefixes.
+ */
+export function formatCompactTree(nodes: TreeNode[], depth = 0, includeIds = true, maxDepth?: number, slugMap?: Map<string, string>): string {
+  // Build reverse map (uuid → slug) for display
+  const idToSlug = new Map<string, string>();
+  if (slugMap) {
+    for (const [slug, uuid] of slugMap) idToSlug.set(uuid, slug);
+  }
 
-    if (maxDepth !== undefined && depth >= maxDepth) {
-      const suffix = childCount > 0 ? ` (${childCount} ${childCount === 1 ? "child" : "children"})` : "";
-      return `${indent}${icon} ${n.title}${idSuffix}${suffix}`;
-    }
+  function format(nodes: TreeNode[], depth: number): string {
+    const indent = "  ".repeat(depth);
+    const typeIcons: Record<string, string> = { folder: "📁", file: "📄", section: "§", idea: "💡", todo: "✅", kanban: "📋", drawing: "🎨" };
+    return nodes.map(n => {
+      const icon = n.icon || typeIcons[n.type] || "•";
+      const label = includeIds
+        ? (idToSlug.has(n.id) ? ` [${idToSlug.get(n.id)}]` : ` [${n.id.slice(0, 8)}]`)
+        : "";
+      const childCount = n.children?.length || 0;
 
-    const line = `${indent}${icon} ${n.title}${idSuffix}`;
-    const children = childCount ? "\n" + formatCompactTree(n.children, depth + 1, includeIds, maxDepth) : "";
-    return line + children;
-  }).join("\n");
+      if (maxDepth !== undefined && depth >= maxDepth) {
+        const suffix = childCount > 0 ? ` (${childCount} ${childCount === 1 ? "child" : "children"})` : "";
+        return `${indent}${icon} ${n.title}${label}${suffix}`;
+      }
+
+      const line = `${indent}${icon} ${n.title}${label}`;
+      const children = childCount ? "\n" + format(n.children, depth + 1) : "";
+      return line + children;
+    }).join("\n");
+  }
+
+  return format(nodes, depth);
 }
 
 // ─── Content pagination ─────────────────────────────────────────
@@ -568,8 +405,20 @@ export function paginateText(text: string, offset = 0, limit = DEFAULT_CONTENT_L
 
 // ─── ID resolution ──────────────────────────────────────────────
 
-export function resolveIdInTree(prefix: string, tree: TreeNode[]): string {
-  if (!prefix || prefix.length > 20) return prefix;
+export function resolveIdInTree(prefix: string, tree: TreeNode[], slugMap?: Map<string, string>): string {
+  if (!prefix) return prefix;
+
+  // 1. Try slug map first (exact match)
+  if (slugMap) {
+    const fromSlug = slugMap.get(prefix);
+    if (fromSlug) return fromSlug;
+    // Try lowercase slug match (model may capitalize)
+    const fromSlugLower = slugMap.get(prefix.toLowerCase());
+    if (fromSlugLower) return fromSlugLower;
+  }
+
+  // 2. Fall back to UUID prefix matching
+  if (prefix.length > 36) return prefix; // already a full UUID or garbage
   const find = (nodes: TreeNode[]): string | null => {
     for (const n of nodes) {
       if (n.id.startsWith(prefix)) return n.id;
@@ -604,14 +453,6 @@ export function shouldHardStop(estimatedTokens: number): boolean {
 
 export function isReadOnlyTool(name: string): boolean {
   return READ_ONLY_TOOLS.has(name);
-}
-
-export function isWriterTool(name: string): boolean {
-  return WRITER_TOOLS.has(name);
-}
-
-export function isMutatingTool(name: string): boolean {
-  return WRITER_TOOLS.has(name) && !READ_ONLY_TOOLS.has(name);
 }
 
 export function isPlanModeTool(name: string): boolean {

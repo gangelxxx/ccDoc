@@ -11,12 +11,14 @@ import { getMainWindow } from "../window";
 // onnxruntime-node's native DLL fails to initialize in Electron,
 // but onnxruntime-web registers 'cpu' as a WASM backend alias, so it's a drop-in replacement.
 const _origResolve = (Module as any)._resolveFilename;
-(Module as any)._resolveFilename = function (request: string, ...args: any[]) {
+const _patchedResolve = function (request: string, ...args: any[]) {
   if (request === "onnxruntime-node") {
     return _origResolve.call(this, "onnxruntime-web", ...args);
   }
   return _origResolve.call(this, request, ...args);
 };
+(_patchedResolve as any).__original = _origResolve;
+(Module as any)._resolveFilename = _patchedResolve;
 
 const VOICE_MODELS_DIR = join(homedir(), ".ccdoc", "models", "voice");
 

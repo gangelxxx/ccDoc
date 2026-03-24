@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { RotateCcw, X, Loader2, Paperclip, Send, Square, XCircle, ChevronDown, Plus, Copy, Check, Brain, Sparkles } from "lucide-react";
+import { RotateCcw, X, Loader2, Paperclip, Send, Square, XCircle, ChevronDown, Plus, Copy, Check, Brain, Sparkles, Bot } from "lucide-react";
 import { useAppStore } from "../../stores/app.store.js";
 import type { LlmAttachment, LlmEffort } from "../../stores/app.store.js";
 import { applyEffort } from "../../stores/llm-config.js";
 import { useT } from "../../i18n.js";
 import { renderMarkdown } from "../Editor/editor-utils.js";
+import { resolveIdInTree, buildSlugMap } from "../../llm-utils.js";
 import { VoiceButton } from "../VoiceButton/VoiceButton.js";
 
 function formatTokens(n: number): string {
@@ -81,6 +82,24 @@ export function LlmPanel({ width, onClick }: { width?: number; onClick?: (e: Rea
     if (history.length > INPUT_HISTORY_MAX) history.length = INPUT_HISTORY_MAX;
     localStorage.setItem(INPUT_HISTORY_KEY, JSON.stringify(history));
   };
+  const selectSection = useAppStore((s) => s.selectSection);
+  const tree = useAppStore((s) => s.tree);
+
+  // Handle clicks on section links inside LLM messages
+  const handleMessagesClick = useCallback((e: React.MouseEvent) => {
+    const link = (e.target as HTMLElement).closest(".llm-section-link") as HTMLAnchorElement | null;
+    if (link) {
+      e.preventDefault();
+      const href = link.getAttribute("href") || "";
+      const match = href.match(/^#section:(.+)$/);
+      if (match) {
+        // Resolve slug or UUID prefix to full UUID
+        const resolvedId = resolveIdInTree(match[1], tree, buildSlugMap(tree));
+        selectSection(resolvedId);
+      }
+    }
+  }, [selectSection, tree]);
+
   const [showModelPicker, setShowModelPicker] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -331,7 +350,7 @@ export function LlmPanel({ width, onClick }: { width?: number; onClick?: (e: Rea
       )}
 
       {/* Messages */}
-      <div className="llm-messages">
+      <div className="llm-messages" onClick={handleMessagesClick}>
         {llmMessages.length === 0 && (
           <div className="llm-empty">
             <p>{t("llmEmptyHint")}</p>
@@ -348,7 +367,7 @@ export function LlmPanel({ width, onClick }: { width?: number; onClick?: (e: Rea
             : Array.isArray(msg.content) ? msg.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n")
             : "";
           const text = msg.displayContent || rawText;
-          if (!text && !msg.attachments?.length) return null;
+          if (!text && !msg.attachments?.length && !msg.plan && !msg.agentCard) return null;
           const isToolStatus = msg.role === "assistant" && (text.startsWith("\u{1F527}") || text.startsWith("\u{1F50D}") || text.startsWith("\u{1F504}") || text.startsWith("\u{1F4DD}") || text.startsWith("\u{1F4CB}") || text.startsWith("\u{1F4D0}"));
           const isError = msg.role === "assistant" && typeof msg.content === "string" && msg.content.startsWith("\u26A0");
           const isQuestionMsg = !!msg.isQuestion;
@@ -362,12 +381,75 @@ export function LlmPanel({ width, onClick }: { width?: number; onClick?: (e: Rea
                 </div>
               )}
               {msg.role === "assistant" ? (
-                <div
+                text ? <div
                   className="llm-message-content"
                   dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }}
-                />
+                /> : null
               ) : (
                 text ? <div className="llm-message-content">{text}</div> : null
+              )}
+              {msg.plan && (
+                <div className="llm-plan">
+                  <div className="llm-plan-header">{t("workPlan")}</div>
+                  {msg.plan.steps.map((step, j) => (
+                    <div key={j} className={`llm-plan-step llm-plan-step-${step.status}`}>
+                      <span className="llm-plan-check">
+                        {step.status === "done" ? "\u2713" : step.status === "in_progress" ? "\u203A" : " "}
+                      </span>
+                      <span className="llm-plan-text">{j + 1}. {step.text}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {msg.agentCard && (
+                <div className={`llm-agent-card llm-agent-card-${msg.agentCard.status}`}>
+                  <div className="llm-agent-card-header">
+                    <Bot size={14} />
+                    <span className="llm-agent-card-name">{msg.agentCard.agentName}</span>
+                    {msg.agentCard.status === "running" && (
+                      <button className="llm-agent-card-stop" onClick={() => stopLlmChat()} title={t("stopChat")}>
+                        <Square size={10} />
+                        {t("stopChat")}
+                      </button>
+                    )}
+                    {msg.agentCard.status !== "running" && (
+                      <span className={`llm-agent-card-badge llm-agent-card-badge-${msg.agentCard.status}`}>
+                        {msg.agentCard.status === "done" ? "\u2713" : msg.agentCard.status === "stopped" ? "\u25A0" : "\u2717"}
+                      </span>
+                    )}
+                  </div>
+                  {msg.agentCard.actions.length > 0 && (
+                    <div className="llm-agent-card-actions">
+                      {(() => {
+                        const groups: { description: string; count: number; status: string; lastTimestamp: number }[] = [];
+                        for (const action of msg.agentCard!.actions) {
+                          const last = groups[groups.length - 1];
+                          if (last && last.description === action.description) {
+                            last.count++;
+                            last.status = action.status;
+                            last.lastTimestamp = action.timestamp;
+                          } else {
+                            groups.push({ description: action.description, count: 1, status: action.status, lastTimestamp: action.timestamp });
+                          }
+                        }
+                        return groups.map((g, j) => (
+                          <div key={j} className={`llm-agent-card-action llm-agent-card-action-${g.status}`}>
+                            <span className="llm-agent-card-action-icon">
+                              {g.status === "running" ? "\u23F3" : g.status === "done" ? "\u2713" : "\u2717"}
+                            </span>
+                            <span className="llm-agent-card-action-text">{g.description}</span>
+                            {g.count > 1 && (
+                              <span className="llm-agent-card-action-count">{"\u00D7"}{g.count}</span>
+                            )}
+                            <span className="llm-agent-card-action-time">
+                              {Math.round((g.lastTimestamp - msg.agentCard!.startedAt) / 1000)}s
+                            </span>
+                          </div>
+                        ));
+                      })()}
+                    </div>
+                  )}
+                </div>
               )}
               {!isToolStatus && text && (
                 <div className="llm-msg-actions">
@@ -441,6 +523,43 @@ export function LlmPanel({ width, onClick }: { width?: number; onClick?: (e: Rea
           </div>
         )}
 
+        {/* Live context bubble: selected text or current section */}
+        {includeContext && currentSection && (
+          <div className="llm-message llm-message-selection">
+            <div className={`llm-selection-bubble${editorSelectedText ? "" : " llm-selection-bubble-section"}`}>
+              <div className="llm-selection-bubble-header">
+                <span className="llm-selection-bubble-label">
+                  {editorSelectedText
+                    ? t("selectedText")
+                    : t(currentSection.type === "file" ? "selectedFile" : "selectedSection")}
+                </span>
+                {editorSelectedText ? (
+                  <button
+                    className="llm-selection-bubble-close"
+                    onClick={() => useAppStore.getState().setEditorSelectedText("")}
+                    title={t("close")}
+                  >
+                    <X size={12} />
+                  </button>
+                ) : (
+                  <button
+                    className="llm-selection-bubble-close"
+                    onClick={() => setIncludeContext(false)}
+                    title={t("close")}
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+              <div className="llm-selection-bubble-text">
+                {editorSelectedText
+                  ? (editorSelectedText.length > 300 ? editorSelectedText.slice(0, 300) + "..." : editorSelectedText)
+                  : currentSection.title}
+              </div>
+            </div>
+          </div>
+        )}
+
         <div ref={messagesEndRef} />
       </div>
 
@@ -462,7 +581,7 @@ export function LlmPanel({ width, onClick }: { width?: number; onClick?: (e: Rea
                 checked={includeContext}
                 onChange={(e) => setIncludeContext(e.target.checked)}
               />
-              {editorSelectedText ? t("selectedText") : t("selectedFile")}
+              {editorSelectedText ? t("selectedText") : t(currentSection.type === "file" ? "selectedFile" : "selectedSection")}
             </label>
           )}
           {(llmTokensUsed.input > 0 || llmTokensUsed.output > 0) && (() => {

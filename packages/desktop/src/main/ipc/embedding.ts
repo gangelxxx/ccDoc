@@ -3,8 +3,9 @@ import { join } from "path";
 import { mkdirSync, existsSync, rmSync, createWriteStream } from "fs";
 import { homedir } from "os";
 import https from "https";
-import { LOCAL_MODELS } from "@ccdoc/core";
+import { LOCAL_MODELS, FtsRepo, EmbeddingRepo, IndexService, FindService } from "@ccdoc/core";
 import { getMainWindow } from "../window";
+import { getEmbeddingManager, getProjectDbsMap, trackBgTask } from "../services";
 
 const activeDownloads = new Map<string, () => void>(); // modelId -> cancel fn
 
@@ -110,5 +111,28 @@ export function registerEmbeddingIpc(): void {
   ipcMain.handle("embedding:delete", async (_e, modelId: string) => {
     const modelDir = join(homedir(), ".ccdoc", "models", modelId);
     if (existsSync(modelDir)) rmSync(modelDir, { recursive: true });
+  });
+
+  ipcMain.handle("embedding:apply-config", async () => {
+    const manager = getEmbeddingManager();
+    if (!manager) return;
+
+    // 1. Refresh provider from current settings
+    manager.refresh();
+    const model = manager.getProvider();
+
+    // 2. Rebuild IndexService and FindService in all cached projects
+    for (const [, services] of getProjectDbsMap()) {
+      const ftsRepo = new FtsRepo(services.db);
+      const embeddingRepo = new EmbeddingRepo(services.db);
+      services.index = new IndexService(services.db, undefined, ftsRepo, model, embeddingRepo);
+      services.find = new FindService(ftsRepo, embeddingRepo, model);
+      services.embeddingRepo = embeddingRepo;
+
+      // 3. Trigger background embedding reindex if model is available
+      if (model) {
+        trackBgTask("Переиндексация эмбеддингов", () => services.index.reindexAll());
+      }
+    }
   });
 }

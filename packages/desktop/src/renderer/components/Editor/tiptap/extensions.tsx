@@ -2,6 +2,9 @@ import {
   ReactNodeViewRenderer, NodeViewWrapper, NodeViewContent,
 } from "@tiptap/react";
 import type { NodeViewProps } from "@tiptap/react";
+import { Extension } from "@tiptap/core";
+import { Plugin, PluginKey } from "@tiptap/pm/state";
+import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import ImageExt from "@tiptap/extension-image";
 import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
 import { createLowlight, common } from "lowlight";
@@ -166,5 +169,58 @@ export const CustomImage = ImageExt.extend({
   },
   addNodeView() {
     return ReactNodeViewRenderer(ImageNodeView);
+  },
+});
+
+/**
+ * Preserves visual selection highlight when editor loses focus.
+ * Shows a decoration with class "selection-preserved" over the last selection range.
+ */
+export const selPreserveKey = new PluginKey("selectionPreserve");
+
+export const SelectionPreserve = Extension.create({
+  name: "selectionPreserve",
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        key: selPreserveKey,
+        state: {
+          init() { return { from: 0, to: 0, hasFocus: true }; },
+          apply(tr, prev) {
+            const meta = tr.getMeta(selPreserveKey);
+            if (meta) return meta;
+            if (prev.hasFocus) {
+              return { from: tr.selection.from, to: tr.selection.to, hasFocus: true };
+            }
+            return prev;
+          },
+        },
+        props: {
+          decorations(state) {
+            const { from, to, hasFocus } = selPreserveKey.getState(state);
+            if (hasFocus || from === to) return DecorationSet.empty;
+            return DecorationSet.create(state.doc, [
+              Decoration.inline(from, to, { class: "selection-preserved" }),
+            ]);
+          },
+          handleDOMEvents: {
+            blur(view, event) {
+              const related = (event as FocusEvent).relatedTarget as HTMLElement | null;
+              const isLlm = related?.closest(".llm-panel") || related?.closest("[data-llm-toggle]");
+              if (!isLlm) return false; // Focus went elsewhere — don't preserve
+              const { from, to } = view.state.selection;
+              if (from !== to) {
+                view.dispatch(view.state.tr.setMeta(selPreserveKey, { from, to, hasFocus: false }));
+              }
+              return false;
+            },
+            focus(view) {
+              view.dispatch(view.state.tr.setMeta(selPreserveKey, { from: 0, to: 0, hasFocus: true }));
+              return false;
+            },
+          },
+        },
+      }),
+    ];
   },
 });

@@ -52,8 +52,7 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
     const project = store.currentProject;
     if (!section || !project) return;
     try {
-      const md = await window.api.getSectionContent(project.token, section.id, "markdown");
-      await navigator.clipboard.writeText(md);
+      await window.api.copySectionAsMarkdown(project.token, section.id);
       store.addToast("success", t("markdownCopied"));
     } catch (e: any) {
       store.addToast("error", t("copyFailed"), e.message);

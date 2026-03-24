@@ -1,5 +1,6 @@
 import type { Section, TreeNode, SliceCreator } from "../types.js";
 import { t } from "../../i18n.js";
+import { selPreserveKey } from "../../components/Editor/tiptap/extensions.js";
 
 let _renameTimer: ReturnType<typeof setTimeout> | null = null;
 let selectSectionGen = 0;
@@ -66,7 +67,30 @@ export const createSectionsSlice: SliceCreator<SectionsSlice> = (set, get) => ({
   tree: [],
   currentSection: null,
   editorSelectedText: "",
-  setEditorSelectedText: (text: string) => set({ editorSelectedText: text }),
+  _editorView: null as any,
+  setEditorView: (view: any) => set({ _editorView: view }),
+  setEditorSelectedText: (text: string) => {
+    const prev = get().editorSelectedText;
+    set({ editorSelectedText: text });
+    // Clear preserved selection decoration when cleared externally
+    if (!text && prev) {
+      // Remove highlight spans from DOM directly (ProseMirror won't re-render without focus)
+      document.querySelectorAll(".selection-preserved").forEach((el) => {
+        const parent = el.parentNode;
+        if (parent) {
+          while (el.firstChild) parent.insertBefore(el.firstChild, el);
+          parent.removeChild(el);
+        }
+      });
+      // Also update plugin state so it doesn't re-apply on next render
+      const view = get()._editorView;
+      if (view) {
+        try {
+          view.dispatch(view.state.tr.setMeta(selPreserveKey, { from: 0, to: 0, hasFocus: true }));
+        } catch {}
+      }
+    }
+  },
   scrollToPlanId: null,
   setScrollToPlanId: (id: string | null) => set({ scrollToPlanId: id }),
   scrollToMessageId: null,
@@ -119,6 +143,9 @@ export const createSectionsSlice: SliceCreator<SectionsSlice> = (set, get) => ({
         console.log(`[perf] selectSection SAME-RESELECT +${(performance.now() - t0).toFixed(0)}ms`);
         return;
       }
+
+      // Clear editor selection when switching sections
+      if (get().editorSelectedText) set({ editorSelectedText: "" });
 
       const { navHistory: currentHistory, navIndex: currentNavIndex } = get();
       const trimmedHistory = currentHistory.slice(0, currentNavIndex + 1);

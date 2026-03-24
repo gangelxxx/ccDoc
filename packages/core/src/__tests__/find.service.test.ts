@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { FindService } from "../services/find.service.js";
 import type { FtsRepo, FtsSearchResult } from "../db/fts.repo.js";
 import type { EmbeddingRepo } from "../db/embedding.repo.js";
-import type { EmbeddingModel } from "../services/embedding.service.js";
+import type { IEmbeddingProvider } from "../services/embedding.service.js";
 
 function makeFtsResult(overrides: Partial<FtsSearchResult> & { id: string }): FtsSearchResult {
   return {
@@ -22,6 +22,7 @@ function mockFtsRepo(results: FtsSearchResult[]): FtsRepo {
     delete: vi.fn(),
     reindexAll: vi.fn(),
     count: vi.fn().mockResolvedValue(results.length),
+    getByIds: vi.fn().mockResolvedValue(new Map()),
   } as unknown as FtsRepo;
 }
 
@@ -36,13 +37,14 @@ function mockEmbeddingRepo(embeddings: { section_id: string; embedding: Float32A
   } as unknown as EmbeddingRepo;
 }
 
-function mockEmbeddingModel(queryVec: Float32Array): EmbeddingModel {
+function mockEmbeddingModel(queryVec: Float32Array): IEmbeddingProvider {
   return {
     isAvailable: vi.fn().mockReturnValue(true),
     load: vi.fn().mockResolvedValue(true),
     encode: vi.fn().mockResolvedValue(queryVec),
     encodeQuery: vi.fn().mockResolvedValue(queryVec),
-  } as unknown as EmbeddingModel;
+    dimension: queryVec.length,
+  } as unknown as IEmbeddingProvider;
 }
 
 describe("FindService.search", () => {
@@ -170,7 +172,8 @@ describe("FindService.search", () => {
       isAvailable: vi.fn().mockReturnValue(true),
       load: vi.fn().mockResolvedValue(true),
       encodeQuery: vi.fn().mockRejectedValue(new Error("ONNX error")),
-    } as unknown as EmbeddingModel;
+      dimension: 2,
+    } as unknown as IEmbeddingProvider;
 
     const service = new FindService(mockFtsRepo(ftsResults), mockEmbeddingRepo(), model);
     const results = await service.search("query", 5);
@@ -178,5 +181,77 @@ describe("FindService.search", () => {
     // Должен вернуть FTS результаты несмотря на ошибку embedding
     expect(results).toHaveLength(1);
     expect(results[0].id).toBe("id-fts");
+  });
+});
+
+describe("FindService — titleHighlighted", () => {
+  it("FTS результат содержит titleHighlighted", async () => {
+    const ftsResults = [
+      makeFtsResult({
+        id: "id-1",
+        title: "Kanban board",
+        titleHighlighted: "<mark>Kanban</mark> board",
+        score: 2.0,
+      }),
+    ];
+    const service = new FindService(mockFtsRepo(ftsResults), mockEmbeddingRepo(), null);
+    const results = await service.search("kanban", 5);
+
+    expect(results).toHaveLength(1);
+    expect(results[0].titleHighlighted).toBe("<mark>Kanban</mark> board");
+  });
+
+  it("embedding-only результат имеет пустой titleHighlighted", async () => {
+    const vec = new Float32Array([1, 0]);
+    const embeddingRepo = mockEmbeddingRepo([
+      { section_id: "id-emb", embedding: vec, text_hash: "hash" },
+    ]);
+    const model = mockEmbeddingModel(vec);
+
+    const service = new FindService(mockFtsRepo([]), embeddingRepo, model);
+    const results = await service.search("query", 5);
+
+    expect(results).toHaveLength(1);
+    expect(results[0].titleHighlighted).toBe("");
+  });
+});
+
+describe("FindService — enrichment через getByIds", () => {
+  it("embedding-only результат обогащается title/breadcrumbs через getByIds", async () => {
+    const vec = new Float32Array([1, 0]);
+    const embeddingRepo = mockEmbeddingRepo([
+      { section_id: "id-emb", embedding: vec, text_hash: "hash" },
+    ]);
+    const model = mockEmbeddingModel(vec);
+
+    const enrichedMap = new Map([
+      ["id-emb", { title: "Enriched Title", breadcrumbs: "Folder > Subfolder" }],
+    ]);
+
+    const fts = {
+      ...mockFtsRepo([]),
+      getByIds: vi.fn().mockResolvedValue(enrichedMap),
+    } as unknown as FtsRepo;
+
+    const service = new FindService(fts, embeddingRepo, model);
+    const results = await service.search("query", 5);
+
+    expect(results).toHaveLength(1);
+    expect(results[0].title).toBe("Enriched Title");
+    expect(results[0].breadcrumbs).toBe("Folder > Subfolder");
+    expect(fts.getByIds).toHaveBeenCalledWith(["id-emb"]);
+  });
+
+  it("FTS результаты НЕ вызывают getByIds", async () => {
+    const ftsResults = [
+      makeFtsResult({ id: "id-fts", title: "FTS result", score: 1.0 }),
+    ];
+
+    const fts = mockFtsRepo(ftsResults);
+    const service = new FindService(fts, mockEmbeddingRepo(), null);
+    await service.search("query", 5);
+
+    // getByIds не вызывается если нет embedding-only результатов
+    expect(fts.getByIds).not.toHaveBeenCalled();
   });
 });

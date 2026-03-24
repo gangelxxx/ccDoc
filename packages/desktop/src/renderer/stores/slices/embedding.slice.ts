@@ -32,9 +32,17 @@ export const createEmbeddingSlice: SliceCreator<EmbeddingSlice> = (set, get) => 
   embeddingBgTaskIds: {},
 
   setEmbeddingConfig: (cfg) => {
-    const next = { ...get().embeddingConfig, ...cfg };
+    const prev = get().embeddingConfig;
+    const next = { ...prev, ...cfg };
     set({ embeddingConfig: next });
     window.api.settingsPatch({ embedding: next });
+    // Hot-swap: notify main process if mode or model changed
+    const modeChanged = prev.mode !== next.mode;
+    const modelChanged = prev.localModelId !== next.localModelId || prev.onlineModel !== next.onlineModel || prev.onlineProvider !== next.onlineProvider;
+    const keyChanged = prev.onlineApiKey !== next.onlineApiKey;
+    if (modeChanged || modelChanged || keyChanged) {
+      window.api.applyEmbeddingConfig();
+    }
   },
 
   fetchEmbeddingStatus: async () => {

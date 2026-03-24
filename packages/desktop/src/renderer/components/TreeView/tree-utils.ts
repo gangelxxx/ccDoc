@@ -114,6 +114,21 @@ export function computeMoveParams(
   return { newParentId: parentId, afterId: targetNode.id };
 }
 
+/** Flatten tree into visible order (respecting expanded state) */
+export function flattenVisibleTree(nodes: TreeNode[], expandedNodes: Set<string>): string[] {
+  const result: string[] = [];
+  const walk = (items: TreeNode[]) => {
+    for (const n of items) {
+      result.push(n.id);
+      if (n.children.length && expandedNodes.has(n.id)) {
+        walk(n.children);
+      }
+    }
+  };
+  walk(nodes);
+  return result;
+}
+
 function isDescendant(tree: TreeNode[], nodeId: string, potentialAncestorId: string): boolean {
   const node = findNode(tree, potentialAncestorId);
   if (!node) return false;

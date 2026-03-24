@@ -12,6 +12,7 @@ import { registerVoiceIpc } from "./voice";
 import { registerSourceCodeIpc } from "./source-code";
 import { registerInstallIpc } from "./install";
 import { registerWebSearchIpc } from "./web-search";
+import { registerKnowledgeGraphIpc } from "./knowledge-graph";
 import { registerSettingsIpc } from "./settings";
 import type { SettingsService } from "../services/settings.service";
 
@@ -30,5 +31,6 @@ export function registerAllIpcHandlers(settingsService: SettingsService): void {
   registerSourceCodeIpc();
   registerInstallIpc();
   registerWebSearchIpc();
+  registerKnowledgeGraphIpc(settingsService);
   registerSettingsIpc(settingsService);
 }

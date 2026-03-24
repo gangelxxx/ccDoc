@@ -35,11 +35,23 @@ export function splitMarkdownIntoSections(markdown: string): SplitSection[] {
     }
   };
 
+  let preambleLines: string[] = [];
+  let seenH2 = false;
+
   for (const line of lines) {
     const h2 = line.match(/^##\s+(.+)/);
     const h3 = line.match(/^###\s+(.+)/);
 
     if (h2 && !h3) {
+      // Flush preamble as first section if we haven't seen a ## yet
+      if (!seenH2 && preambleLines.length > 0) {
+        const preambleContent = preambleLines.join("\n").trim();
+        if (isSubstantive(preambleContent)) {
+          sections.push({ title: "Вступление", content: preambleContent, children: [] });
+        }
+        preambleLines = [];
+      }
+      seenH2 = true;
       flushH2();
       curH2 = { title: stripNumber(h2[1]), content: "", children: [] };
     } else if (h3 && curH2) {
@@ -58,8 +70,10 @@ export function splitMarkdownIntoSections(markdown: string): SplitSection[] {
         curH3.lines.push(line);
       } else if (curH2) {
         preLines.push(line);
+      } else {
+        // Pre-H2 content (introduction before first ## heading)
+        preambleLines.push(line);
       }
-      // Pre-H2 content is ignored (preamble like ---)
     }
   }
   // Flush remaining

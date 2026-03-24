@@ -31,11 +31,13 @@ export const createLlmSessionsSlice: SliceCreator<LlmSessionsSlice> = (set, get)
     const id = llmCurrentSessionId || (Date.now().toString(36) + Math.random().toString(36).slice(2, 7));
 
     const existingIdx = llmSessions.findIndex(s => s.id === id);
+    const bufferState = get().sessionBuffer;
     const session: LlmSession = {
       id,
       title,
       messages: llmMessages,
       tokensUsed: { ...llmTokensUsed },
+      buffer: Object.keys(bufferState.entries).length > 0 ? bufferState : undefined,
       createdAt: existingIdx >= 0 ? llmSessions[existingIdx].createdAt : now,
       updatedAt: now,
     };
@@ -70,10 +72,18 @@ export const createLlmSessionsSlice: SliceCreator<LlmSessionsSlice> = (set, get)
     }
     const session = llmSessions.find(s => s.id === id);
     if (!session) return;
+    // Restore active plan from session messages (if any step is not done)
+    const planMsg = session.messages.find((m: any) => m.plan);
+    const restoredPlan = planMsg?.plan && planMsg.plan.steps.some((s: any) => s.status !== "done")
+      ? planMsg.plan
+      : null;
+
     set({
       llmMessages: session.messages,
       llmTokensUsed: { ...session.tokensUsed },
       llmCurrentSessionId: id,
+      llmCurrentPlan: restoredPlan,
+      sessionBuffer: session.buffer || { entries: {}, totalChars: 0 },
       llmLoading: false,
       llmAborted: llmLoading, // signal stale engine to exit
       llmWaitingForUser: false,
@@ -95,6 +105,7 @@ export const createLlmSessionsSlice: SliceCreator<LlmSessionsSlice> = (set, get)
       patch.llmCurrentSessionId = null;
       patch.llmMessages = [];
       patch.llmTokensUsed = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
+      patch.sessionBuffer = { entries: {}, totalChars: 0 };
       patch.llmLoading = false;
       if (llmLoading) patch.llmAborted = true; // signal stale engine to exit
       patch.llmWaitingForUser = false;

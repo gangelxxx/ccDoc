@@ -2,6 +2,17 @@ import { createHash } from "crypto";
 import { existsSync } from "fs";
 import { join } from "path";
 
+/**
+ * Common interface for all embedding providers (local ONNX, OpenAI, Voyage).
+ */
+export interface IEmbeddingProvider {
+  isAvailable(): boolean;
+  load(): Promise<boolean>;
+  encode(text: string): Promise<Float32Array>;
+  encodeQuery(text: string): Promise<Float32Array>;
+  get dimension(): number;
+}
+
 export interface LocalModelDef {
   id: string;
   name: string;
@@ -19,7 +30,7 @@ export const LOCAL_MODELS: LocalModelDef[] = [
     sizeLabel: "130 MB",
     dimensions: 384,
     files: [
-      { name: "model.onnx", url: "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main/onnx/model.onnx", sizeBytes: 120_000_000 },
+      { name: "model.onnx", url: "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main/onnx/model_qint8_avx512_vnni.onnx", sizeBytes: 118_000_000 },
       { name: "tokenizer.json", url: "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main/tokenizer.json" },
     ],
   },
@@ -48,26 +59,44 @@ export interface EmbeddingConfig {
 }
 
 /**
- * Load onnxruntime-node at runtime without esbuild trying to resolve it.
- * The eval() hides the require/import from static analysis.
+ * Load onnxruntime-node at runtime, bypassing any Module._resolveFilename shims.
+ * voice.ts redirects onnxruntime-node → onnxruntime-web globally, which breaks
+ * embedding model loading (web version can't parse standard ONNX protobuf).
+ * We temporarily restore the original resolver to load the real native module.
  */
 async function loadOrt(): Promise<any> {
   try {
-    // In CJS context (Electron), use require
-    if (typeof require !== "undefined") {
-      return eval('require')("onnxruntime-node");
+    const Module = eval('require')("module");
+    const currentResolve = Module._resolveFilename;
+    // Check if _resolveFilename has been patched (voice.ts redirect)
+    // Temporarily restore original if patched
+    const origResolve = (currentResolve as any).__original || currentResolve;
+    const wasPatched = currentResolve !== origResolve;
+    if (wasPatched) Module._resolveFilename = origResolve;
+    try {
+      const m = eval('require')("onnxruntime-node");
+      if (m?.InferenceSession) {
+        console.log("[embedding] loaded: onnxruntime-node (native)");
+        return m;
+      }
+    } finally {
+      if (wasPatched) Module._resolveFilename = currentResolve;
     }
-    // In ESM context
-    const m = await eval('import("onnxruntime-node")');
-    return m;
-  } catch {
-    return null;
+  } catch (e) {
+    console.warn("[embedding] onnxruntime-node failed:", (e as Error).message);
   }
+  // Fallback: onnxruntime-web
+  try {
+    const m = eval('require')("onnxruntime-web");
+    if (m?.InferenceSession) { console.log("[embedding] loaded: onnxruntime-web"); return m; }
+  } catch { /* */ }
+  console.warn("[embedding] loadOrt: no runtime found");
+  return null;
 }
 
 const EMBEDDING_DIM = 384;
 
-export class EmbeddingModel {
+export class EmbeddingModel implements IEmbeddingProvider {
   private session: any = null;
   private tokenizer: any = null;
   private ort: any = null;
@@ -221,19 +250,36 @@ class SimpleTokenizer {
   private unkId: number;
   private clsId: number;
   private sepId: number;
+  private isSentencePiece = false;
 
   constructor(tokenizerJson: any) {
     this.vocab = new Map<string, number>();
     const model = tokenizerJson.model;
-    if (model?.vocab) {
+
+    if (model?.type === "Unigram" && Array.isArray(model.vocab)) {
+      this.isSentencePiece = true;
+      // SentencePiece/Unigram format: vocab is array of [token, score]
+      for (let i = 0; i < model.vocab.length; i++) {
+        const entry = model.vocab[i];
+        this.vocab.set(entry[0], i);
+      }
+      // Also add added_tokens (special tokens with explicit IDs)
+      if (Array.isArray(tokenizerJson.added_tokens)) {
+        for (const t of tokenizerJson.added_tokens) {
+          this.vocab.set(t.content, t.id);
+        }
+      }
+    } else if (model?.vocab && typeof model.vocab === "object" && !Array.isArray(model.vocab)) {
       // WordPiece format: vocab is an object { token: id }
       for (const [token, id] of Object.entries(model.vocab)) {
         this.vocab.set(token, id as number);
       }
     }
-    this.unkId = this.vocab.get("[UNK]") ?? 0;
-    this.clsId = this.vocab.get("[CLS]") ?? 101;
-    this.sepId = this.vocab.get("[SEP]") ?? 102;
+
+    // SentencePiece uses <s>, </s>, <unk>; WordPiece uses [CLS], [SEP], [UNK]
+    this.unkId = this.vocab.get("<unk>") ?? this.vocab.get("[UNK]") ?? 0;
+    this.clsId = this.vocab.get("<s>") ?? this.vocab.get("[CLS]") ?? 0;
+    this.sepId = this.vocab.get("</s>") ?? this.vocab.get("[SEP]") ?? 2;
   }
 
   encode(text: string, maxLen: number): { inputIds: number[]; attentionMask: number[] } {
@@ -243,9 +289,10 @@ class SimpleTokenizer {
 
     const tokens: number[] = [this.clsId];
 
-    for (const word of words) {
+    for (let wi = 0; wi < words.length; wi++) {
+      const word = words[wi];
       if (tokens.length >= maxLen - 1) break;
-      const wordPieces = this.tokenizeWord(word);
+      const wordPieces = this.tokenizeWord(word, wi === 0);
       for (const piece of wordPieces) {
         if (tokens.length >= maxLen - 1) break;
         tokens.push(piece);
@@ -258,19 +305,31 @@ class SimpleTokenizer {
     return { inputIds: tokens, attentionMask };
   }
 
-  private tokenizeWord(word: string): number[] {
-    // Try whole word first
-    const directId = this.vocab.get(word);
-    if (directId !== undefined) return [directId];
+  private tokenizeWord(word: string, isFirstWord: boolean): number[] {
+    // SentencePiece: try with ▁ prefix for word start
+    if (this.isSentencePiece) {
+      const spWord = isFirstWord ? "\u2581" + word : word;
+      const directId = this.vocab.get(spWord);
+      if (directId !== undefined) return [directId];
+    } else {
+      const directId = this.vocab.get(word);
+      if (directId !== undefined) return [directId];
+    }
 
-    // WordPiece: greedily match longest subwords
+    // Greedily match longest subwords
     const pieces: number[] = [];
     let start = 0;
-    while (start < word.length) {
-      let end = word.length;
+    const prefixedWord = (this.isSentencePiece && isFirstWord) ? "\u2581" + word : word;
+    while (start < prefixedWord.length) {
+      let end = prefixedWord.length;
       let found = false;
       while (start < end) {
-        const sub = start === 0 ? word.slice(start, end) : "##" + word.slice(start, end);
+        let sub: string;
+        if (this.isSentencePiece) {
+          sub = prefixedWord.slice(start, end);
+        } else {
+          sub = start === 0 ? word.slice(start, end) : "##" + word.slice(start, end);
+        }
         const id = this.vocab.get(sub);
         if (id !== undefined) {
           pieces.push(id);

@@ -68,7 +68,8 @@ export { FtsService } from "./services/fts.service.js";
 export { IndexService, INDEX_VERSION } from "./services/index.service.js";
 export { InstallService } from "./services/install.service.js";
 export { EmbeddingModel, cosineSimilarity, textHash, LOCAL_MODELS } from "./services/embedding.service.js";
-export type { LocalModelDef, EmbeddingMode, OnlineProvider, EmbeddingConfig } from "./services/embedding.service.js";
+export type { IEmbeddingProvider, LocalModelDef, EmbeddingMode, OnlineProvider, EmbeddingConfig } from "./services/embedding.service.js";
+export { OnlineEmbeddingProvider } from "./services/online-embedding.service.js";
 export { FindService } from "./services/find.service.js";
 export type { FindResult } from "./services/find.service.js";
 
@@ -83,6 +84,12 @@ export { drawingToText, textToDrawing, drawingToPlain } from "./converters/drawi
 export { splitMarkdownByHeadings } from "./converters/markdown-splitter.js";
 export { ideaToPlain } from "./converters/idea.js";
 export type { SplitResult, SplitSection } from "./converters/markdown-splitter.js";
+
+// Knowledge Graph
+export type { KGNodeRow, KGEdgeRow, KGNode, KGEdge, KnowledgeGraphData, KGViewSettings } from "./knowledge-graph-types.js";
+export { emptyKGViewSettings } from "./knowledge-graph-types.js";
+export { KnowledgeGraphService } from "./services/knowledge-graph.service.js";
+export type { ProgressCallback as KGProgressCallback, ExternalNode as KGExternalNode } from "./services/knowledge-graph.service.js";
 
 // Hierarchy
 export { validateHierarchy, canBeRoot, canContainChild, CONTAINER_TYPES } from "./hierarchy.js";

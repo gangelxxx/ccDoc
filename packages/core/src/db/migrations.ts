@@ -185,6 +185,140 @@ const PROJECT_MIGRATIONS = [
       UPDATE sections SET type = 'drawing' WHERE type = 'excalidraw';
     `,
   },
+  {
+    version: 7,
+    sql: `
+      CREATE TABLE IF NOT EXISTS kg_nodes (
+        id          TEXT PRIMARY KEY,
+        section_id  TEXT NOT NULL REFERENCES sections(id) ON DELETE CASCADE,
+        node_type   TEXT NOT NULL CHECK (node_type IN ('idea', 'doc', 'section')),
+        label       TEXT NOT NULL,
+        summary     TEXT,
+        created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(section_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_kg_nodes_section ON kg_nodes(section_id);
+      CREATE INDEX IF NOT EXISTS idx_kg_nodes_type ON kg_nodes(node_type);
+
+      CREATE TABLE IF NOT EXISTS kg_edges (
+        id          TEXT PRIMARY KEY,
+        source_id   TEXT NOT NULL REFERENCES kg_nodes(id) ON DELETE CASCADE,
+        target_id   TEXT NOT NULL REFERENCES kg_nodes(id) ON DELETE CASCADE,
+        edge_type   TEXT NOT NULL CHECK (edge_type IN ('semantic_similar', 'parent_child')),
+        weight      REAL NOT NULL DEFAULT 1.0 CHECK (weight >= 0 AND weight <= 1),
+        created_by  TEXT NOT NULL DEFAULT 'system' CHECK (created_by IN ('system', 'assistant', 'user')),
+        created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(source_id, target_id, edge_type)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_kg_edges_source ON kg_edges(source_id);
+      CREATE INDEX IF NOT EXISTS idx_kg_edges_target ON kg_edges(target_id);
+      CREATE INDEX IF NOT EXISTS idx_kg_edges_type ON kg_edges(edge_type);
+
+      CREATE VIEW IF NOT EXISTS v_kg_graph AS
+      SELECT
+        n.*,
+        (SELECT COUNT(*) FROM kg_edges e
+         WHERE e.source_id = n.id OR e.target_id = n.id) AS degree
+      FROM kg_nodes n;
+    `,
+  },
+  {
+    version: 8,
+    sql: `
+      -- Recreate KG tables with message_id support (one node per idea message)
+      DROP VIEW IF EXISTS v_kg_graph;
+      DROP TABLE IF EXISTS kg_edges;
+      DROP TABLE IF EXISTS kg_nodes;
+
+      CREATE TABLE kg_nodes (
+        id          TEXT PRIMARY KEY,
+        section_id  TEXT NOT NULL REFERENCES sections(id) ON DELETE CASCADE,
+        message_id  TEXT NOT NULL DEFAULT '',
+        node_type   TEXT NOT NULL CHECK (node_type IN ('idea', 'doc', 'section')),
+        label       TEXT NOT NULL,
+        summary     TEXT,
+        created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(section_id, message_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_kg_nodes_section ON kg_nodes(section_id);
+      CREATE INDEX IF NOT EXISTS idx_kg_nodes_type ON kg_nodes(node_type);
+      CREATE INDEX IF NOT EXISTS idx_kg_nodes_message ON kg_nodes(section_id, message_id);
+
+      CREATE TABLE kg_edges (
+        id          TEXT PRIMARY KEY,
+        source_id   TEXT NOT NULL REFERENCES kg_nodes(id) ON DELETE CASCADE,
+        target_id   TEXT NOT NULL REFERENCES kg_nodes(id) ON DELETE CASCADE,
+        edge_type   TEXT NOT NULL CHECK (edge_type IN ('semantic_similar', 'parent_child')),
+        weight      REAL NOT NULL DEFAULT 1.0 CHECK (weight >= 0 AND weight <= 1),
+        created_by  TEXT NOT NULL DEFAULT 'system' CHECK (created_by IN ('system', 'assistant', 'user')),
+        created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(source_id, target_id, edge_type)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_kg_edges_source ON kg_edges(source_id);
+      CREATE INDEX IF NOT EXISTS idx_kg_edges_target ON kg_edges(target_id);
+      CREATE INDEX IF NOT EXISTS idx_kg_edges_type ON kg_edges(edge_type);
+
+      CREATE VIEW v_kg_graph AS
+      SELECT
+        n.*,
+        (SELECT COUNT(*) FROM kg_edges e
+         WHERE e.source_id = n.id OR e.target_id = n.id) AS degree
+      FROM kg_nodes n;
+    `,
+  },
+  {
+    version: 9,
+    sql: `
+      -- Recreate KG tables: add 'session' node_type, drop FK on section_id
+      DROP VIEW IF EXISTS v_kg_graph;
+      DROP TABLE IF EXISTS kg_edges;
+      DROP TABLE IF EXISTS kg_nodes;
+
+      CREATE TABLE kg_nodes (
+        id          TEXT PRIMARY KEY,
+        section_id  TEXT NOT NULL,
+        message_id  TEXT NOT NULL DEFAULT '',
+        node_type   TEXT NOT NULL CHECK (node_type IN ('idea', 'doc', 'section', 'session')),
+        label       TEXT NOT NULL,
+        summary     TEXT,
+        created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(section_id, message_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_kg_nodes_section ON kg_nodes(section_id);
+      CREATE INDEX IF NOT EXISTS idx_kg_nodes_type ON kg_nodes(node_type);
+      CREATE INDEX IF NOT EXISTS idx_kg_nodes_message ON kg_nodes(section_id, message_id);
+
+      CREATE TABLE kg_edges (
+        id          TEXT PRIMARY KEY,
+        source_id   TEXT NOT NULL REFERENCES kg_nodes(id) ON DELETE CASCADE,
+        target_id   TEXT NOT NULL REFERENCES kg_nodes(id) ON DELETE CASCADE,
+        edge_type   TEXT NOT NULL CHECK (edge_type IN ('semantic_similar', 'parent_child')),
+        weight      REAL NOT NULL DEFAULT 1.0 CHECK (weight >= 0 AND weight <= 1),
+        created_by  TEXT NOT NULL DEFAULT 'system' CHECK (created_by IN ('system', 'assistant', 'user')),
+        created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(source_id, target_id, edge_type)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_kg_edges_source ON kg_edges(source_id);
+      CREATE INDEX IF NOT EXISTS idx_kg_edges_target ON kg_edges(target_id);
+      CREATE INDEX IF NOT EXISTS idx_kg_edges_type ON kg_edges(edge_type);
+
+      CREATE VIEW v_kg_graph AS
+      SELECT
+        n.*,
+        (SELECT COUNT(*) FROM kg_edges e
+         WHERE e.source_id = n.id OR e.target_id = n.id) AS degree
+      FROM kg_nodes n;
+    `,
+  },
 ];
 
 async function getSchemaVersion(db: Client): Promise<number> {

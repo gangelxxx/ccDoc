@@ -9,8 +9,6 @@ import {
   shouldCompress,
   shouldHardStop,
   isReadOnlyTool,
-  isWriterTool,
-  isMutatingTool,
   isPlanModeTool,
   paginateText,
   CONTEXT_LIMIT,
@@ -20,13 +18,9 @@ import {
   TOOL_RESULT_LIMIT,
   DEFAULT_CONTENT_LIMIT,
   MAX_CONTENT_LIMIT,
-  SUB_AGENT_MAX_ROUNDS_HAIKU,
-  SUB_AGENT_MAX_ROUNDS_DEFAULT,
-  getSubAgentMaxRounds,
   DEFAULT_MODEL,
   CAPABLE_MODEL,
   READ_ONLY_TOOLS,
-  WRITER_TOOLS,
   PLAN_TOOLS,
 } from "../renderer/llm-utils";
 import type { TreeNode } from "../renderer/llm-utils";
@@ -48,27 +42,11 @@ describe("LLM constants", () => {
 
   it("ABSOLUTE_MAX_ROUNDS prevents infinite loops", () => {
     expect(ABSOLUTE_MAX_ROUNDS).toBeGreaterThanOrEqual(10);
-    expect(ABSOLUTE_MAX_ROUNDS).toBeLessThanOrEqual(100);
+    expect(ABSOLUTE_MAX_ROUNDS).toBeLessThanOrEqual(300);
   });
 
   it("TOOL_RESULT_LIMIT is 6000 chars (~1500 tokens)", () => {
     expect(TOOL_RESULT_LIMIT).toBe(6000);
-  });
-
-  it("SUB_AGENT_MAX_ROUNDS are less than main loop max", () => {
-    expect(SUB_AGENT_MAX_ROUNDS_HAIKU).toBeLessThan(ABSOLUTE_MAX_ROUNDS);
-    expect(SUB_AGENT_MAX_ROUNDS_DEFAULT).toBeLessThan(ABSOLUTE_MAX_ROUNDS);
-  });
-
-  it("Haiku gets fewer rounds than Sonnet/Opus", () => {
-    expect(SUB_AGENT_MAX_ROUNDS_HAIKU).toBeLessThan(SUB_AGENT_MAX_ROUNDS_DEFAULT);
-  });
-
-  it("getSubAgentMaxRounds returns correct limits by model", () => {
-    expect(getSubAgentMaxRounds("claude-haiku-4-5-20251001")).toBe(SUB_AGENT_MAX_ROUNDS_HAIKU);
-    expect(getSubAgentMaxRounds("claude-sonnet-4-6")).toBe(SUB_AGENT_MAX_ROUNDS_DEFAULT);
-    expect(getSubAgentMaxRounds("claude-opus-4-6")).toBe(SUB_AGENT_MAX_ROUNDS_DEFAULT);
-    expect(getSubAgentMaxRounds("some-unknown-model")).toBe(SUB_AGENT_MAX_ROUNDS_DEFAULT);
   });
 
   it("DEFAULT_MODEL is haiku (cheap)", () => {
@@ -83,12 +61,12 @@ describe("LLM constants", () => {
 // ─── estimateInputTokens ────────────────────────────────────────
 
 describe("estimateInputTokens", () => {
-  it("estimates ~4 chars per token for plain text", () => {
+  it("estimates ~2.7 chars per token for plain text", () => {
     const system = "You are a helpful assistant."; // 28 chars
-    const messages = [{ role: "user", content: "Hello world" }]; // 11 chars
+    const messages = [{ role: "user", content: "Hello world" }]; // 11 chars + 20 overhead
     const tokens = estimateInputTokens(system, messages);
-    // (28 + 11) / 4 = 9.75 → rounded to 10
-    expect(tokens).toBe(10);
+    // (28 + 11 + 20) / 2.7 = 21.85 → 22
+    expect(tokens).toBe(22);
   });
 
   it("handles empty system and messages", () => {
@@ -97,10 +75,11 @@ describe("estimateInputTokens", () => {
 
   it("handles string content in messages", () => {
     const messages = [
-      { role: "user", content: "1234" },   // 4 chars
-      { role: "assistant", content: "5678" }, // 4 chars
+      { role: "user", content: "1234" },   // 4 chars + 20 overhead
+      { role: "assistant", content: "5678" }, // 4 chars + 20 overhead
     ];
-    expect(estimateInputTokens("", messages)).toBe(2); // 8 / 4 = 2
+    // (4+20 + 4+20) / 2.7 = 17.78 → 18
+    expect(estimateInputTokens("", messages)).toBe(18);
   });
 
   it("handles array content with text blocks", () => {
@@ -113,7 +92,8 @@ describe("estimateInputTokens", () => {
         ],
       },
     ];
-    expect(estimateInputTokens("", messages)).toBe(3); // 10 / 4 = 2.5 → 3
+    // (5 + 5 + 20) / 2.7 = 11.11 → 11
+    expect(estimateInputTokens("", messages)).toBe(11);
   });
 
   it("handles array content with tool_result blocks", () => {
@@ -125,7 +105,8 @@ describe("estimateInputTokens", () => {
         ],
       },
     ];
-    expect(estimateInputTokens("", messages)).toBe(5); // 19 / 4 = 4.75 → 5
+    // (19 + 20) / 2.7 = 14.44 → 14
+    expect(estimateInputTokens("", messages)).toBe(14);
   });
 
   it("ignores image blocks (base64 not counted by char length)", () => {
@@ -138,8 +119,8 @@ describe("estimateInputTokens", () => {
         ],
       },
     ];
-    // Only text block counted
-    expect(estimateInputTokens("", messages)).toBe(3); // 13 / 4 = 3.25 → 3
+    // Only text block counted: (13 + 20) / 2.7 = 12.22 → 12
+    expect(estimateInputTokens("", messages)).toBe(12);
   });
 
   it("combines system + all messages", () => {
@@ -148,7 +129,8 @@ describe("estimateInputTokens", () => {
       { role: "user", content: "B".repeat(200) },     // 200 chars
       { role: "assistant", content: "C".repeat(100) }, // 100 chars
     ];
-    expect(estimateInputTokens(system, messages)).toBe(100); // 400 / 4 = 100
+    // (100 + 200+20 + 100+20) / 2.7 = 162.96 → 163
+    expect(estimateInputTokens(system, messages)).toBe(163);
   });
 
   it("handles tool_result with non-string content (JSON)", () => {
@@ -160,8 +142,9 @@ describe("estimateInputTokens", () => {
         ],
       },
     ];
-    // Non-string content is ignored (only typeof === "string" counted)
-    expect(estimateInputTokens("", messages)).toBe(0);
+    // Non-string content is ignored, but 20 chars per-message overhead remains
+    // 20 / 2.7 = 7.41 → 7
+    expect(estimateInputTokens("", messages)).toBe(7);
   });
 
   it("handles missing text field gracefully", () => {
@@ -173,7 +156,8 @@ describe("estimateInputTokens", () => {
         ],
       },
     ];
-    expect(estimateInputTokens("", messages)).toBe(0);
+    // 20 chars per-message overhead: 20 / 2.7 = 7.41 → 7
+    expect(estimateInputTokens("", messages)).toBe(7);
   });
 
   it("realistic: typical conversation fits in context", () => {
@@ -189,8 +173,8 @@ describe("estimateInputTokens", () => {
       },
     ];
     const tokens = estimateInputTokens(system, messages);
-    // (4000 + 2000 + 8000 + 6000) / 4 = 5000 tokens
-    expect(tokens).toBe(5000);
+    // (4000 + 2000+20 + 8000+20 + 6000+20) / 2.7 = 7430
+    expect(tokens).toBe(7430);
     expect(tokens).toBeLessThan(CONTEXT_LIMIT);
   });
 });
@@ -534,7 +518,6 @@ describe("Tool sets", () => {
     it("contains history tools", () => {
       expect(READ_ONLY_TOOLS.has("get_history")).toBe(true);
       expect(READ_ONLY_TOOLS.has("list_backups")).toBe(true);
-      expect(READ_ONLY_TOOLS.has("get_section_at_version")).toBe(true);
     });
 
     it("does NOT contain write tools", () => {
@@ -547,24 +530,6 @@ describe("Tool sets", () => {
       for (const t of ["delegate_research", "delegate_writing", "delegate_review", "delegate_planning"]) {
         expect(READ_ONLY_TOOLS.has(t)).toBe(false);
       }
-    });
-  });
-
-  describe("WRITER_TOOLS", () => {
-    it("is a superset of READ_ONLY_TOOLS", () => {
-      for (const t of READ_ONLY_TOOLS) {
-        expect(WRITER_TOOLS.has(t)).toBe(true);
-      }
-    });
-
-    it("adds write tools on top", () => {
-      for (const t of ["create_section", "update_section", "delete_section", "move_section", "update_icon"]) {
-        expect(WRITER_TOOLS.has(t)).toBe(true);
-      }
-    });
-
-    it("does NOT contain delegate tools", () => {
-      expect(WRITER_TOOLS.has("delegate_research")).toBe(false);
     });
   });
 
@@ -585,11 +550,6 @@ describe("Tool sets", () => {
       }
     });
 
-    it("is a subset of WRITER_TOOLS", () => {
-      for (const t of PLAN_TOOLS) {
-        expect(WRITER_TOOLS.has(t)).toBe(true);
-      }
-    });
   });
 });
 
@@ -610,26 +570,6 @@ describe("isReadOnlyTool", () => {
   });
 });
 
-describe("isMutatingTool", () => {
-  it("returns true for write-only tools", () => {
-    expect(isMutatingTool("create_section")).toBe(true);
-    expect(isMutatingTool("update_section")).toBe(true);
-    expect(isMutatingTool("delete_section")).toBe(true);
-    expect(isMutatingTool("move_section")).toBe(true);
-    expect(isMutatingTool("update_icon")).toBe(true);
-  });
-
-  it("returns false for read-only tools", () => {
-    expect(isMutatingTool("get_tree")).toBe(false);
-    expect(isMutatingTool("search")).toBe(false);
-    expect(isMutatingTool("find_symbols")).toBe(false);
-  });
-
-  it("returns false for unknown tools", () => {
-    expect(isMutatingTool("random")).toBe(false);
-  });
-});
-
 describe("isPlanModeTool", () => {
   it("allows read + create_section only", () => {
     expect(isPlanModeTool("get_tree")).toBe(true);
@@ -646,22 +586,13 @@ describe("Tool execution order invariants", () => {
     const readTools = ["get_tree", "get_section", "search", "get_project_tree", "find_symbols"];
     for (const t of readTools) {
       expect(isReadOnlyTool(t)).toBe(true);
-      expect(isMutatingTool(t)).toBe(false);
     }
   });
 
-  it("mutating tools MUST run sequentially", () => {
+  it("mutating tools are NOT read-only", () => {
     const writeTools = ["create_section", "update_section", "delete_section", "move_section"];
     for (const t of writeTools) {
-      expect(isMutatingTool(t)).toBe(true);
-    }
-  });
-
-  it("sub-agents can only use their allowed tool sets", () => {
-    // research/critic/planner → READ_ONLY_TOOLS only
-    // writer → WRITER_TOOLS
-    for (const t of READ_ONLY_TOOLS) {
-      expect(WRITER_TOOLS.has(t)).toBe(true); // writer can do everything reader can
+      expect(isReadOnlyTool(t)).toBe(false);
     }
   });
 });
@@ -679,8 +610,8 @@ describe("Token budget", () => {
       });
     }
     const tokens = estimateInputTokens(systemPrompt, toolResults);
-    // 4000 + 10 * 6000 = 64000 chars / 4 = 16000 tokens
-    expect(tokens).toBe(16000);
+    // (4000 + 10 * (6000 + 20)) / 2.7 = 23778
+    expect(tokens).toBe(23778);
     expect(tokens).toBeLessThan(CONTEXT_LIMIT);
   });
 
