@@ -1,10 +1,15 @@
 import { resolve } from "path";
-import { defineConfig, externalizeDepsPlugin } from "electron-vite";
+import { defineConfig, externalizeDepsPlugin, bytecodePlugin } from "electron-vite";
 import react from "@vitejs/plugin-react";
+
+const fast = process.env.FAST_BUILD === "1";
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    plugins: [
+      externalizeDepsPlugin(),
+      ...(fast ? [bytecodePlugin()] : []),
+    ],
     build: {
       outDir: "dist/main",
       rollupOptions: {
@@ -14,7 +19,10 @@ export default defineConfig({
     },
   },
   preload: {
-    plugins: [externalizeDepsPlugin()],
+    plugins: [
+      externalizeDepsPlugin(),
+      ...(fast ? [bytecodePlugin()] : []),
+    ],
     build: {
       outDir: "dist/preload",
       rollupOptions: {

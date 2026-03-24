@@ -1,6 +1,6 @@
 {
   "name": "@ccdoc/desktop",
-  "version": "0.1.12",
+  "version": "0.1.0",
   "private": true,
   "main": "dist/main/index.js",
   "scripts": {
@@ -63,7 +63,7 @@
     "win": {
       "target": [
         "nsis",
-        "portable"
+        "dir"
       ],
       "icon": "build/icon.ico"
     },
@@ -77,7 +77,7 @@
     "mac": {
       "target": [
         "dmg",
-        "zip"
+        "dir"
       ],
       "category": "public.app-category.developer-tools",
       "icon": "build/icon.icns"
@@ -85,7 +85,7 @@
     "linux": {
       "target": [
         "AppImage",
-        "deb"
+        "dir"
       ],
       "category": "Development",
       "icon": "build/icons"

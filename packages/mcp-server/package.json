@@ -1,8 +1,8 @@
 {
   "name": "@ccdoc/mcp-server",
-  "version": "0.1.12",
+  "version": "0.2.0",
   "private": true,
-  "bin": {
+    "bin": {
     "ccdoc-mcp": "dist/index.js",
     "ccdoc-install": "dist/install.js"
   },
