@@ -1,6 +1,6 @@
 {
   "name": "@ccdoc/desktop",
-  "version": "0.1.13",
+  "version": "0.1.0",
   "private": true,
   "main": "dist/main/index.js",
   "scripts": {
@@ -91,7 +91,8 @@
       "icon": "build/icons"
     },
     "extraResources": [],
-    "asar": true
+    "asar": true,
+    "publish": null
   },
   "devDependencies": {
     "@tiptap/extension-color": "^2.27.2",
