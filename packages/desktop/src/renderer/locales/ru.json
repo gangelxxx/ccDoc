@@ -335,6 +335,9 @@
   "toolbarTable": "Таблица",
   "toolbarImage": "Изображение",
   "toolbarCopyDoc": "Копировать документ",
+  "toolbarExportPdf": "Экспорт в PDF",
+  "pdfExported": "Экспортировано в PDF",
+  "pdfExportFailed": "Ошибка экспорта PDF",
   "toolbarApply": "Применить",
 
   "installPluginTitle": "Установка плагина Claude Code",

@@ -852,6 +852,109 @@ export function registerIoIpc(): void {
     return true;
   });
 
+  ipcMain.handle("export:pdf", async (_e, token: string, sectionId: string, defaultName: string) => {
+    const win = getMainWindow();
+    if (!win) return false;
+
+    const safeName = defaultName.replace(/[<>:"/\\|?*]/g, "_");
+    const result = await dialog.showSaveDialog(win, {
+      title: "Export to PDF",
+      defaultPath: `${safeName}.pdf`,
+      filters: [{ name: "PDF", extensions: ["pdf"] }],
+    });
+    if (result.canceled || !result.filePath) return false;
+
+    // Build full markdown (section + all children recursively)
+    const { sections } = await getProjectServices(token);
+    const markdown = await sections.buildSectionMarkdown(sectionId);
+
+    // Extract TOC from markdown headings
+    const tocEntries: { level: number; text: string; id: string }[] = [];
+    const lines = markdown.split("\n");
+    for (const line of lines) {
+      const m = line.match(/^(#{1,6})\s+(.+)$/);
+      if (!m) continue;
+      const level = m[1].length;
+      const text = m[2].replace(/\*\*|__|\*|_|`/g, "").trim();
+      const id = "h-" + text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "");
+      tocEntries.push({ level, text, id });
+    }
+
+    // Build TOC HTML
+    let tocHtml = "";
+    if (tocEntries.length > 1) {
+      const minLevel = Math.min(...tocEntries.map(e => e.level));
+      tocHtml = `<nav class="toc"><h2 class="toc-title">Содержание</h2><ul>`;
+      for (const entry of tocEntries) {
+        const indent = entry.level - minLevel;
+        tocHtml += `<li style="margin-left:${indent * 20}px"><a href="#${entry.id}">${entry.text}</a></li>`;
+      }
+      tocHtml += `</ul></nav>`;
+    }
+
+    // Convert markdown → HTML, injecting ids into headings
+    const { Marked } = await import("marked");
+    const headingIndex = { i: 0 };
+    const md = new Marked();
+    md.use({
+      renderer: {
+        heading({ text, depth }: { text: string; depth: number }) {
+          const entry = tocEntries[headingIndex.i++];
+          const id = entry ? entry.id : "";
+          return `<h${depth} id="${id}">${text}</h${depth}>\n`;
+        },
+      },
+    });
+    const bodyHtml = await md.parse(markdown, { gfm: true, breaks: false });
+
+    const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+  body { font-family: "Segoe UI", system-ui, -apple-system, sans-serif; color: #1a1a18;
+         max-width: 720px; margin: 0 auto; padding: 40px 32px; line-height: 1.7; font-size: 15px; }
+  h1, h2, h3, h4, h5, h6 { break-after: avoid; page-break-after: avoid; }
+  h1 { font-size: 28px; font-weight: 700; margin: 32px 0 8px; line-height: 1.25; }
+  h2 { font-size: 22px; font-weight: 600; margin: 28px 0 6px; break-before: page; page-break-before: always; }
+  h3 { font-size: 17px; font-weight: 600; margin: 22px 0 4px; }
+  h4, h5, h6 { font-size: 15px; font-weight: 600; margin: 18px 0 4px; }
+  h2:first-child, body > h2:first-of-type { break-before: avoid; page-break-before: avoid; }
+  p { margin: 0 0 12px; }
+  a { color: #0D7C66; text-decoration: none; }
+  strong { font-weight: 600; }
+  code { background: #f3f1ed; padding: 2px 5px; border-radius: 3px; font-family: "JetBrains Mono", "Consolas", monospace; font-size: 13px; }
+  pre { background: #f3f1ed; padding: 16px 18px; border-radius: 8px; overflow-x: auto; margin: 12px 0; }
+  pre code { background: none; padding: 0; font-size: 13px; }
+  blockquote { border-left: 3px solid #0D7C66; margin: 12px 0; padding: 4px 16px; color: #555; }
+  ul, ol { padding-left: 24px; margin: 8px 0; }
+  li { margin: 4px 0; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+  th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
+  th { background: #f5f5f5; font-weight: 600; text-transform: uppercase; font-size: 12px; }
+  hr { border: none; border-top: 1px solid #ddd; margin: 24px 0; }
+  img { max-width: 100%; height: auto; }
+  .toc { break-after: page; page-break-after: always; }
+  .toc-title { font-size: 22px; font-weight: 600; margin: 0 0 16px; }
+  .toc ul { list-style: none; padding: 0; }
+  .toc li { padding: 4px 0; font-size: 14px; line-height: 1.6; }
+  .toc a { color: #1a1a18; border-bottom: 1px dotted #ccc; }
+</style></head><body>${tocHtml}${bodyHtml}</body></html>`;
+
+    // Render in hidden window and print to PDF
+    const { BrowserWindow: BW } = await import("electron");
+    const printWin = new BW({ show: false, width: 800, height: 600, webPreferences: { offscreen: true } });
+    try {
+      await printWin.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
+      const pdf = await printWin.webContents.printToPDF({
+        printBackground: true,
+        margins: { marginType: "default" },
+      });
+      const { writeFileSync } = await import("fs");
+      writeFileSync(result.filePath, pdf);
+      return true;
+    } finally {
+      printWin.destroy();
+    }
+  });
+
   // Import markdown
   ipcMain.handle("import:markdown", async (_e, token: string, folderId: string) => {
     const result = await dialog.showOpenDialog(getMainWindow()!, {

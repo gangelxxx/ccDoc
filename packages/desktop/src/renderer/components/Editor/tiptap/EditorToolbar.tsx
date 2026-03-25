@@ -7,7 +7,7 @@ import {
   List, ListOrdered, ListChecks, Quote, SquareCode, Table2, Minus,
   Link2, Unlink, Underline, Highlighter,
   AlignLeft, AlignCenter, AlignRight,
-  Image, Undo2, Redo2, ClipboardCopy,
+  Image, Undo2, Redo2, ClipboardCopy, FileDown,
 } from "lucide-react";
 import { VoiceButton } from "../../VoiceButton/VoiceButton.js";
 
@@ -59,6 +59,19 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
     }
   }, [t]);
 
+  const exportPdf = useCallback(async () => {
+    const store = useAppStore.getState();
+    const section = store.currentSection;
+    const project = store.currentProject;
+    if (!section || !project) return;
+    try {
+      const ok = await window.api.exportPdf(project.token, section.id, section.title);
+      if (ok) store.addToast("success", t("pdfExported"));
+    } catch (e: any) {
+      store.addToast("error", t("pdfExportFailed"), e.message);
+    }
+  }, [t]);
+
   if (!editor) return null;
 
   return (
@@ -98,6 +111,7 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
         <MenuBtn onClick={insertImage} icon={Image} title={t("toolbarImage")} />
         <span className="editor-menu-sep" />
         <MenuBtn onClick={copyDocument} icon={ClipboardCopy} title={t("toolbarCopyDoc")} />
+        <MenuBtn onClick={exportPdf} icon={FileDown} title={t("toolbarExportPdf")} />
         <span className="editor-menu-sep" />
         <VoiceButton
           onTranscript={(text) => editor.commands.insertContent(text)}

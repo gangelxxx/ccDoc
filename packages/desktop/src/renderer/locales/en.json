@@ -335,6 +335,9 @@
   "toolbarTable": "Table",
   "toolbarImage": "Image",
   "toolbarCopyDoc": "Copy document",
+  "toolbarExportPdf": "Export to PDF",
+  "pdfExported": "Exported to PDF",
+  "pdfExportFailed": "PDF export failed",
   "toolbarApply": "Apply",
 
   "installPluginTitle": "Install Claude Code Plugin",

@@ -70,6 +70,8 @@
 - Text selection is now preserved visually when you click away from the editor (shown as a highlight). Clearing the selection removes the highlight.
 - Editor selection is cleared when switching between sections.
 - Editor view reference is now tracked in the store.
+- New "Export to PDF" button in the editor toolbar. Exports the current section (with all children) to a styled PDF with auto-generated table of contents and page breaks per H2.
+- Added `@media print` styles that hide UI chrome and remove scroll constraints, so browser print also works cleanly.
 
 ### Developer Mode
 
@@ -83,3 +85,4 @@
 - `getMainWindow` is now exported from services for use in IPC handlers.
 - Removed hardcoded window icon path (was failing on some setups).
 - New tests: embedding repo, embedding service, history service, sections repo, sections service, online embedding.
+- Package versions reset to `0.1.0` (core, desktop, source-tools); mcp-server bumped to `0.2.0`.

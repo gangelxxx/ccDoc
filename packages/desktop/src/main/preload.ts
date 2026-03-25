@@ -72,6 +72,7 @@ const api = {
   // Export
   exportMarkdown: (token: string) => ipcRenderer.invoke("export:markdown", token),
   exportMarkdownTo: (token: string) => ipcRenderer.invoke("export:markdown-to", token),
+  exportPdf: (token: string, sectionId: string, defaultName: string) => ipcRenderer.invoke("export:pdf", token, sectionId, defaultName) as Promise<boolean>,
 
   // Import
   importMarkdown: (token: string, folderId: string) => ipcRenderer.invoke("import:markdown", token, folderId),

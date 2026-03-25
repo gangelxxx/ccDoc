@@ -8266,3 +8266,68 @@ body {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
 }
+
+/* Print / PDF export */
+@media print {
+  /* Hide all UI chrome */
+  .sidebar,
+  .resize-handle,
+  .topbar,
+  .editor-toolbar,
+  .editor-sticky-top,
+  .editor-search-bar,
+  .status-bar,
+  .llm-panel,
+  .child-sections,
+  .voice-btn,
+  .section-nav-bar,
+  .overscroll-pull,
+  .external-change-banner,
+  .content-width-btn-wrap,
+  .section-meta {
+    display: none !important;
+  }
+
+  /* Remove all height/overflow constraints so full content renders */
+  body,
+  #root,
+  .app-root,
+  .app-layout,
+  .content-area-wrap,
+  .content-area-wrap .main-content,
+  .content-body {
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+    min-height: 0 !important;
+    display: block !important;
+  }
+
+  body {
+    background: white !important;
+    color: black !important;
+  }
+
+  .content-body {
+    padding: 0 40px !important;
+  }
+
+  .tiptap-editor {
+    max-width: 100% !important;
+    padding: 0 !important;
+  }
+
+  .tiptap-editor .ProseMirror {
+    min-height: auto !important;
+    color: black !important;
+  }
+
+  /* Print-friendly headings */
+  .section-title {
+    border: none !important;
+    background: none !important;
+    color: black !important;
+    font-size: 28px !important;
+    padding: 0 !important;
+  }
+}
