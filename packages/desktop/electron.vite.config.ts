@@ -7,7 +7,7 @@ const fast = process.env.FAST_BUILD === "1";
 export default defineConfig({
   main: {
     plugins: [
-      externalizeDepsPlugin(),
+      externalizeDepsPlugin({ exclude: ["marked"] }),
       ...(fast ? [bytecodePlugin()] : []),
     ],
     build: {
