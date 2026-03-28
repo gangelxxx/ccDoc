@@ -17,7 +17,7 @@ export interface EmbeddingSlice {
   embeddingErrors: Record<string, string>;
   embeddingBgTaskIds: Record<string, string>;
   fetchEmbeddingStatus: () => Promise<void>;
-  initEmbeddingProgressListener: () => void;
+  initEmbeddingProgressListener: () => (() => void) | void;
   startEmbeddingDownload: (modelId: string) => void;
   cancelEmbeddingDownload: (modelId: string) => void;
   deleteEmbeddingModel: (modelId: string) => Promise<void>;
@@ -55,7 +55,7 @@ export const createEmbeddingSlice: SliceCreator<EmbeddingSlice> = (set, get) => 
   },
 
   initEmbeddingProgressListener: () => {
-    window.api.onEmbeddingProgress((data: any) => {
+    return window.api.onEmbeddingProgress((data: any) => {
       const modelId = data.modelId;
       if (!modelId) return;
       const clearActive = (s: any) => {

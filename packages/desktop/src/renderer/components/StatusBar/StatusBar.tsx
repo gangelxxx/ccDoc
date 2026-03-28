@@ -1,7 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Loader2, Check, RefreshCw, Copy } from "lucide-react";
 import { useAppStore } from "../../stores/app.store.js";
 import { useT } from "../../i18n.js";
+import { BgProcessItem } from "./BgProcessItem.js";
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -39,6 +40,12 @@ export function StatusBar() {
   const stopLlmChat = useAppStore((s) => s.stopLlmChat);
   const externalChangePending = useAppStore((s) => s.externalChangePending);
   const refreshCurrentSection = useAppStore((s) => s.refreshCurrentSection);
+  const [showProgressPopup, setShowProgressPopup] = useState(false);
+  const [semanticHovered, setSemanticHovered] = useState(false);
+  const semanticTaskRef = useRef<HTMLDivElement>(null);
+  const semanticProgressItem = useAppStore((s) => s.semanticProgressItem);
+  const semanticProgressLog = useAppStore((s) => s.semanticProgressLog);
+
   // Listen for background tasks from main process
   useEffect(() => {
     const cleanupStart = window.api.onBgTaskStart(({ id, label }) => {
@@ -47,18 +54,43 @@ export function StatusBar() {
       }));
     });
     const cleanupFinish = window.api.onBgTaskFinish(({ id }) => {
-      useAppStore.setState((s) => ({
-        bgTasks: s.bgTasks.filter((t) => t.id !== `main:${id}`),
-      }));
+      useAppStore.setState((s) => {
+        const task = s.bgTasks.find((t) => t.id === `main:${id}`);
+        const isSemantic = task?.label?.startsWith("Semantic");
+        const next: Partial<typeof s> = { bgTasks: s.bgTasks.filter((t) => t.id !== `main:${id}`) };
+        if (isSemantic) {
+          next.semanticProgressItem = null;
+          next.semanticProgressLog = [];
+        }
+        return next;
+      });
     });
-    return () => { cleanupStart(); cleanupFinish(); };
+    const cleanupProgress = window.api.onSemanticProgress(({ item }) => {
+      useAppStore.getState().onSemanticProgress(item);
+    });
+    return () => { cleanupStart(); cleanupFinish(); cleanupProgress(); };
   }, []);
+
+  // Close progress popup on outside click
+  useEffect(() => {
+    if (!showProgressPopup) return;
+    const close = () => setShowProgressPopup(false);
+    document.addEventListener("click", close);
+    return () => document.removeEventListener("click", close);
+  }, [showProgressPopup]);
 
   const voiceDownloading = useAppStore((s) => s.voiceDownloading);
   const voiceProgress = useAppStore((s) => s.voiceProgress);
   const openSettings = useAppStore((s) => s.openSettings);
   const embeddingBgTaskIds = useAppStore((s) => s.embeddingBgTaskIds);
+  const ideaProcessingTask = useAppStore((s) => s.ideaProcessingTask);
+  const openIdeaProcessingResult = useAppStore((s) => s.openIdeaProcessingResult);
+  const clearIdeaProcessingTask = useAppStore((s) => s.clearIdeaProcessingTask);
   const projectPath = useAppStore((s) => s.currentProject?.path);
+
+  // Collect bg task IDs managed by BgProcessItem so we skip them in the generic loop
+  const bgProcessTaskIds = new Set<string>();
+  if (ideaProcessingTask) bgProcessTaskIds.add(ideaProcessingTask.bgTaskId);
 
   return (
     <div className="status-bar">
@@ -100,14 +132,37 @@ export function StatusBar() {
             <span className="status-bar-tokens">{voiceProgress}%</span>
           </div>
         )}
-        {bgTasks.map((task) => {
+
+        {/* Idea processing — rendered via reusable BgProcessItem */}
+        {ideaProcessingTask && (
+          <BgProcessItem
+            status={ideaProcessingTask.status}
+            label={bgTasks.find((t) => t.id === ideaProcessingTask.bgTaskId)?.label || ideaProcessingTask.sectionTitle}
+            startedAt={bgTasks.find((t) => t.id === ideaProcessingTask.bgTaskId)?.startedAt || Date.now()}
+            onCancel={clearIdeaProcessingTask}
+            onClick={ideaProcessingTask.status === "done" ? openIdeaProcessingResult : undefined}
+          />
+        )}
+
+        {/* Generic bg tasks (excluding those rendered by BgProcessItem above) */}
+        {bgTasks.filter((task) => !bgProcessTaskIds.has(task.id)).map((task) => {
           const isEmbeddingDownload = Object.values(embeddingBgTaskIds).includes(task.id);
+          const isSemantic = task.label?.startsWith("Semantic");
           return (
           <div
             key={task.id}
+            ref={isSemantic ? semanticTaskRef : undefined}
             className={`status-bar-task${task.finishedAt ? " status-bar-task--done" : ""}`}
-            style={isEmbeddingDownload ? { cursor: "pointer" } : undefined}
-            onClick={isEmbeddingDownload ? () => openSettings("embeddings") : undefined}
+            style={isSemantic
+              ? { cursor: "pointer", padding: "2px 8px", borderRadius: 4, background: "var(--bg-tertiary, transparent)" }
+              : isEmbeddingDownload ? { cursor: "pointer" } : undefined}
+            onClick={
+              isEmbeddingDownload ? () => openSettings("embeddings") :
+              isSemantic ? (e: React.MouseEvent) => { e.stopPropagation(); setShowProgressPopup((p) => !p); } :
+              undefined
+            }
+            onMouseEnter={isSemantic ? () => setSemanticHovered(true) : undefined}
+            onMouseLeave={isSemantic ? () => setSemanticHovered(false) : undefined}
           >
             {task.finishedAt ? (
               <Check size={12} className="status-bar-check" />
@@ -139,6 +194,64 @@ export function StatusBar() {
           );
         })}
       </div>
+      {/* Semantic progress tooltip & popup — rendered outside overflow:hidden containers */}
+      {semanticTaskRef.current && (semanticHovered || showProgressPopup) && (() => {
+        const rect = semanticTaskRef.current!.getBoundingClientRect();
+        return (
+          <>
+            {semanticHovered && !showProgressPopup && semanticProgressItem && (
+              <div style={{
+                position: "fixed",
+                right: Math.max(8, window.innerWidth - rect.right),
+                top: rect.top - 32,
+                maxWidth: Math.min(400, window.innerWidth - 16),
+                background: "var(--bg-secondary)",
+                border: "1px solid var(--border)",
+                borderRadius: 4,
+                padding: "4px 10px",
+                fontSize: 12,
+                color: "var(--text)",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                zIndex: 10000,
+                boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
+                pointerEvents: "none",
+              }}>
+                {semanticProgressItem}
+              </div>
+            )}
+            {showProgressPopup && semanticProgressLog.length > 0 && (
+              <div style={{
+                position: "fixed",
+                right: window.innerWidth - rect.right,
+                top: rect.top - 30 - semanticProgressLog.length * 22,
+                background: "var(--bg-secondary)",
+                border: "1px solid var(--border)",
+                borderRadius: 6,
+                padding: "6px 0",
+                minWidth: 250,
+                maxWidth: 400,
+                zIndex: 10000,
+                boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
+              }}>
+                {semanticProgressLog.map((item, i) => (
+                  <div key={i} style={{
+                    padding: "3px 12px",
+                    fontSize: 12,
+                    color: i === semanticProgressLog.length - 1 ? "var(--text)" : "var(--text-secondary)",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}>
+                    {item}
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        );
+      })()}
     </div>
   );
 }

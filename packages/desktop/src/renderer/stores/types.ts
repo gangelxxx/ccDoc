@@ -19,6 +19,8 @@ export interface TreeNode {
   type: string;
   icon: string | null;
   sort_key: string;
+  summary?: string | null;
+  updated_at: string;
   children: TreeNode[];
 }
 
@@ -118,6 +120,17 @@ export interface BackgroundTask {
   finishedAt?: number;
 }
 
+export interface IdeaProcessingTask {
+  bgTaskId: string;
+  sectionId: string;
+  sectionTitle: string;
+  mode: import("@ccdoc/core").IdeaProcessingMode;
+  status: "processing" | "done" | "error";
+  result: import("@ccdoc/core").IdeaProcessingResult | null;
+  originalMessages: import("@ccdoc/core").IdeaMessage[] | null;
+  error?: string;
+}
+
 // ─── Embedding types ────────────────────────────────────────
 
 export type EmbeddingMode = "none" | "local" | "online";
@@ -131,6 +144,17 @@ export interface EmbeddingConfig {
   onlineApiKey: string;
 }
 
+// ─── Indexing types ─────────────────────────────────────────
+
+export interface IndexingConfig {
+  enabled: boolean;
+  intensity: "low" | "medium" | "high";
+  excludedDirs: string[];
+  codeExtensions: string[];
+  maxFileSizeKB: number;
+  stalenessIntervalMin: number;
+}
+
 // ─── AppState (composite of all slices) ─────────────────────
 
 export interface AppState {
@@ -139,6 +163,12 @@ export interface AppState {
   toggleTheme: () => void;
   language: Lang;
   setLanguage: (lang: Lang) => void;
+  fontFamily: "default" | "serif" | "sans" | "mono" | "system";
+  setFontFamily: (v: "default" | "serif" | "sans" | "mono" | "system") => void;
+  fontSize: "small" | "medium" | "large";
+  setFontSize: (v: "small" | "medium" | "large") => void;
+  colorScheme: "teal" | "blue" | "purple";
+  setColorScheme: (v: "teal" | "blue" | "purple") => void;
   contentWidth: "narrow" | "medium" | "wide";
   cycleContentWidth: () => void;
 
@@ -362,13 +392,21 @@ export interface AppState {
   addIdeaMessage: (sectionId: string, text: string, images?: { id: string; name: string; mediaType: string; data: string }[]) => Promise<{ id: string; text: string; createdAt: number }>;
   deleteIdeaMessage: (sectionId: string, messageId: string) => Promise<void>;
   getIdeaMessages: (sectionId: string) => Promise<{ id: string; text: string; createdAt: number; planId?: string; completed?: boolean; images?: { id: string; name: string; mediaType: string; data: string }[] }[]>;
-  processIdeaWithLLM: (ideaId: string) => Promise<void>;
+  processIdeaWithLLM: (ideaId: string, mode?: import("@ccdoc/core").IdeaProcessingMode) => void;
+  applyIdeaProcessingResult: (ideaId: string, result: import("@ccdoc/core").IdeaProcessingResult) => Promise<void>;
+  ideaProcessingTask: IdeaProcessingTask | null;
+  clearIdeaProcessingTask: () => void;
+  openIdeaProcessingResult: () => Promise<void>;
 
   // Background tasks
   bgTasks: BackgroundTask[];
   startBgTask: (label: string) => string;
   finishBgTask: (id: string) => void;
   updateBgTask: (id: string, updates: Partial<Omit<BackgroundTask, "id">>) => void;
+  semanticProgressItem: string | null;
+  semanticProgressLog: string[];
+  onSemanticProgress: (item: string) => void;
+  clearSemanticProgress: () => void;
 
   // Voice STT
   voiceModelId: string;
@@ -400,6 +438,10 @@ export interface AppState {
   cancelEmbeddingDownload: (modelId: string) => void;
   deleteEmbeddingModel: (modelId: string) => Promise<void>;
 
+  // Indexing
+  indexingConfig: IndexingConfig;
+  setIndexingConfig: (cfg: Partial<IndexingConfig>) => void;
+
   // Tree expand/collapse state
   expandedNodes: Set<string>;
   toggleExpanded: (id: string) => void;
@@ -409,9 +451,11 @@ export interface AppState {
   // External changes (quiet mode)
   externalChangePending: boolean;
   externalChangeTimestamp: number | null;
+  externallyChangedIds: Set<string>;
   quietLoadTree: () => Promise<void>;
   refreshCurrentSection: () => Promise<void>;
   dismissExternalChange: () => void;
+  clearExternalChange: (id: string) => void;
 }
 
 // ─── Slice helper type ──────────────────────────────────────

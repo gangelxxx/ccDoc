@@ -1,7 +1,9 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
+import { Loader2 } from "lucide-react";
 import { useAppStore, type LlmConfig } from "../../stores/app.store.js";
 import { useT, type Lang } from "../../i18n.js";
+import type { IndexingConfig } from "../../stores/types.js";
 import { ModelTab } from "./tabs/ModelTab.js";
 import { EmbeddingsTab } from "./tabs/EmbeddingsTab.js";
 import { VoiceTab } from "./tabs/VoiceTab.js";
@@ -9,8 +11,13 @@ import { WebSearchTab } from "./tabs/WebSearchTab.js";
 import { AppearanceTab } from "./tabs/AppearanceTab.js";
 import { AgentsTab } from "./tabs/AgentsTab.js";
 import { DeveloperTab } from "./tabs/DeveloperTab.js";
+import { IndexingTab } from "./tabs/IndexingTab.js";
 
-type Tab = "model" | "embeddings" | "voice" | "websearch" | "agents" | "theme" | "language" | "developer";
+type Tab = "model" | "embeddings" | "indexing" | "voice" | "websearch" | "agents" | "appearance" | "developer";
+
+type FontFamily = "default" | "serif" | "sans" | "mono" | "system";
+type FontSize = "small" | "medium" | "large";
+type ColorScheme = "teal" | "blue" | "purple";
 
 function configsEqual(a: LlmConfig, b: LlmConfig): boolean {
   return a.model === b.model && a.effort === b.effort && a.thinking === b.thinking && a.inheritFromParent === b.inheritFromParent;
@@ -27,15 +34,21 @@ export function SettingsModal({ onClose, initialTab }: { onClose: () => void; in
     webSearchApiKey, setWebSearchApiKey,
     theme, toggleTheme,
     language, setLanguage,
+    fontFamily, setFontFamily,
+    fontSize, setFontSize,
+    colorScheme, setColorScheme,
     fetchEmbeddingStatus,
     fetchVoiceStatuses,
+    voiceModelId, setVoiceModelId,
     devMode, setDevMode,
     addToast,
+    indexingConfig, setIndexingConfig,
   } = useAppStore();
   const t = useT();
 
-  const validTabs: Tab[] = ["model", "embeddings", "voice", "websearch", "agents", "theme", "language"];
-  const [tab, setTab] = useState<Tab>(validTabs.includes(initialTab as Tab) ? initialTab as Tab : "model");
+  const validTabs: Tab[] = ["model", "embeddings", "indexing", "voice", "websearch", "agents", "appearance"];
+  const resolvedInitialTab = (initialTab === "theme" || initialTab === "language") ? "appearance" : initialTab;
+  const [tab, setTab] = useState<Tab>(validTabs.includes(resolvedInitialTab as Tab) ? resolvedInitialTab as Tab : "model");
   const [openSection, setOpenSection] = useState<string>("chat");
 
   // Secret dev mode activation: press "8" four times in a row
@@ -69,6 +82,11 @@ export function SettingsModal({ onClose, initialTab }: { onClose: () => void; in
   const [webSearchApiKeyDraft, setWebSearchApiKeyDraft] = useState(webSearchApiKey);
   const [themeDraft, setThemeDraft] = useState(theme);
   const [langDraft, setLangDraft] = useState<Lang>(language);
+  const [fontFamilyDraft, setFontFamilyDraft] = useState<FontFamily>(fontFamily);
+  const [fontSizeDraft, setFontSizeDraft] = useState<FontSize>(fontSize);
+  const [colorSchemeDraft, setColorSchemeDraft] = useState<ColorScheme>(colorScheme);
+  const [voiceModelDraft, setVoiceModelDraft] = useState(voiceModelId);
+  const [indexingDraft, setIndexingDraft] = useState(indexingConfig);
 
   /* --- side effects --- */
   useEffect(() => {
@@ -91,13 +109,52 @@ export function SettingsModal({ onClose, initialTab }: { onClose: () => void; in
     webSearchProviderDraft !== webSearchProvider ||
     webSearchApiKeyDraft !== webSearchApiKey ||
     themeDraft !== theme ||
-    langDraft !== language,
-    [keyDraft, chatDraft, passportDraft, summaryDraft, webSearchProviderDraft, webSearchApiKeyDraft, themeDraft, langDraft,
-     llmApiKey, llmChatConfig, llmPassportConfig, llmSummaryConfig, webSearchProvider, webSearchApiKey, theme, language]
+    langDraft !== language ||
+    fontFamilyDraft !== fontFamily ||
+    fontSizeDraft !== fontSize ||
+    colorSchemeDraft !== colorScheme ||
+    voiceModelDraft !== voiceModelId ||
+    JSON.stringify(indexingDraft) !== JSON.stringify(indexingConfig),
+    [keyDraft, chatDraft, passportDraft, summaryDraft, webSearchProviderDraft, webSearchApiKeyDraft,
+     themeDraft, langDraft, fontFamilyDraft, fontSizeDraft, colorSchemeDraft, voiceModelDraft,
+     indexingDraft,
+     llmApiKey, llmChatConfig, llmPassportConfig, llmSummaryConfig, webSearchProvider, webSearchApiKey,
+     theme, language, fontFamily, fontSize, colorScheme, voiceModelId, indexingConfig]
   );
 
+  /* --- auto-configure indexing --- */
+  const currentProject = useAppStore((s) => s.currentProject);
+  const autoToken = currentProject?.token;
+  const [autoConfiguring, setAutoConfiguring] = useState(false);
+  const handleAutoConfig = async () => {
+    if (!autoToken) return;
+    setAutoConfiguring(true);
+    try {
+      const [dirs, exts, sizes] = await Promise.all([
+        window.api.scanExclusionSuggestions(autoToken),
+        window.api.scanExtensionSuggestions(autoToken),
+        window.api.scanFileSizeSuggestion(autoToken),
+      ]);
+      const patch: Partial<IndexingConfig> = {};
+      if (dirs.length > 0) {
+        patch.excludedDirs = [...new Set([...indexingDraft.excludedDirs, ...dirs])];
+      }
+      if (exts.length > 0) {
+        patch.codeExtensions = [...new Set([...indexingDraft.codeExtensions, ...exts])];
+      }
+      if (sizes) {
+        patch.maxFileSizeKB = sizes.recommendedKB;
+      }
+      if (Object.keys(patch).length > 0) {
+        setIndexingDraft((d) => ({ ...d, ...patch }));
+      }
+    } finally {
+      setAutoConfiguring(false);
+    }
+  };
+
   /* --- save --- */
-  const handleSave = () => {
+  const applyChanges = () => {
     if (keyDraft !== llmApiKey) {
       setLlmApiKey(keyDraft);
       if (keyDraft) fetchLlmModels(keyDraft);
@@ -109,6 +166,15 @@ export function SettingsModal({ onClose, initialTab }: { onClose: () => void; in
     if (webSearchApiKeyDraft !== webSearchApiKey) setWebSearchApiKey(webSearchApiKeyDraft);
     if (themeDraft !== theme) toggleTheme();
     if (langDraft !== language) setLanguage(langDraft);
+    if (fontFamilyDraft !== fontFamily) setFontFamily(fontFamilyDraft);
+    if (fontSizeDraft !== fontSize) setFontSize(fontSizeDraft);
+    if (colorSchemeDraft !== colorScheme) setColorScheme(colorSchemeDraft);
+    if (voiceModelDraft !== voiceModelId) setVoiceModelId(voiceModelDraft);
+    if (JSON.stringify(indexingDraft) !== JSON.stringify(indexingConfig)) setIndexingConfig(indexingDraft);
+  };
+
+  const handleSave = () => {
+    applyChanges();
     onClose();
   };
 
@@ -141,14 +207,14 @@ export function SettingsModal({ onClose, initialTab }: { onClose: () => void; in
           <button className={`settings-tab${tab === "embeddings" ? " active" : ""}`} onClick={() => setTab("embeddings")}>
             {t("settingsEmbeddings")}
           </button>
+          <button className={`settings-tab${tab === "indexing" ? " active" : ""}`} onClick={() => setTab("indexing")}>
+            {t("settingsIndexing")}
+          </button>
           <button className={`settings-tab${tab === "voice" ? " active" : ""}`} onClick={() => setTab("voice")}>
             {t("settingsVoice")}
           </button>
-          <button className={`settings-tab${tab === "theme" ? " active" : ""}`} onClick={() => setTab("theme")}>
-            {t("settingsTheme")}
-          </button>
-          <button className={`settings-tab${tab === "language" ? " active" : ""}`} onClick={() => setTab("language")}>
-            {t("settingsLanguage")}
+          <button className={`settings-tab${tab === "appearance" ? " active" : ""}`} onClick={() => setTab("appearance")}>
+            {t("settingsAppearance")}
           </button>
           <button className={`settings-tab${tab === "websearch" ? " active" : ""}`} onClick={() => setTab("websearch")}>
             {t("webSearchTitle")}
@@ -180,7 +246,19 @@ export function SettingsModal({ onClose, initialTab }: { onClose: () => void; in
 
           {tab === "embeddings" && <EmbeddingsTab />}
 
-          {tab === "voice" && <VoiceTab />}
+          {tab === "indexing" && (
+            <IndexingTab
+              draft={indexingDraft}
+              onChange={(cfg) => setIndexingDraft((d) => ({ ...d, ...cfg }))}
+            />
+          )}
+
+          {tab === "voice" && (
+            <VoiceTab
+              voiceModelDraft={voiceModelDraft}
+              onVoiceModelChange={setVoiceModelDraft}
+            />
+          )}
 
           {tab === "websearch" && (
             <WebSearchTab
@@ -195,17 +273,41 @@ export function SettingsModal({ onClose, initialTab }: { onClose: () => void; in
 
           {tab === "developer" && <DeveloperTab />}
 
-          {tab === "theme" && (
-            <AppearanceTab mode="theme" themeDraft={themeDraft} onThemeChange={setThemeDraft} />
-          )}
-
-          {tab === "language" && (
-            <AppearanceTab mode="language" langDraft={langDraft} onLangChange={setLangDraft} />
+          {tab === "appearance" && (
+            <AppearanceTab
+              themeDraft={themeDraft}
+              onThemeChange={setThemeDraft}
+              langDraft={langDraft}
+              onLangChange={setLangDraft}
+              fontFamilyDraft={fontFamilyDraft}
+              onFontFamilyChange={setFontFamilyDraft}
+              fontSizeDraft={fontSizeDraft}
+              onFontSizeChange={setFontSizeDraft}
+              colorSchemeDraft={colorSchemeDraft}
+              onColorSchemeChange={setColorSchemeDraft}
+            />
           )}
 
         </div>
 
         <div className="modal-actions">
+          <div style={{ display: "flex", gap: 8, marginRight: "auto" }}>
+            {tab === "indexing" && (
+              <button
+                className="btn"
+                onClick={handleAutoConfig}
+                disabled={!autoToken || !indexingDraft.enabled || autoConfiguring}
+              >
+                {autoConfiguring && <Loader2 size={14} style={{ animation: "spin 1s linear infinite", marginRight: 4 }} />}
+                {t("indexingAutoConfig")}
+              </button>
+            )}
+            {isDirty && (
+              <button className="btn btn-apply" onClick={applyChanges}>
+                {t("apply")}
+              </button>
+            )}
+          </div>
           <button className="btn btn-primary" onClick={handleSave} disabled={!isDirty}>{t("save")}</button>
           <button className="btn" onClick={onClose}>{t("close")}</button>
         </div>

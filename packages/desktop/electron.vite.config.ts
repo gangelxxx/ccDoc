@@ -13,7 +13,11 @@ export default defineConfig({
     build: {
       outDir: "dist/main",
       rollupOptions: {
-        input: resolve(__dirname, "src/main/index.ts"),
+        input: {
+          index: resolve(__dirname, "src/main/index.ts"),
+          "semantic-worker": resolve(__dirname, "src/main/semantic-worker.ts"),
+          "fts-worker": resolve(__dirname, "src/main/fts-worker.ts"),
+        },
         external: ["onnxruntime-node", "onnxruntime-web"],
       },
     },

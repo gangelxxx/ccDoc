@@ -319,6 +319,25 @@ const PROJECT_MIGRATIONS = [
       FROM kg_nodes n;
     `,
   },
+  {
+    version: 10,
+    sql: `
+      CREATE TABLE IF NOT EXISTS semantic_chunks (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        embedding BLOB NOT NULL,
+        text_hash TEXT NOT NULL,
+        metadata TEXT,
+        updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
+      );
+    `,
+  },
+  {
+    version: 11,
+    sql: `
+      ALTER TABLE semantic_chunks ADD COLUMN content TEXT NOT NULL DEFAULT '';
+    `,
+  },
 ];
 
 async function getSchemaVersion(db: Client): Promise<number> {

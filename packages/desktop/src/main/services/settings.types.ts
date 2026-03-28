@@ -32,10 +32,27 @@ export interface CustomAgentData {
   ratingLog: string[];  // last problems reported by assistant
 }
 
+// SYNC: duplicated in renderer/stores/types.ts as IndexingConfig
+export interface IndexingConfigData {
+  enabled: boolean;
+  intensity: "low" | "medium" | "high";
+  excludedDirs: string[];
+  codeExtensions: string[];
+  maxFileSizeKB: number;
+  stalenessIntervalMin: number;
+}
+
+export type FontFamily = "default" | "serif" | "sans" | "mono" | "system";
+export type FontSize = "small" | "medium" | "large";
+export type ColorScheme = "teal" | "blue" | "purple";
+
 export interface Settings {
   // UI
   theme: "light" | "dark";
   language: string;
+  fontFamily: FontFamily;
+  fontSize: FontSize;
+  colorScheme: ColorScheme;
   contentWidth: "narrow" | "medium" | "wide";
   sidebarWidth: number;
   llmPanelWidth: number;
@@ -50,6 +67,8 @@ export interface Settings {
   customAgents: CustomAgentData[];
   // Embedding
   embedding: EmbeddingConfigData;
+  // Indexing
+  indexing: IndexingConfigData;
   // Voice STT
   voiceModelId: string;
   // Developer mode
@@ -66,6 +85,9 @@ const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
 export const SETTINGS_DEFAULTS: Settings = {
   theme: "light",
   language: "en",
+  fontFamily: "default",
+  fontSize: "medium",
+  colorScheme: "teal",
   contentWidth: "narrow",
   sidebarWidth: 268,
   llmPanelWidth: 320,
@@ -82,6 +104,18 @@ export const SETTINGS_DEFAULTS: Settings = {
     onlineProvider: "openai",
     onlineModel: "text-embedding-3-small",
     onlineApiKey: "",
+  },
+  indexing: {
+    enabled: true,
+    intensity: "low",
+    excludedDirs: [
+      "node_modules", ".git", ".ccdoc", "dist", "build", ".next", "vendor",
+      "__pycache__", ".vscode", ".idea", ".svn", "coverage", ".nyc_output",
+      ".cache", ".turbo", "release", "out", ".output", "logs",
+    ],
+    codeExtensions: [".ts", ".tsx", ".js", ".jsx", ".mts", ".mjs", ".py", ".go", ".rs"],
+    maxFileSizeKB: 500,
+    stalenessIntervalMin: 5,
   },
   voiceModelId: "",
   devMode: false,
@@ -107,6 +141,9 @@ export function validateSettings(raw: any): Settings {
 
   if (!["light", "dark"].includes(s.theme)) s.theme = "light";
   if (typeof s.language !== "string" || !s.language) s.language = "en";
+  if (!["default", "serif", "sans", "mono", "system"].includes(s.fontFamily)) s.fontFamily = "default";
+  if (!["small", "medium", "large"].includes(s.fontSize)) s.fontSize = "medium";
+  if (!["teal", "blue", "purple"].includes(s.colorScheme)) s.colorScheme = "teal";
   if (!["narrow", "medium", "wide"].includes(s.contentWidth)) s.contentWidth = "narrow";
   s.sidebarWidth = clamp(s.sidebarWidth, 140, 800);
   s.llmPanelWidth = clamp(s.llmPanelWidth, 200, 1200);
@@ -129,6 +166,19 @@ export function validateSettings(raw: any): Settings {
   }
 
   if (!["tavily", "brave", "none"].includes(s.webSearchProvider)) s.webSearchProvider = "none";
+
+  // Indexing
+  if (!s.indexing || typeof s.indexing !== "object") {
+    s.indexing = { ...SETTINGS_DEFAULTS.indexing };
+  } else {
+    s.indexing = { ...SETTINGS_DEFAULTS.indexing, ...s.indexing };
+    if (!["low", "medium", "high"].includes(s.indexing.intensity)) s.indexing.intensity = "medium";
+    if (typeof s.indexing.enabled !== "boolean") s.indexing.enabled = true;
+    if (!Array.isArray(s.indexing.excludedDirs)) s.indexing.excludedDirs = [...SETTINGS_DEFAULTS.indexing.excludedDirs];
+    if (!Array.isArray(s.indexing.codeExtensions)) s.indexing.codeExtensions = [...SETTINGS_DEFAULTS.indexing.codeExtensions];
+    s.indexing.maxFileSizeKB = clamp(s.indexing.maxFileSizeKB, 50, 2000);
+    s.indexing.stalenessIntervalMin = clamp(s.indexing.stalenessIntervalMin, 1, 60);
+  }
 
   // Validate customAgents
   if (!Array.isArray(s.customAgents)) {

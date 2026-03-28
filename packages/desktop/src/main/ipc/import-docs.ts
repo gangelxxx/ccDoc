@@ -43,6 +43,9 @@ export function registerImportDocsIpc(): void {
 
   ipcMain.handle("import-docs:import", async (_e, token: string, files: { absolutePath: string; relativePath: string }[], folderId: string) => {
     console.log("[import-docs:import] start", { token, folderId, fileCount: files.length });
+    const project = await getProjectsService().getByToken(token);
+    if (!project) throw new Error("Project not found");
+    const projectRoot = resolve(project.path);
     suppressExternalChange(token);
     const { import_, index } = await getProjectServices(token);
     console.log("[import-docs:import] got services");
@@ -52,7 +55,11 @@ export function registerImportDocsIpc(): void {
       getMainWindow()?.webContents.send("import-docs:progress", { phase: "import", current: i, total: files.length, file: files[i].relativePath });
       console.log(`[import-docs:import] file ${i + 1}/${files.length}: ${files[i].relativePath}`);
       try {
-        const content = readFileSync(files[i].absolutePath, "utf-8");
+        const resolvedPath = resolve(files[i].absolutePath);
+        if (!resolvedPath.startsWith(projectRoot + "\\") && !resolvedPath.startsWith(projectRoot + "/")) {
+          throw new Error("Path outside project directory");
+        }
+        const content = readFileSync(resolvedPath, "utf-8");
         const fileName = basename(files[i].relativePath, extname(files[i].relativePath));
         const fileId = await import_.importMarkdown(folderId, fileName, content);
         results.push({ relativePath: files[i].relativePath, absolutePath: files[i].absolutePath, fileId, success: true });
@@ -130,11 +137,16 @@ export function registerImportDocsIpc(): void {
       return results;
     }
 
+    const projectRoot = resolve(project.path);
     const verifyResults = [];
     for (let i = 0; i < importResults.length; i++) {
       const r = importResults[i];
       try {
-        const originalText = readFileSync(r.absolutePath, "utf-8");
+        const resolvedPath = resolve(r.absolutePath);
+        if (!resolvedPath.startsWith(projectRoot + "\\") && !resolvedPath.startsWith(projectRoot + "/")) {
+          throw new Error("Path outside project directory");
+        }
+        const originalText = readFileSync(resolvedPath, "utf-8");
         const originalStats = countStats(originalText);
 
         // Read back imported content

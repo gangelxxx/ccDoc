@@ -940,7 +940,7 @@ export function registerIoIpc(): void {
 
     // Render in hidden window and print to PDF
     const { BrowserWindow: BW } = await import("electron");
-    const printWin = new BW({ show: false, width: 800, height: 600, webPreferences: { offscreen: true } });
+    const printWin = new BW({ show: false, width: 800, height: 600, webPreferences: { offscreen: true, sandbox: true, contextIsolation: true, nodeIntegration: false } });
     try {
       await printWin.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
       const pdf = await printWin.webContents.printToPDF({

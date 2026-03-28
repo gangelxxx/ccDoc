@@ -36,6 +36,8 @@ export interface SectionsSlice {
   tree: TreeNode[];
   currentSection: Section | null;
   editorSelectedText: string;
+  _editorView: any;
+  setEditorView: (view: any) => void;
   setEditorSelectedText: (text: string) => void;
   loadTree: () => Promise<void>;
   selectSection: (id: string) => Promise<void>;

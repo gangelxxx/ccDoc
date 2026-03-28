@@ -13,6 +13,7 @@ import { registerSourceCodeIpc } from "./source-code";
 import { registerInstallIpc } from "./install";
 import { registerWebSearchIpc } from "./web-search";
 import { registerKnowledgeGraphIpc } from "./knowledge-graph";
+import { registerSemanticIpc } from "./semantic";
 import { registerSettingsIpc } from "./settings";
 import type { SettingsService } from "../services/settings.service";
 
@@ -32,5 +33,6 @@ export function registerAllIpcHandlers(settingsService: SettingsService): void {
   registerInstallIpc();
   registerWebSearchIpc();
   registerKnowledgeGraphIpc(settingsService);
+  registerSemanticIpc();
   registerSettingsIpc(settingsService);
 }

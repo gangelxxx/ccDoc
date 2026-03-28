@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
+import DOMPurify from "dompurify";
 import { useAppStore } from "../../stores/app.store.js";
 import { useT } from "../../i18n.js";
 
@@ -79,7 +80,7 @@ export function InstallModal({ onClose }: { onClose: () => void }) {
           <div className="install-idle">
             <p
               className="install-description"
-              dangerouslySetInnerHTML={{ __html: t("installPluginDesc", currentProject?.name ?? "") }}
+              dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(t("installPluginDesc", currentProject?.name ?? "")) }}
             />
             <div className="modal-actions">
               <button className="btn btn-primary" onClick={runInstall}>{t("installBtn")}</button>

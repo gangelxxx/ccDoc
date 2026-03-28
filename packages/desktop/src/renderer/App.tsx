@@ -41,12 +41,17 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
 }
 
 export function App() {
-  const { loadProjects, theme, toggleTheme, toggleSidebar, setPaletteOpen, paletteOpen, sidebarCollapsed, sidebarWidth, setSidebarWidth, savePanelWidths, sectionLoading, treeLoading, initEmbeddingProgressListener, initVoiceProgressListener } = useAppStore();
+  const { loadProjects, theme, toggleTheme, fontFamily, fontSize, colorScheme, toggleSidebar, setPaletteOpen, paletteOpen, sidebarCollapsed, sidebarWidth, setSidebarWidth, savePanelWidths, sectionLoading, treeLoading, initEmbeddingProgressListener, initVoiceProgressListener } = useAppStore();
 
   // Init theme & layout on mount
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
+  useEffect(() => {
+    document.documentElement.setAttribute("data-font-family", fontFamily);
+    document.documentElement.setAttribute("data-font-size", fontSize);
+    document.documentElement.setAttribute("data-color-scheme", colorScheme);
+  }, [fontFamily, fontSize, colorScheme]);
   // Load projects
   useEffect(() => {
     loadProjects();
@@ -54,12 +59,12 @@ export function App() {
 
   // Global embedding progress listener (survives modal close)
   useEffect(() => {
-    initEmbeddingProgressListener();
+    return initEmbeddingProgressListener();
   }, []);
 
   // Global voice progress listener
   useEffect(() => {
-    initVoiceProgressListener();
+    return initVoiceProgressListener();
   }, []);
 
   // Auto-refresh tree when external process (MCP) modifies the DB (quiet mode — no focus switch)

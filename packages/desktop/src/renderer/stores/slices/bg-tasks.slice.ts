@@ -5,6 +5,10 @@ export interface BgTasksSlice {
   startBgTask: (label: string) => string;
   finishBgTask: (id: string) => void;
   updateBgTask: (id: string, updates: Partial<Omit<BackgroundTask, "id">>) => void;
+  semanticProgressItem: string | null;
+  semanticProgressLog: string[];
+  onSemanticProgress: (item: string) => void;
+  clearSemanticProgress: () => void;
 }
 
 export const createBgTasksSlice: SliceCreator<BgTasksSlice> = (set, get) => ({
@@ -35,5 +39,19 @@ export const createBgTasksSlice: SliceCreator<BgTasksSlice> = (set, get) => ({
     set((s) => ({
       bgTasks: s.bgTasks.map((t) => t.id === id ? { ...t, ...updates } : t),
     }));
+  },
+
+  semanticProgressItem: null,
+  semanticProgressLog: [],
+
+  onSemanticProgress: (item) => {
+    set((s) => ({
+      semanticProgressItem: item,
+      semanticProgressLog: [...s.semanticProgressLog.slice(-5), item], // keep last 6
+    }));
+  },
+
+  clearSemanticProgress: () => {
+    set({ semanticProgressItem: null, semanticProgressLog: [] });
   },
 });

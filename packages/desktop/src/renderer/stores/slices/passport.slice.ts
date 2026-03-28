@@ -1,9 +1,12 @@
+import type { IdeaProcessingMode, IdeaProcessingResult } from "@ccdoc/core";
 import type { TreeNode, SliceCreator } from "../types.js";
 import {
   estimateInputTokens,
   formatCompactTree,
   buildSlugMap,
 } from "../../llm-utils.js";
+import { buildIdeaProcessingPrompt, parseProcessingResult } from "../llm/idea-processing-prompt.js";
+import { callLlmOnce } from "../llm-engine.js";
 
 export interface PassportSlice {
   passport: Record<string, string>;
@@ -13,7 +16,11 @@ export interface PassportSlice {
   generatePassport: () => Promise<void>;
   generateSectionSummary: (sectionId: string) => Promise<void>;
   expandIdeaToPlan: (ideaId: string, messageId?: string, messageText?: string, messageImages?: { id: string; name: string; mediaType: string; data: string }[]) => Promise<string | null>;
-  processIdeaWithLLM: (ideaId: string) => Promise<void>;
+  processIdeaWithLLM: (ideaId: string, mode?: IdeaProcessingMode) => void;
+  applyIdeaProcessingResult: (ideaId: string, result: IdeaProcessingResult) => Promise<void>;
+  ideaProcessingTask: import("../types.js").IdeaProcessingTask | null;
+  clearIdeaProcessingTask: () => void;
+  openIdeaProcessingResult: () => Promise<void>;
   addIdeaMessage: (sectionId: string, text: string, images?: { id: string; name: string; mediaType: string; data: string }[]) => Promise<{ id: string; text: string; createdAt: number }>;
   deleteIdeaMessage: (sectionId: string, messageId: string) => Promise<void>;
   getIdeaMessages: (sectionId: string) => Promise<{ id: string; text: string; createdAt: number; planId?: string; images?: { id: string; name: string; mediaType: string; data: string }[] }[]>;
@@ -138,7 +145,22 @@ Only output valid JSON, nothing else.`;
     if (!currentProject?.token || !llmApiKey) return;
     const taskId = startBgTask(language === "ru" ? "Генерация саммари" : "Generating summary");
     try {
-      const content = await window.api.getSectionContent(currentProject.token, sectionId, "markdown");
+      let content = await window.api.getSectionContent(currentProject.token, sectionId, "markdown");
+
+      // For files: own content may be empty (split into child sections). Aggregate children.
+      if (!content?.trim()) {
+        try {
+          const { sections: children } = await window.api.getFileWithSections(currentProject.token, sectionId);
+          if (children?.length) {
+            const parts: string[] = [];
+            for (const child of children) {
+              const childContent = await window.api.getSectionContent(currentProject.token, child.id, "markdown");
+              if (childContent?.trim()) parts.push(`## ${child.title}\n${childContent}`);
+            }
+            content = parts.join("\n\n");
+          }
+        } catch { /* not a file or no children — skip */ }
+      }
       if (!content?.trim()) return;
 
       const langInstruction = language === "ru" ? "Respond in Russian." : "Respond in English.";
@@ -331,99 +353,134 @@ ${content}`;
     return null;
   },
 
-  processIdeaWithLLM: async (ideaId: string) => {
-    const { currentProject, llmApiKey, language, tree } = get();
+  ideaProcessingTask: null,
+
+  processIdeaWithLLM: (ideaId: string, mode: IdeaProcessingMode = "full") => {
+    const { currentProject, llmApiKey, llmChatConfig, language, tree } = get();
     if (!currentProject?.token || !llmApiKey) return;
 
-    // Read idea messages
-    const section = await window.api.getSection(currentProject.token, ideaId);
-    let data: { messages: any[]; kanbanId?: string };
-    try {
-      const parsed = JSON.parse(section.content);
-      data = parsed.type === "doc" ? { messages: [] } : parsed;
-    } catch { data = { messages: [] }; }
-
-    if (data.messages.length === 0) return;
-
-    // Format messages for the LLM
-    const messagesText = data.messages
-      .map((m: any, i: number) => `[${i + 1}] ${m.text}${m.completed ? " ✅" : ""}`)
-      .join("\n");
-
-    const findNode = (nodes: TreeNode[], id: string): TreeNode | null => {
+    // Find idea title for status bar
+    const findNode = (nodes: any[], id: string): any => {
       for (const n of nodes) {
         if (n.id === id) return n;
-        const found = findNode(n.children, id);
+        const found = findNode(n.children || [], id);
         if (found) return found;
       }
       return null;
     };
     const ideaNode = findNode(tree, ideaId);
-    const ideaTitle = ideaNode?.title || "Ideas";
+    const sectionTitle = ideaNode?.title || "Ideas";
 
     const ru = language === "ru";
+    const modeLabels: Record<string, [string, string]> = {
+      title:       ["Генерация заголовков", "Generating titles"],
+      polish:      ["Улучшение формулировок", "Polishing text"],
+      deduplicate: ["Дедупликация", "Deduplication"],
+      group:       ["Группировка", "Grouping"],
+      full:        ["Полная обработка", "Full processing"],
+    };
+    const [ruLabel, enLabel] = modeLabels[mode] || modeLabels.full;
+    const bgTaskId = get().startBgTask(`✨ ${ru ? ruLabel : enLabel}: ${sectionTitle}`);
 
-    const message = ru
-      ? `Обработай список идей ниже. Тебе нужно:
+    // Fire-and-forget: run in background
+    (async () => {
+      try {
+        const section = await window.api.getSection(currentProject.token, ideaId);
+        let data: { messages: any[]; kanbanId?: string };
+        try {
+          const parsed = JSON.parse(section.content);
+          data = parsed.type === "doc" ? { messages: [] } : parsed;
+        } catch { data = { messages: [] }; }
 
-1. **Сгенерировать заголовок** — краткое название (1 предложение) для этого блока идей, отражающее общую тему.
-2. **Улучшить текст** каждой идеи — сделать его более структурированным, читабельным и грамотным. Сохрани смысл, но оформи профессионально.
-3. **Сгруппировать** похожие идеи — если несколько идей про одно и то же, объедини их в одну.
-4. **Удалить дубликаты** — если идеи полностью совпадают по смыслу, оставь только одну (лучшую формулировку).
+        if (data.messages.length < 2) {
+          get().finishBgTask(bgTaskId);
+          return;
+        }
 
-ВАЖНО: Сохрани статус выполнения (✅) для завершённых идей. Не удаляй завершённые идеи при дедупликации.
+        set({
+          ideaProcessingTask: {
+            bgTaskId,
+            sectionId: ideaId,
+            sectionTitle,
+            mode,
+            status: "processing",
+            result: null,
+            originalMessages: data.messages,
+          },
+        });
 
-Выполни два действия:
-1. update_section(id="${ideaId}", title="<новый заголовок>") — обнови заголовок секции
-2. update_section(id="${ideaId}", content="<JSON>") — обнови содержимое
+        const prompt = buildIdeaProcessingPrompt(data.messages, mode, ru ? "ru" : "en");
+        const response = await callLlmOnce(prompt, llmApiKey, llmChatConfig.model);
+        const result = parseProcessingResult(response, data.messages);
 
-Формат JSON для content (строго соблюдай):
-{"messages":[{"id":"<uuid>","text":"<улучшенный текст>","createdAt":<timestamp>},...],${data.kanbanId ? '"kanbanId":"' + data.kanbanId + '",' : ""}}
+        // Update bg task label to show completion
+        get().updateBgTask(bgTaskId, { label: ru ? `✅ Обработка завершена: ${sectionTitle}` : `✅ Processing done: ${sectionTitle}` });
 
-Для новых (объединённых) сообщений генерируй новый UUID. Для сохранённых — оставляй оригинальный id. Поле createdAt бери из самой ранней идеи в группе. Если идея была completed, добавь "completed":true. Если была planId, сохрани "planId":"<значение>". Если были images, сохрани "images":[...].
+        set({
+          ideaProcessingTask: {
+            bgTaskId,
+            sectionId: ideaId,
+            sectionTitle,
+            mode,
+            status: "done",
+            result,
+            originalMessages: data.messages,
+          },
+        });
+      } catch (e: any) {
+        console.error("Idea processing error:", e);
+        const ru = get().language === "ru";
+        get().updateBgTask(bgTaskId, { label: ru ? `❌ Ошибка обработки: ${sectionTitle}` : `❌ Processing error: ${sectionTitle}` });
+        set({
+          ideaProcessingTask: {
+            bgTaskId,
+            sectionId: ideaId,
+            sectionTitle,
+            mode,
+            status: "error",
+            result: null,
+            originalMessages: null,
+            error: e?.message || String(e),
+          },
+        });
+        // Auto-cleanup error after 8 seconds
+        setTimeout(() => get().clearIdeaProcessingTask(), 8000);
+      }
+    })();
+  },
 
-Текущий заголовок: "${ideaTitle}"
-Количество идей: ${data.messages.length}
+  clearIdeaProcessingTask: () => {
+    const task = get().ideaProcessingTask;
+    if (task) {
+      get().finishBgTask(task.bgTaskId);
+    }
+    set({ ideaProcessingTask: null });
+  },
 
----
+  openIdeaProcessingResult: async () => {
+    const task = get().ideaProcessingTask;
+    if (!task || task.status !== "done") return;
+    // Navigate to the idea section
+    try { await get().selectSection(task.sectionId); } catch { /* ignore */ }
+  },
 
-${messagesText}`
-      : `Process the idea list below. You need to:
+  applyIdeaProcessingResult: async (ideaId: string, result: IdeaProcessingResult) => {
+    const { currentProject } = get();
+    if (!currentProject?.token) return;
 
-1. **Generate a title** — a short name (1 sentence) for this ideas block reflecting the overall theme.
-2. **Improve the text** of each idea — make it more structured, readable, and professional. Keep the meaning but polish the wording.
-3. **Group** similar ideas — if multiple ideas are about the same thing, merge them into one.
-4. **Remove duplicates** — if ideas are identical in meaning, keep only one (best wording).
+    const section = await window.api.getSection(currentProject.token, ideaId);
+    let data: { messages: any[]; kanbanId?: string };
+    try {
+      data = JSON.parse(section.content);
+    } catch { data = { messages: [] }; }
 
-IMPORTANT: Preserve completion status (✅) for completed ideas. Don't remove completed ideas during deduplication.
+    const newData = { messages: result.messages, ...(data.kanbanId ? { kanbanId: data.kanbanId } : {}) };
+    await window.api.updateSection(currentProject.token, ideaId, section.title, JSON.stringify(newData));
 
-Execute two actions:
-1. update_section(id="${ideaId}", title="<new title>") — update the section title
-2. update_section(id="${ideaId}", content="<JSON>") — update the content
+    // Clear the processing task
+    get().clearIdeaProcessingTask();
 
-JSON format for content (follow strictly):
-{"messages":[{"id":"<uuid>","text":"<improved text>","createdAt":<timestamp>},...],${data.kanbanId ? '"kanbanId":"' + data.kanbanId + '",' : ""}}
-
-For new (merged) messages generate a new UUID. For preserved ones — keep the original id. Take createdAt from the earliest idea in the group. If idea was completed, add "completed":true. If had planId, preserve "planId":"<value>". If had images, preserve "images":[...].
-
-Current title: "${ideaTitle}"
-Number of ideas: ${data.messages.length}
-
----
-
-${messagesText}`;
-
-    const displayText = ru
-      ? `✨ Обработка идей: ${ideaTitle}`
-      : `✨ Processing ideas: ${ideaTitle}`;
-
-    // Start a new LLM session
-    get().clearLlmMessages();
-    set({ llmPanelOpen: true, llmIncludeSourceCode: false, llmIncludeContext: false });
-    await get().sendLlmMessage(message, false, undefined, false, displayText);
     await get().loadTree();
-
-    // Navigate back to the idea to see updated content
     try { await get().selectSection(ideaId); } catch { /* ignore */ }
   },
 

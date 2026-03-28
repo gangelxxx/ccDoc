@@ -1,9 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { ChevronRight, Zap, RotateCcw, Loader2, Check, Copy, Send, Trash2, ArrowDown, CircleCheck, FileText, Pencil, Paperclip, X, Search, ChevronUp, ChevronDown, Sparkles } from "lucide-react";
+import { ChevronRight, Zap, RotateCcw, Loader2, Check, Copy, Send, Trash2, ArrowDown, CircleCheck, FileText, Pencil, Paperclip, X, Search, ChevronUp, ChevronDown, Sparkles, Type, Wand2, Layers, FolderOpen } from "lucide-react";
 import { useAppStore } from "../../stores/app.store.js";
 import { useT } from "../../i18n.js";
 import { findTreeNode, renderMarkdown } from "./editor-utils.js";
 import { VoiceButton } from "../VoiceButton/VoiceButton.js";
+import { IdeaProcessingPreview } from "./IdeaProcessingPreview.js";
+import type { IdeaProcessingMode, IdeaProcessingResult } from "@ccdoc/core";
 
 interface IdeaImage {
   id: string;
@@ -172,6 +174,29 @@ export function IdeaChat({ section, tree, onNavigate }: {
   const [dragOver, setDragOver] = useState(false);
   const [imageMenu, setImageMenu] = useState<{ msgId: string; imageId: string; x: number; y: number } | null>(null);
   const [msgContextMenu, setMsgContextMenu] = useState<{ msgId: string; x: number; y: number } | null>(null);
+
+  // Local search state
+  // AI processing state (stored in Zustand — survives navigation)
+  const ideaProcessingTask = useAppStore((s) => s.ideaProcessingTask);
+  const clearIdeaProcessingTask = useAppStore((s) => s.clearIdeaProcessingTask);
+  const applyIdeaProcessingResult = useAppStore((s) => s.applyIdeaProcessingResult);
+  const [showProcessingPreview, setShowProcessingPreview] = useState(false);
+  const [processingDropdown, setProcessingDropdown] = useState(false);
+  const processingDropdownRef = useRef<HTMLDivElement>(null);
+  const [showGrouped, setShowGrouped] = useState(true);
+
+  // Auto-show preview when processing completes for this section
+  useEffect(() => {
+    if (
+      ideaProcessingTask?.status === "done" &&
+      ideaProcessingTask.sectionId === section.id &&
+      ideaProcessingTask.result
+    ) {
+      setShowProcessingPreview(true);
+    }
+  }, [ideaProcessingTask?.status, ideaProcessingTask?.sectionId, section.id]);
+
+  const isProcessing = ideaProcessingTask?.status === "processing" && ideaProcessingTask.sectionId === section.id;
 
   // Local search state
   const [localSearch, setLocalSearch] = useState(false);
@@ -866,6 +891,36 @@ export function IdeaChat({ section, tree, onNavigate }: {
     } catch { /* ignore */ }
   };
 
+  // AI processing handlers
+  const handleProcessIdeas = (mode: IdeaProcessingMode) => {
+    setProcessingDropdown(false);
+    processIdeaWithLLM(section.id, mode);
+  };
+
+  const handleApplyProcessing = async (result: IdeaProcessingResult) => {
+    setShowProcessingPreview(false);
+    await applyIdeaProcessingResult(section.id, result);
+    const updated = await getIdeaMessages(section.id);
+    setMessages(updated);
+  };
+
+  const handleCancelProcessing = () => {
+    setShowProcessingPreview(false);
+    clearIdeaProcessingTask();
+  };
+
+  // Close processing dropdown on click outside
+  useEffect(() => {
+    if (!processingDropdown) return;
+    const close = (e: MouseEvent) => {
+      if (processingDropdownRef.current && !processingDropdownRef.current.contains(e.target as Node)) {
+        setProcessingDropdown(false);
+      }
+    };
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [processingDropdown]);
+
   const canSend = input.trim() || pendingImages.length > 0;
 
   return (
@@ -878,14 +933,45 @@ export function IdeaChat({ section, tree, onNavigate }: {
         >
           <Search size={16} />
         </button>
-        {llmApiKey && messages.length > 0 && (
+        {llmApiKey && messages.length > 1 && (
+          <div className="idea-processing-dropdown-wrapper" ref={processingDropdownRef}>
+            <button
+              className="idea-chat-search-btn"
+              onClick={(e) => { e.stopPropagation(); setProcessingDropdown(!processingDropdown); }}
+              disabled={llmLoading || generatingFor !== null || isProcessing}
+              title={t("processIdeas")}
+            >
+              {isProcessing ? <Loader2 size={16} className="spin" /> : <Sparkles size={16} />}
+            </button>
+            {processingDropdown && (
+              <div className="idea-processing-dropdown">
+                <button onClick={() => handleProcessIdeas("title")}><Type size={14} /> {t("ideaProcessTitle")}</button>
+                <button onClick={() => handleProcessIdeas("polish")}><Wand2 size={14} /> {t("ideaProcessPolish")}</button>
+                <button onClick={() => handleProcessIdeas("deduplicate")}><Layers size={14} /> {t("ideaProcessDeduplicate")}</button>
+                <button onClick={() => handleProcessIdeas("group")}><FolderOpen size={14} /> {t("ideaProcessGroup")}</button>
+                <div className="idea-processing-dropdown-divider" />
+                <button onClick={() => handleProcessIdeas("full")}><Sparkles size={14} /> {t("ideaProcessFull")}</button>
+              </div>
+            )}
+          </div>
+        )}
+        {showGrouped && messages.some((m: any) => m.group) && (
+          <button
+            className="idea-chat-search-btn idea-chat-ungroup-btn"
+            onClick={() => setShowGrouped(false)}
+            title={t("ideaProcessUngroupBtn")}
+          >
+            <Layers size={14} />
+            <X size={10} className="idea-chat-ungroup-x" />
+          </button>
+        )}
+        {!showGrouped && messages.some((m: any) => m.group) && (
           <button
             className="idea-chat-search-btn"
-            onClick={() => processIdeaWithLLM(section.id)}
-            disabled={llmLoading || generatingFor !== null}
-            title={t("processIdeas")}
+            onClick={() => setShowGrouped(true)}
+            title={t("ideaProcessGroup")}
           >
-            <Sparkles size={16} />
+            <Layers size={14} />
           </button>
         )}
         <input
@@ -949,8 +1035,34 @@ export function IdeaChat({ section, tree, onNavigate }: {
             <span>{t("ideaEmptyHint")}</span>
           </div>
         )}
-        {messages.map(msg => (
-          <div key={msg.id} data-msg-id={msg.id} data-plan-id={msg.planId || undefined} className={`idea-chat-msg${msg.completed ? " idea-chat-msg--completed" : ""}${generatingFor === msg.id ? " idea-chat-msg--generating" : ""}`} onContextMenu={(e) => handleMsgContextMenu(e, msg.id)}>
+        {(() => {
+          // Group messages for rendering
+          const hasGroups = showGrouped && messages.some((m: any) => m.group);
+          let lastGroup: string | null = null;
+          const sortedMessages = hasGroups
+            ? [...messages].sort((a: any, b: any) => {
+                const ga = (a as any).group || "";
+                const gb = (b as any).group || "";
+                if (ga !== gb) return ga.localeCompare(gb);
+                return a.createdAt - b.createdAt;
+              })
+            : messages;
+
+          return sortedMessages.map((msg) => {
+            const msgGroup = (msg as any).group as string | undefined;
+            const msgTitle = (msg as any).title as string | undefined;
+            const showGroupHeader = hasGroups && msgGroup && msgGroup !== lastGroup;
+            if (hasGroups && msgGroup) lastGroup = msgGroup;
+
+            return (
+              <div key={msg.id}>
+                {showGroupHeader && (
+                  <div className="idea-chat-group-header">
+                    <FolderOpen size={13} />
+                    <span>{msgGroup}</span>
+                  </div>
+                )}
+                <div data-msg-id={msg.id} data-plan-id={msg.planId || undefined} className={`idea-chat-msg${msg.completed ? " idea-chat-msg--completed" : ""}${generatingFor === msg.id ? " idea-chat-msg--generating" : ""}`} onContextMenu={(e) => handleMsgContextMenu(e, msg.id)}>
             <div className="idea-chat-msg-bubble" style={editingId === msg.id && editMinWidth ? { minWidth: editMinWidth } : undefined}>
               {editingId === msg.id ? (() => {
                 const existingCount = msg.images?.length || 0;
@@ -1013,6 +1125,7 @@ export function IdeaChat({ section, tree, onNavigate }: {
                 );
               })() : (
                 <>
+                  {msgTitle && <div className="idea-chat-msg-title">{msgTitle}</div>}
                   {msg.text && <div className="idea-chat-msg-text" onDoubleClick={(e) => handleStartEdit(msg, e)}>{msg.text}</div>}
                 </>
               )}
@@ -1125,7 +1238,10 @@ export function IdeaChat({ section, tree, onNavigate }: {
               </div>
             )}
           </div>
-        ))}
+              </div>
+            );
+          });
+        })()}
         <div ref={messagesEndRef} />
       </div>
 
@@ -1211,6 +1327,15 @@ export function IdeaChat({ section, tree, onNavigate }: {
           <button onClick={() => moveIdeaMessage(msgContextMenu.msgId, "top")}>{t("kanbanMoveToTop")}</button>
           <button onClick={() => moveIdeaMessage(msgContextMenu.msgId, "bottom")}>{t("kanbanMoveToBottom")}</button>
         </div>
+      )}
+
+      {showProcessingPreview && ideaProcessingTask?.result && ideaProcessingTask.originalMessages && (
+        <IdeaProcessingPreview
+          result={ideaProcessingTask.result}
+          originalMessages={ideaProcessingTask.originalMessages}
+          onApply={handleApplyProcessing}
+          onCancel={handleCancelProcessing}
+        />
       )}
 
       {lightbox && lightbox.index < lightbox.images.length && (

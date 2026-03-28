@@ -1,6 +1,6 @@
 {
   "name": "@ccdoc/desktop",
-  "version": "0.1.17",
+  "version": "0.1.0",
   "private": true,
   "main": "dist/main/index.js",
   "scripts": {
@@ -25,6 +25,8 @@
     "@tiptap/extension-task-item": "^2.11.5",
     "@tiptap/extension-task-list": "^2.11.5",
     "@tiptap/extension-text-align": "^2.27.2",
+    "@tiptap/extension-color": "^2.27.2",
+    "@tiptap/extension-text-style": "^2.27.2",
     "@tiptap/extension-underline": "^2.27.2",
     "@tiptap/pm": "^2.11.5",
     "@tiptap/react": "^2.11.5",
@@ -39,7 +41,7 @@
     "lowlight": "^3.3.0",
     "lucide-react": "^0.577.0",
     "marked": "^15.0.6",
-    "onnxruntime-web": "^1.24.3",
+    "onnxruntime-web": "^1.24.0",
     "pdfjs-dist": "^4.0.379",
     "picomatch": "^4.0.3",
     "react": "^19.0.0",
@@ -96,11 +98,11 @@
     "publish": null
   },
   "devDependencies": {
-    "@tiptap/extension-color": "^2.27.2",
-    "@tiptap/extension-text-style": "^2.27.2",
+    "@libsql/client": "^0.14.0",
     "@types/d3-drag": "^3.0.7",
     "@types/d3-force": "^3.0.10",
     "@types/d3-selection": "^3.0.11",
+    "@types/d3-transition": "^3.0.9",
     "@types/d3-zoom": "^3.0.8",
     "@types/dompurify": "^3.2.0",
     "@types/picomatch": "^4.0.2",

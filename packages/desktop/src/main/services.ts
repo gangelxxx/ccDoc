@@ -22,9 +22,11 @@ import {
   FtsRepo,
   EmbeddingRepo,
   FindService,
+  SemanticCacheRepo,
 } from "@ccdoc/core";
 import type { Client } from "@libsql/client";
 import { EmbeddingManager } from "./embedding-manager";
+import { startPeriodicIndexing, stopPeriodicIndexing } from "./index-scheduler";
 import type { SettingsService } from "./services/settings.service";
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -40,6 +42,7 @@ export interface ProjectServices {
   passport: ProjectPassportRepo;
   find: FindService;
   embeddingRepo: EmbeddingRepo;
+  semanticCache: SemanticCacheRepo;
 }
 
 // ── Module state ───────────────────────────────────────────────────
@@ -49,6 +52,7 @@ let projectsService: ProjectsService;
 let searchService: SearchService;
 let backupService: BackupService;
 let embeddingManager: EmbeddingManager;
+let _settingsService: SettingsService | null = null;
 
 const projectDbs = new Map<string, ProjectServices>();
 const pendingInits = new Map<string, Promise<ProjectServices>>();
@@ -106,15 +110,23 @@ export function unwatchProjectDb(token: string): void {
     clearTimeout(dbChangeTimers.get(token)!);
     dbChangeTimers.delete(token);
   }
+  stopPeriodicIndexing(token);
 }
 
 // ── Background task tracking ───────────────────────────────────────
 
+function safeSend(channel: string, data: any): void {
+  try {
+    const win = getMainWindow();
+    if (win && !win.isDestroyed()) win.webContents.send(channel, data);
+  } catch { /* window destroyed */ }
+}
+
 export function trackBgTask<T>(label: string, fn: () => Promise<T>): Promise<T> {
   const id = String(++bgTaskCounter);
-  getMainWindow()?.webContents.send("bg-task:start", { id, label });
+  safeSend("bg-task:start", { id, label });
   return fn().finally(() => {
-    getMainWindow()?.webContents.send("bg-task:finish", { id });
+    safeSend("bg-task:finish", { id });
   });
 }
 
@@ -135,6 +147,7 @@ export function getProjectServices(token: string): Promise<ProjectServices> {
         const index = new IndexService(db, undefined, ftsRepo, model, embeddingRepo);
         const passport = new ProjectPassportRepo(db);
         const find = new FindService(ftsRepo, embeddingRepo, model);
+        const semanticCache = new SemanticCacheRepo(db);
         const services: ProjectServices = {
           db,
           sections,
@@ -146,22 +159,39 @@ export function getProjectServices(token: string): Promise<ProjectServices> {
           passport,
           find,
           embeddingRepo,
+          semanticCache,
         };
         projectDbs.set(token, services);
         backupService.registerDb(token, db);
         watchProjectDb(token);
+        const idxIntervalMs = (_settingsService?.getAll().indexing?.stalenessIntervalMin ?? 5) * 60_000;
+        startPeriodicIndexing(token, idxIntervalMs);
 
-        // Trigger FTS reindex if not yet indexed or index version changed
+        // Trigger FTS reindex if not yet indexed or index version changed.
+        // Runs in a worker thread to avoid blocking the main process.
         (async () => {
           try {
             const indexed = await fts.isIndexed();
             const storedVer = await passport.get("fts_index_version");
             if (!indexed || storedVer !== String(INDEX_VERSION)) {
-              await trackBgTask("Индексация поиска", () => index.reindexAll());
+              const { reindexFtsInWorker } = await import("./fts-reindex");
+              await trackBgTask("Индексация поиска", () => reindexFtsInWorker(token));
               await passport.set("fts_index_version", String(INDEX_VERSION));
+              await passport.set("fts_last_indexed_at", new Date().toISOString());
             }
           } catch (err) {
             console.warn("[fts] reindex on open failed:", err);
+          }
+        })();
+
+        // Auto-configure then start semantic indexing
+        (async () => {
+          try {
+            const { autoConfigureIndexing, triggerIndexing } = await import("./ipc/semantic");
+            await autoConfigureIndexing(token);
+            triggerIndexing(token);
+          } catch (err) {
+            console.warn("[semantic] proactive indexing failed:", err);
           }
         })();
 
@@ -183,6 +213,7 @@ export async function initServices(settingsService?: SettingsService): Promise<v
   searchService = new SearchService();
   backupService = new BackupService();
   if (settingsService) {
+    _settingsService = settingsService;
     embeddingManager = new EmbeddingManager(settingsService);
   }
   // Clean up orphaned project directories from previous failed removals
@@ -209,6 +240,10 @@ export function getBackupService(): BackupService {
 
 export function getEmbeddingManager(): EmbeddingManager {
   return embeddingManager;
+}
+
+export function getSettingsService(): SettingsService | null {
+  return _settingsService;
 }
 
 export function getProjectDbsMap(): Map<string, ProjectServices> {

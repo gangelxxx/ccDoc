@@ -44,13 +44,13 @@ export const createProjectsSlice: SliceCreator<ProjectsSlice> = (set, get) => ({
   selectProject: async (project) => {
     set({ treeLoading: true });
     try {
-      set({ currentProject: project, currentSection: null, navHistory: [], navIndex: -1, canGoBack: false, canGoForward: false, historyViewCommit: null, historyViewSections: [], historyViewSectionId: null, historyViewContent: null, historyViewCurrentContent: null, history: [] });
+      set({ currentProject: project, currentSection: null, navHistory: [], navIndex: -1, canGoBack: false, canGoForward: false, historyViewCommit: null, historyViewSections: [], historyViewSectionId: null, historyViewContent: null, historyViewCurrentContent: null, history: [], externallyChangedIds: new Set<string>(), externalChangePending: false, externalChangeTimestamp: null });
       await window.api.touchProject(project.token);
       const tree = await window.api.getTree(project.token);
       set({ tree });
-      get().loadHistory();
-      get().loadPassport();
-      get().loadProjects();
+      get().loadHistory().catch(() => {});
+      get().loadPassport().catch(() => {});
+      get().loadProjects().catch(() => {});
     } catch (e: any) {
       get().addToast("error", "Failed to load project", e.message);
     } finally {

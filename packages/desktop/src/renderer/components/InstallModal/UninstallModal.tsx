@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
+import DOMPurify from "dompurify";
 import { useAppStore } from "../../stores/app.store.js";
 import { useT } from "../../i18n.js";
 
@@ -75,7 +76,7 @@ export function UninstallModal({ onClose }: { onClose: () => void }) {
           <div className="install-idle">
             <p
               className="install-description"
-              dangerouslySetInnerHTML={{ __html: t("excludePluginDesc", currentProject?.name ?? "") }}
+              dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(t("excludePluginDesc", currentProject?.name ?? "")) }}
             />
             <div className="modal-actions">
               <button className="btn btn-primary" onClick={runUninstall}>{t("excludeBtn")}</button>

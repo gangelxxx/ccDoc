@@ -1,6 +1,10 @@
 import type { Lang } from "../../i18n.js";
 import type { SliceCreator, ToastType } from "../types.js";
 
+type FontFamily = "default" | "serif" | "sans" | "mono" | "system";
+type FontSize = "small" | "medium" | "large";
+type ColorScheme = "teal" | "blue" | "purple";
+
 let toastCounter = 0;
 
 export interface UiSlice {
@@ -8,6 +12,12 @@ export interface UiSlice {
   toggleTheme: () => void;
   language: Lang;
   setLanguage: (lang: Lang) => void;
+  fontFamily: FontFamily;
+  setFontFamily: (v: FontFamily) => void;
+  fontSize: FontSize;
+  setFontSize: (v: FontSize) => void;
+  colorScheme: ColorScheme;
+  setColorScheme: (v: ColorScheme) => void;
   contentWidth: "narrow" | "medium" | "wide";
   cycleContentWidth: () => void;
 
@@ -75,6 +85,25 @@ export const createUiSlice: SliceCreator<UiSlice> = (set, get) => ({
     window.api.settingsPatch({ language: lang });
   },
 
+  fontFamily: "default" as FontFamily, // overwritten by boot
+  setFontFamily: (v) => {
+    document.documentElement.setAttribute("data-font-family", v);
+    set({ fontFamily: v });
+    window.api.settingsPatch({ fontFamily: v });
+  },
+  fontSize: "medium" as FontSize, // overwritten by boot
+  setFontSize: (v) => {
+    document.documentElement.setAttribute("data-font-size", v);
+    set({ fontSize: v });
+    window.api.settingsPatch({ fontSize: v });
+  },
+  colorScheme: "teal" as ColorScheme, // overwritten by boot
+  setColorScheme: (v) => {
+    document.documentElement.setAttribute("data-color-scheme", v);
+    set({ colorScheme: v });
+    window.api.settingsPatch({ colorScheme: v });
+  },
+
   sidebarWidth: 268, // overwritten by boot
   setSidebarWidth: (w) => {
     const clamped = Math.max(140, Math.min(800, w));
@@ -131,6 +160,8 @@ export const createUiSlice: SliceCreator<UiSlice> = (set, get) => ({
   confirmModal: null,
   showConfirm: (message: string, opts?: { title?: string; danger?: boolean }) => {
     return new Promise<boolean>((resolve) => {
+      const prev = get().confirmModal;
+      if (prev) prev.resolve(false);
       set({ confirmModal: { message, title: opts?.title, danger: opts?.danger, resolve } });
     });
   },

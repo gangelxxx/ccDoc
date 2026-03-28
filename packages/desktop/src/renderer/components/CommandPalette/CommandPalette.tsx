@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import DOMPurify from "dompurify";
 import { useAppStore } from "../../stores/app.store.js";
 import { useT } from "../../i18n.js";
 
@@ -195,7 +196,7 @@ export function CommandPalette() {
                 {item.labelHtml ? (
                   <span
                     className="palette-item-label"
-                    dangerouslySetInnerHTML={{ __html: item.labelHtml }}
+                    dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(item.labelHtml) }}
                   />
                 ) : (
                   <span className="palette-item-label">{item.label}</span>
@@ -203,7 +204,7 @@ export function CommandPalette() {
                 {item.snippet && (
                   <span
                     className="palette-item-snippet"
-                    dangerouslySetInnerHTML={{ __html: item.snippet }}
+                    dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(item.snippet) }}
                   />
                 )}
               </div>

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback } from "react";
+import DOMPurify from "dompurify";
 import { useAppStore } from "../../stores/app.store.js";
 import { Search, X } from "lucide-react";
 import { useT } from "../../i18n.js";
@@ -67,12 +68,12 @@ export function SearchPanel() {
           >
             <span
               className="search-panel-item-title"
-              dangerouslySetInnerHTML={{ __html: r.titleHighlighted || r.title }}
+              dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(r.titleHighlighted || r.title) }}
             />
             {r.snippet && (
               <span
                 className="search-panel-item-snippet"
-                dangerouslySetInnerHTML={{ __html: r.snippet }}
+                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(r.snippet) }}
               />
             )}
           </button>

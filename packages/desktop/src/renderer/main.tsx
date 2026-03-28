@@ -14,6 +14,9 @@ import "./styles.css";
 interface SettingsData {
   theme: "light" | "dark";
   language: string;
+  fontFamily: "default" | "serif" | "sans" | "mono" | "system";
+  fontSize: "small" | "medium" | "large";
+  colorScheme: "teal" | "blue" | "purple";
   contentWidth: "narrow" | "medium" | "wide";
   sidebarWidth: number;
   llmPanelWidth: number;
@@ -25,6 +28,7 @@ interface SettingsData {
   webSearchApiKey: string;
   customAgents: any[];
   embedding: any;
+  indexing: any;
   voiceModelId: string;
   devMode: boolean;
   devTrackToolIssues: boolean;
@@ -35,6 +39,9 @@ function mapSettingsToState(s: SettingsData, sessions: LlmSession[]) {
   return {
     theme: s.theme,
     language: s.language as Lang,
+    fontFamily: s.fontFamily || "default",
+    fontSize: s.fontSize || "medium",
+    colorScheme: s.colorScheme || "teal",
     contentWidth: s.contentWidth,
     sidebarWidth: s.sidebarWidth,
     llmPanelWidth: s.llmPanelWidth,
@@ -46,6 +53,7 @@ function mapSettingsToState(s: SettingsData, sessions: LlmSession[]) {
     webSearchApiKey: s.webSearchApiKey,
     customAgents: Array.isArray(s.customAgents) ? s.customAgents : [],
     embeddingConfig: s.embedding,
+    indexingConfig: s.indexing,
     voiceModelId: s.voiceModelId || "",
     devMode: !!s.devMode,
     devTrackToolIssues: !!s.devTrackToolIssues,
@@ -163,9 +171,12 @@ async function boot() {
   // Hydrate Zustand store
   useAppStore.setState(mapSettingsToState(settings, sessions));
 
-  // Apply theme/contentWidth to DOM
+  // Apply theme/contentWidth/appearance to DOM
   document.documentElement.setAttribute("data-theme", settings.theme || "light");
   document.documentElement.setAttribute("data-content-width", settings.contentWidth || "narrow");
+  document.documentElement.setAttribute("data-font-family", settings.fontFamily || "default");
+  document.documentElement.setAttribute("data-font-size", settings.fontSize || "medium");
+  document.documentElement.setAttribute("data-color-scheme", settings.colorScheme || "teal");
 
   // Fetch voice model statuses so mic button is active immediately
   useAppStore.getState().fetchVoiceStatuses();

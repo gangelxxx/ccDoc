@@ -519,6 +519,7 @@ function buildTree(sections: Section[]): TreeNode[] {
       icon: s.icon,
       sort_key: s.sort_key,
       summary: s.summary ?? null,
+      updated_at: s.updated_at,
       children: [],
     });
   }

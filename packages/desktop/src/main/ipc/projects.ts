@@ -46,10 +46,6 @@ export function registerProjectsIpc(): void {
     await getProjectsService().removeProject(token);
   });
 
-  ipcMain.handle("projects:rename", async (_e, token: string, name: string) => {
-    await getProjectsService().updateName(token, name);
-  });
-
   ipcMain.handle("projects:touch", async (_e, token: string) => {
     await getProjectsService().touchProject(token);
   });

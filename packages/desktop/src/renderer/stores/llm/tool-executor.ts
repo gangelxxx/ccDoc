@@ -59,8 +59,8 @@ function normalizeInput(input: any): any {
   if (!input || typeof input !== "object") return input;
   const out = { ...input };
 
-  // Fix stringified arrays (e.g. section_ids: "[\"a\",\"b\"]" → ["a","b"], paths: "[...]" → [...])
-  for (const key of ["section_ids", "paths", "sections", "tags", "ordered_ids"]) {
+  // Fix stringified arrays (e.g. section_ids: "[\"a\",\"b\"]" → ["a","b"], patches: "[...]" → [...])
+  for (const key of ["section_ids", "paths", "sections", "tags", "ordered_ids", "patches"]) {
     if (typeof out[key] === "string" && out[key].startsWith("[")) {
       try { out[key] = JSON.parse(out[key]); } catch { /* leave as-is */ }
     }
@@ -384,6 +384,90 @@ async function executeAgentTool(
   }
 }
 
+// ─── Markdown heading patch helpers ─────────────────────────────
+
+function findHeadingBounds(markdown: string, heading: string): { start: number; end: number; found: boolean } {
+  const lines = markdown.split("\n");
+  // Determine heading level and text from input (e.g. "## Architecture" → level 2, "Architecture")
+  const headingMatch = heading.match(/^(#+)\s+(.*)/);
+  const headingLevel = headingMatch ? headingMatch[1].length : 2;
+  const headingText = (headingMatch ? headingMatch[2] : heading).trim().toLowerCase();
+
+  let start = -1;
+  let end = lines.length;
+
+  for (let i = 0; i < lines.length; i++) {
+    const match = lines[i].trim().match(/^(#+)\s+(.*)/);
+    if (!match) continue;
+
+    const level = match[1].length;
+    const text = match[2].trim().toLowerCase();
+
+    if (start === -1 && level === headingLevel && text === headingText) {
+      start = i;
+    } else if (start !== -1 && level <= headingLevel) {
+      end = i;
+      break;
+    }
+  }
+
+  if (start === -1) return { start: 0, end: 0, found: false };
+  return { start, end, found: true };
+}
+
+function replaceHeadingContent(markdown: string, heading: string, newContent: string): { markdown: string; found: boolean } {
+  const bounds = findHeadingBounds(markdown, heading);
+  if (!bounds.found) return { markdown, found: false };
+
+  const lines = markdown.split("\n");
+  const headingLine = lines[bounds.start];
+  const before = lines.slice(0, bounds.start).join("\n");
+  const after = lines.slice(bounds.end).join("\n");
+
+  // Check if newContent already contains the target heading (model included it in content).
+  // If so, replace the entire block (heading + content) with newContent as-is to avoid duplication.
+  const headingTrimmed = headingLine.trim().toLowerCase();
+  const contentHasHeading = newContent.split("\n").some(
+    (line) => line.trim().toLowerCase() === headingTrimmed,
+  );
+
+  const parts: string[] = [];
+  if (before) parts.push(before);
+  if (contentHasHeading) {
+    // newContent already includes the heading — use it as-is (no separate headingLine)
+    if (newContent) parts.push(newContent);
+  } else {
+    // newContent is just body text — prepend the original heading
+    parts.push(headingLine);
+    if (newContent) parts.push(newContent);
+  }
+  if (after) parts.push(after);
+  const result = parts.join("\n\n");
+  return { markdown: result.replace(/\n{3,}/g, "\n\n"), found: true };
+}
+
+function insertAfterHeading(markdown: string, heading: string, content: string): { markdown: string; found: boolean } {
+  const bounds = findHeadingBounds(markdown, heading);
+  if (!bounds.found) return { markdown, found: false };
+
+  const lines = markdown.split("\n");
+  const before = lines.slice(0, bounds.end).join("\n");
+  const after = lines.slice(bounds.end).join("\n");
+
+  return { markdown: before + "\n\n" + content + (after ? "\n\n" + after : ""), found: true };
+}
+
+function deleteHeadingContent(markdown: string, heading: string): { markdown: string; found: boolean } {
+  const bounds = findHeadingBounds(markdown, heading);
+  if (!bounds.found) return { markdown, found: false };
+
+  const lines = markdown.split("\n");
+  const before = lines.slice(0, bounds.start).join("\n");
+  const after = lines.slice(bounds.end).join("\n");
+
+  return { markdown: (before + "\n\n" + after).replace(/\n{3,}/g, "\n\n").trim(), found: true };
+}
+
 /**
  * Creates a tool executor bound to the current project token and state.
  */
@@ -637,6 +721,53 @@ export function createToolExecutor(
           state.mutated = true;
           return JSON.stringify({ updated: results });
         }
+        case "patch_section": {
+          const sid = resolveId(input.section_id);
+          const patches = input.patches;
+          if (!Array.isArray(patches) || patches.length === 0) return "Error: patches must be a non-empty array.";
+
+          let markdown = await window.api.getSectionContent(token, sid, "markdown");
+          if (typeof markdown !== "string") return "Error: could not read section content.";
+          const current = await window.api.getSection(token, sid);
+
+          for (const patch of patches) {
+            switch (patch.action) {
+              case "replace_heading": {
+                if (!patch.heading || !patch.content) return "Error: replace_heading requires heading and content.";
+                const result = replaceHeadingContent(markdown, patch.heading, patch.content);
+                if (!result.found) return `Error: heading "${patch.heading}" not found in section.`;
+                markdown = result.markdown;
+                break;
+              }
+              case "append":
+                markdown = markdown.trimEnd() + "\n\n" + (patch.content || "");
+                break;
+              case "prepend":
+                markdown = (patch.content || "") + "\n\n" + markdown;
+                break;
+              case "insert_after": {
+                if (!patch.heading) return "Error: insert_after requires heading.";
+                const result = insertAfterHeading(markdown, patch.heading, patch.content || "");
+                if (!result.found) return `Error: heading "${patch.heading}" not found.`;
+                markdown = result.markdown;
+                break;
+              }
+              case "delete_heading": {
+                if (!patch.heading) return "Error: delete_heading requires heading.";
+                const result = deleteHeadingContent(markdown, patch.heading);
+                if (!result.found) return `Error: heading "${patch.heading}" not found.`;
+                markdown = result.markdown;
+                break;
+              }
+              default:
+                return `Error: unknown patch action "${patch.action}".`;
+            }
+          }
+
+          await window.api.updateSectionMarkdown(token, sid, current.title, markdown);
+          state.mutated = true;
+          return `Section "${current.title}" patched (${patches.length} patch${patches.length > 1 ? "es" : ""} applied, ${markdown.length} chars).`;
+        }
         case "move_section": {
           const newParentId = (input.new_parent_id && input.new_parent_id !== "null") ? resolveId(input.new_parent_id) : null;
           const afterId = (input.after_id && input.after_id !== "null") ? resolveId(input.after_id) : null;
@@ -871,6 +1002,19 @@ export function createToolExecutor(
             max_results: input.max_results,
           });
         }
+        case "semantic_search": {
+          const topK = Math.min(Math.max(input.top_k || 5, 1), 15);
+          const filter = input.filter === "docs" ? "doc" : input.filter === "code" ? "code" : "all";
+          try {
+            const result = await window.api.semanticSearch(token, input.query, topK, filter);
+            if (result.indexing && result.results.length === 0) {
+              return "Semantic index is being built in background. FTS search is available immediately via search_sections. Semantic search will be ready in ~30 seconds.";
+            }
+            return result.formatted;
+          } catch (err: any) {
+            return `Semantic search unavailable: ${err.message || err}. Use search_project_files or find_symbols instead.`;
+          }
+        }
         case "web_search": {
           const { webSearchProvider, webSearchApiKey } = get();
           if (!webSearchApiKey || webSearchProvider === "none") {
@@ -1067,7 +1211,7 @@ export function createToolExecutor(
 
     // Invalidate cache on mutating operations
     const isMutating = ["create_section", "bulk_create_sections", "update_section", "bulk_update_sections",
-      "delete_section", "move_section", "reorder_children", "duplicate_section", "restore_section",
+      "patch_section", "delete_section", "move_section", "reorder_children", "duplicate_section", "restore_section",
       "update_icon", "restore_version"].includes(name);
     if (isMutating) {
       const broadMutation = name === "restore_version" || name === "bulk_create_sections" || name === "bulk_update_sections" || name === "reorder_children";

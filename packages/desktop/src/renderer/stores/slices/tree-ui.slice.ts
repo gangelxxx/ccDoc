@@ -8,7 +8,7 @@ export interface TreeUiSlice {
 }
 
 export const createTreeUiSlice: SliceCreator<TreeUiSlice> = (set, get) => ({
-  expandedNodes: new Set<string>(JSON.parse(localStorage.getItem("ccdoc-expanded-nodes") || "[]")),
+  expandedNodes: (() => { try { return new Set<string>(JSON.parse(localStorage.getItem("ccdoc-expanded-nodes") || "[]")); } catch { return new Set<string>(); } })(),
 
   toggleExpanded: (id) => {
     const nodes = new Set(get().expandedNodes);

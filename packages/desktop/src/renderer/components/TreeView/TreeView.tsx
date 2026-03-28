@@ -10,7 +10,7 @@ import { CreateModal } from "./CreateModal.js";
 import { IconPickerModal } from "./IconPickerModal.js";
 
 export function TreeView() {
-  const { tree, currentSection, selectSection, createSection, duplicateSection, convertIdeaToKanban, deleteSection, renameSection, updateIcon, moveSection, sectionViewFiles, toggleFileViewMode, importMarkdown, importPdf, importDroppedFiles, expandedNodes, toggleExpanded, expandNode, collapseAll, currentProject, getIdeaMessages, setScrollToPlanId, showConfirm, llmLoading, llmSessionMode, startDocUpdateSession, llmApiKey } = useAppStore();
+  const { tree, currentSection, selectSection, createSection, duplicateSection, convertIdeaToKanban, deleteSection, renameSection, updateIcon, moveSection, sectionViewFiles, toggleFileViewMode, importMarkdown, importPdf, importDroppedFiles, expandedNodes, toggleExpanded, expandNode, collapseAll, currentProject, getIdeaMessages, setScrollToPlanId, showConfirm, llmLoading, llmSessionMode, startDocUpdateSession, llmApiKey, externallyChangedIds, clearExternalChange } = useAppStore();
   const t = useT();
   const [showCreate, setShowCreate] = useState(false);
   const [createDefaultType, setCreateDefaultType] = useState<string>("folder");
@@ -244,6 +244,7 @@ export function TreeView() {
           editingId={editingId}
           selectedIds={selectedIds}
           expandedNodes={expandedNodes}
+          externallyChangedIds={externallyChangedIds}
           onToggleExpanded={toggleExpanded}
           onExpandNode={expandNode}
           onSelect={selectSection}
@@ -253,6 +254,7 @@ export function TreeView() {
           onStartEdit={setEditingId}
           onCreateChild={(parentId, parentType) => openCreate(parentId, parentType)}
           onContextMenu={(x, y, node) => handleContextMenu(x, y, node)}
+          onClearExternalChange={clearExternalChange}
           dragItem={dragItem}
           dropTarget={dropTarget}
           onDragStart={(node) => setDragItem({ id: node.id, type: node.type })}

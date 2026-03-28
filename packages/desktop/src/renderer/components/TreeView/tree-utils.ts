@@ -6,6 +6,8 @@ export interface TreeNode {
   title: string;
   type: string;
   icon: string | null;
+  summary?: string | null;
+  updated_at: string;
   children: TreeNode[];
 }
 

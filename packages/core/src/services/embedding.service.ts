@@ -8,7 +8,7 @@ import { join } from "path";
 export interface IEmbeddingProvider {
   isAvailable(): boolean;
   load(): Promise<boolean>;
-  encode(text: string): Promise<Float32Array>;
+  encode(text: string, prefix?: string): Promise<Float32Array>;
   encodeQuery(text: string): Promise<Float32Array>;
   get dimension(): number;
 }
@@ -103,7 +103,7 @@ export class EmbeddingModel implements IEmbeddingProvider {
   private _available: boolean | null = null;
   private loading: Promise<boolean> | null = null;
 
-  constructor(private modelDir: string) {}
+  constructor(private modelDir: string, private numThreads?: number) {}
 
   /**
    * Check if the model files exist on disk.
@@ -138,10 +138,15 @@ export class EmbeddingModel implements IEmbeddingProvider {
       const modelPath = join(this.modelDir, "model.onnx");
       const tokenizerPath = join(this.modelDir, "tokenizer.json");
 
-      this.session = await this.ort.InferenceSession.create(modelPath, {
+      const sessionOpts: Record<string, any> = {
         executionProviders: ["cpu"],
         graphOptimizationLevel: "all",
-      });
+      };
+      if (this.numThreads) {
+        sessionOpts.intraOpNumThreads = this.numThreads;
+        sessionOpts.interOpNumThreads = 1;
+      }
+      this.session = await this.ort.InferenceSession.create(modelPath, sessionOpts);
 
       const tokenizerJson = JSON.parse(await readFile(tokenizerPath, "utf-8"));
       this.tokenizer = new SimpleTokenizer(tokenizerJson);

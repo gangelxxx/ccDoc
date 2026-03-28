@@ -1,17 +1,19 @@
-import { ipcMain } from "electron";
+import { ipcMain, net } from "electron";
 import { join, dirname } from "path";
 import { mkdirSync, existsSync, rmSync, readdirSync, createWriteStream } from "fs";
 import { homedir } from "os";
 import https from "https";
 import Module from "module";
 import { pathToFileURL } from "url";
+import { execFileSync } from "child_process";
 import { getMainWindow } from "../window";
+import { loadGigaAM, transcribeGigaAM, disposeGigaAM, isGigaAMLoaded } from "./gigaam";
 
 // Redirect onnxruntime-node → onnxruntime-web in Electron.
 // onnxruntime-node's native DLL fails to initialize in Electron,
 // but onnxruntime-web registers 'cpu' as a WASM backend alias, so it's a drop-in replacement.
 const _origResolve = (Module as any)._resolveFilename;
-const _patchedResolve = function (request: string, ...args: any[]) {
+const _patchedResolve = function (this: unknown, request: string, ...args: any[]) {
   if (request === "onnxruntime-node") {
     return _origResolve.call(this, "onnxruntime-web", ...args);
   }
@@ -22,10 +24,29 @@ const _patchedResolve = function (request: string, ...args: any[]) {
 
 const VOICE_MODELS_DIR = join(homedir(), ".ccdoc", "models", "voice");
 
-const WHISPER_MODELS: Record<string, { repo: string }> = {
-  "whisper-tiny": { repo: "onnx-community/whisper-tiny" },
-  "whisper-base": { repo: "onnx-community/whisper-base" },
-  "whisper-small": { repo: "onnx-community/whisper-small" },
+type ModelEntry =
+  | { type: "hf"; repo: string }
+  | { type: "tarball"; url: string; extractDir: string; onnxFile: string };
+
+const VOICE_MODELS_REPO: Record<string, ModelEntry> = {
+  // Legacy (backward compat, hidden from UI)
+  "whisper-tiny": { type: "hf", repo: "onnx-community/whisper-tiny" },
+  "whisper-base": { type: "hf", repo: "onnx-community/whisper-base" },
+  // GigaAM (custom CTC pipeline, downloaded from CDN)
+  "gigaam-v3": {
+    type: "tarball",
+    url: "https://blob.handy.computer/giga-am-v3-int8.tar.gz",
+    extractDir: ".",
+    onnxFile: "model.int8.onnx",
+  },
+  // Moonshine (transformers.js compatible)
+  "moonshine-v2-tiny": { type: "hf", repo: "onnx-community/moonshine-tiny-ONNX" },
+  "moonshine-base": { type: "hf", repo: "onnx-community/moonshine-base-ONNX" },
+  // Whisper (transformers.js compatible)
+  "whisper-small": { type: "hf", repo: "onnx-community/whisper-small" },
+  "whisper-medium": { type: "hf", repo: "onnx-community/whisper-medium-ONNX" },
+  "whisper-large": { type: "hf", repo: "onnx-community/whisper-large-v3-ONNX" },
+  "whisper-turbo": { type: "hf", repo: "onnx-community/whisper-large-v3-turbo" },
 };
 
 let transcriber: any = null;
@@ -34,12 +55,24 @@ const activeDownloads = new Map<string, () => void>(); // modelId -> cancel fn
 
 /** Returns "none" | "partial" | "ready" */
 function getModelStatus(modelId: string): "none" | "partial" | "ready" {
-  // Files are stored at: VOICE_MODELS_DIR/{modelId}/{repo}/...
-  const model = WHISPER_MODELS[modelId];
+  const model = VOICE_MODELS_REPO[modelId];
   if (!model) return "none";
+
+  if (model.type === "tarball") {
+    // Tarball models: check for extracted onnx file
+    const onnxPath = join(VOICE_MODELS_DIR, modelId, model.extractDir, model.onnxFile);
+    if (existsSync(onnxPath)) return "ready";
+    const parentDir = join(VOICE_MODELS_DIR, modelId);
+    if (!existsSync(parentDir)) return "none";
+    try {
+      const files = readdirSync(parentDir, { recursive: true }) as string[];
+      return files.length > 0 ? "partial" : "none";
+    } catch { return "none"; }
+  }
+
+  // HuggingFace models: check for .onnx files in repo subdir
   const repoDir = join(VOICE_MODELS_DIR, modelId, model.repo);
   if (!existsSync(repoDir)) {
-    // Check if parent dir has any files (legacy or partial)
     const parentDir = join(VOICE_MODELS_DIR, modelId);
     if (!existsSync(parentDir)) return "none";
     try {
@@ -92,8 +125,10 @@ function downloadFile(
     const request = (targetUrl: string, redirects = 0) => {
       if (cancelled) return;
       if (redirects > 10) { reject(new Error("Too many redirects")); return; }
+      console.log(`[voice:downloadFile] requesting ${targetUrl} (redirect ${redirects})`);
       const opts = new URL(targetUrl);
       const req = https.get({ hostname: opts.hostname, path: opts.pathname + opts.search, headers: { "User-Agent": "ccdoc/1.0" } }, (res) => {
+        console.log(`[voice:downloadFile] response status=${res.statusCode}, content-length=${res.headers["content-length"]}`);
         if (cancelled) { res.resume(); return; }
         if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           res.resume();
@@ -104,16 +139,118 @@ function downloadFile(
         if (res.statusCode !== 200) { res.resume(); reject(new Error(`HTTP ${res.statusCode} for ${targetUrl}`)); return; }
         const total = parseInt(res.headers["content-length"] || "0", 10);
         let received = 0;
+        let lastLogTime = Date.now();
+        let firstChunk = true;
+        console.log(`[voice:downloadFile] starting stream, total: ${(total / 1024 / 1024).toFixed(1)} MB`);
         mkdirSync(dirname(destPath), { recursive: true });
         const file = createWriteStream(destPath);
-        cancelRef.cancel = () => { cancelled = true; req.destroy(); file.destroy(); reject(new Error("Cancelled")); };
-        res.on("data", (chunk: Buffer) => { if (!cancelled) { received += chunk.length; onProgress(received, total); } });
+        cancelRef.cancel = () => { cancelled = true; clearTimeout(dataTimeout); req.destroy(); file.destroy(); reject(new Error("Cancelled")); };
+
+        // Timeout: if no data received within 30s, abort
+        let dataTimeout = setTimeout(() => {
+          if (received === 0 && !cancelled) {
+            console.error(`[voice:downloadFile] no data received in 30s, aborting`);
+            req.destroy();
+            file.destroy();
+            reject(new Error("Download timeout: no data received"));
+          }
+        }, 30000);
+
+        res.on("data", (chunk: Buffer) => {
+          if (cancelled) return;
+          if (firstChunk) {
+            console.log(`[voice:downloadFile] first chunk received: ${chunk.length} bytes`);
+            firstChunk = false;
+            clearTimeout(dataTimeout);
+          }
+          received += chunk.length;
+          onProgress(received, total);
+          const now = Date.now();
+          if (now - lastLogTime > 5000) {
+            const pct = total > 0 ? ((received / total) * 100).toFixed(1) : "?";
+            console.log(`[voice:downloadFile] progress: ${pct}% (${(received / 1024 / 1024).toFixed(1)} / ${(total / 1024 / 1024).toFixed(1)} MB)`);
+            lastLogTime = now;
+          }
+        });
         res.pipe(file);
-        file.on("finish", () => { file.close(); if (!cancelled) resolve(); });
-        file.on("error", (err) => { file.close(); if (!cancelled) reject(err); });
-      }).on("error", (err) => { if (!cancelled) reject(err); });
+        file.on("finish", () => { clearTimeout(dataTimeout); file.close(); if (!cancelled) { console.log(`[voice:downloadFile] finished: ${destPath}`); resolve(); } });
+        file.on("error", (err) => { clearTimeout(dataTimeout); file.close(); if (!cancelled) reject(err); });
+      }).on("error", (err) => { console.error(`[voice:downloadFile] error:`, err.message); if (!cancelled) reject(err); });
     };
     request(url);
+  });
+}
+
+/** Download file using Electron's Chromium network stack (better CDN compatibility) */
+function downloadFileNet(
+  url: string, destPath: string,
+  onProgress: (received: number, total: number) => void,
+  cancelRef: { cancel?: () => void },
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let cancelled = false;
+    console.log(`[voice:downloadNet] requesting ${url}`);
+
+    const req = net.request(url);
+    cancelRef.cancel = () => { cancelled = true; req.abort(); reject(new Error("Cancelled")); };
+
+    req.on("response", (res) => {
+      const statusCode = res.statusCode;
+      const total = parseInt(res.headers["content-length"] as string || "0", 10);
+      console.log(`[voice:downloadNet] response status=${statusCode}, total: ${(total / 1024 / 1024).toFixed(1)} MB`);
+
+      if (statusCode !== 200) {
+        reject(new Error(`HTTP ${statusCode} for ${url}`));
+        return;
+      }
+
+      mkdirSync(dirname(destPath), { recursive: true });
+      const file = createWriteStream(destPath);
+      let received = 0;
+      let lastLogTime = Date.now();
+      let firstChunk = true;
+
+      cancelRef.cancel = () => { cancelled = true; req.abort(); file.destroy(); reject(new Error("Cancelled")); };
+
+      res.on("data", (chunk: Buffer) => {
+        if (cancelled) return;
+        if (firstChunk) {
+          console.log(`[voice:downloadNet] first chunk: ${chunk.length} bytes`);
+          firstChunk = false;
+        }
+        received += chunk.length;
+        file.write(chunk);
+        onProgress(received, total);
+        const now = Date.now();
+        if (now - lastLogTime > 5000) {
+          const pct = total > 0 ? ((received / total) * 100).toFixed(1) : "?";
+          console.log(`[voice:downloadNet] progress: ${pct}% (${(received / 1024 / 1024).toFixed(1)} / ${(total / 1024 / 1024).toFixed(1)} MB)`);
+          lastLogTime = now;
+        }
+      });
+
+      res.on("end", () => {
+        file.end(() => {
+          if (!cancelled) {
+            console.log(`[voice:downloadNet] finished: ${destPath} (${(received / 1024 / 1024).toFixed(1)} MB)`);
+            resolve();
+          }
+        });
+      });
+
+      res.on("error", (err: Error) => {
+        console.error(`[voice:downloadNet] stream error:`, err.message);
+        file.destroy();
+        if (!cancelled) reject(err);
+      });
+    });
+
+    req.on("error", (err: Error) => {
+      console.error(`[voice:downloadNet] request error:`, err.message);
+      if (!cancelled) reject(err);
+    });
+
+    req.end();
   });
 }
 
@@ -140,14 +277,14 @@ async function listRepoFiles(repo: string): Promise<{ path: string; size: number
 export function registerVoiceIpc(): void {
   ipcMain.handle("voice:status", async () => {
     const statuses: Record<string, "none" | "partial" | "ready"> = {};
-    for (const modelId of Object.keys(WHISPER_MODELS)) {
+    for (const modelId of Object.keys(VOICE_MODELS_REPO)) {
       statuses[modelId] = getModelStatus(modelId);
     }
     return { statuses };
   });
 
   ipcMain.handle("voice:download", async (_e, modelId: string) => {
-    const model = WHISPER_MODELS[modelId];
+    const model = VOICE_MODELS_REPO[modelId];
     if (!model) throw new Error("Unknown voice model: " + modelId);
 
     // Cancel previous download if any
@@ -167,54 +304,78 @@ export function registerVoiceIpc(): void {
     try {
       send({ percent: 1 });
 
-      // 1. List files in the HuggingFace repo
-      const allFiles = await listRepoFiles(model.repo);
-      if (cancelRef.cancel === undefined) { /* already cancelled */ }
+      if (model.type === "tarball") {
+        // ─── Tarball download (GigaAM etc.) ───
+        const tarPath = join(modelDir, "download.tar.gz");
+        console.log(`[voice:download] tarball: ${model.url} → ${tarPath}`);
 
-      // Filter: only download what pipeline() needs (configs, tokenizer, onnx models)
-      // Skip: README, .gitattributes, quantized variants (q4, q8), etc.
-      const needed = allFiles.filter((f) => {
-        const p = f.path;
-        if (p.endsWith(".md") || p.endsWith(".gitattributes") || p.endsWith(".gitignore")) return false;
-        if (p.startsWith("onnx/") && p.endsWith(".onnx")) {
-          // Only download fp32 (non-quantized) models
-          if (p.includes("_q4") || p.includes("_q8") || p.includes("quantized")) return false;
-          return true;
-        }
-        if (p.endsWith(".json") || p.endsWith(".txt") || p.endsWith(".model")) return true;
-        if (p.startsWith("onnx/") && p.endsWith("_data")) return true; // external data files
-        return false;
-      });
-
-      const totalBytes = needed.reduce((s, f) => s + f.size, 0);
-      let downloadedBytes = 0;
-      let lastPercent = 1;
-
-      send({ percent: 2 });
-
-      // 2. Download each file into {modelDir}/{repo}/ subdirectory
-      // pipeline() with cache_dir expects: cache_dir/{org}/{model}/file.path
-      const repoSubDir = join(modelDir, model.repo);
-      for (const file of needed) {
-        const destPath = join(repoSubDir, file.path);
-        if (existsSync(destPath)) {
-          // Already downloaded (resume support)
-          downloadedBytes += file.size;
-          const pct = Math.round(Math.min(99, 2 + (downloadedBytes / totalBytes) * 97));
-          if (pct > lastPercent) { lastPercent = pct; send({ percent: pct }); }
-          continue;
-        }
-
-        const fileUrl = `https://huggingface.co/${model.repo}/resolve/main/${file.path}`;
-        await downloadFile(fileUrl, destPath, (received, _total) => {
-          const pct = Math.round(Math.min(99, 2 + ((downloadedBytes + received) / totalBytes) * 97));
-          if (pct > lastPercent) { lastPercent = pct; send({ percent: pct }); }
+        let lastSendTime = Date.now();
+        await downloadFileNet(model.url, tarPath, (received, total) => {
+          const now = Date.now();
+          if (now - lastSendTime < 500) return;
+          lastSendTime = now;
+          const pct = total > 0 ? Math.max(1, Math.min(99, Math.round((received / total) * 100))) : 1;
+          send({ percent: pct });
         }, cancelRef);
 
-        downloadedBytes += file.size;
-      }
+        console.log(`[voice:download] extracting tar.gz...`);
+        send({ percent: 99 });
+        try {
+          const tarBin = process.platform === "win32" ? join(process.env.SYSTEMROOT || "C:\\Windows", "System32", "tar.exe") : "tar";
+          execFileSync(tarBin, ["-xzf", tarPath, "-C", modelDir], { timeout: 120000 });
+        } catch (e: any) {
+          const stderr = e.stderr?.toString?.() || "";
+          console.error("[voice:download] tar stderr:", stderr);
+          throw new Error("Failed to extract tar.gz: " + (stderr || e.message || e));
+        }
 
-      send({ done: true });
+        try { rmSync(tarPath, { force: true }); } catch { /* ignore */ }
+
+        console.log(`[voice:download] tarball done, extracted to ${modelDir}`);
+        send({ done: true });
+      } else {
+        // ─── HuggingFace download (Whisper, Moonshine) ───
+        const allFiles = await listRepoFiles(model.repo);
+
+        const needed = allFiles.filter((f) => {
+          const p = f.path;
+          if (p.endsWith(".md") || p.endsWith(".gitattributes") || p.endsWith(".gitignore")) return false;
+          if (p.startsWith("onnx/") && p.endsWith(".onnx")) {
+            if (p.includes("_q4") || p.includes("_q8") || p.includes("quantized")) return false;
+            return true;
+          }
+          if (p.endsWith(".json") || p.endsWith(".txt") || p.endsWith(".model")) return true;
+          if (p.startsWith("onnx/") && p.endsWith("_data")) return true;
+          return false;
+        });
+
+        const totalBytes = needed.reduce((s, f) => s + f.size, 0);
+        let downloadedBytes = 0;
+        let lastPercent = 1;
+
+        send({ percent: 2 });
+
+        const repoSubDir = join(modelDir, model.repo);
+        for (const file of needed) {
+          const destPath = join(repoSubDir, file.path);
+          if (existsSync(destPath)) {
+            downloadedBytes += file.size;
+            const pct = Math.round(Math.min(99, 2 + (downloadedBytes / totalBytes) * 97));
+            if (pct > lastPercent) { lastPercent = pct; send({ percent: pct }); }
+            continue;
+          }
+
+          const fileUrl = `https://huggingface.co/${model.repo}/resolve/main/${file.path}`;
+          await downloadFile(fileUrl, destPath, (received, _total) => {
+            const pct = Math.round(Math.min(99, 2 + ((downloadedBytes + received) / totalBytes) * 97));
+            if (pct > lastPercent) { lastPercent = pct; send({ percent: pct }); }
+          }, cancelRef);
+
+          downloadedBytes += file.size;
+        }
+
+        send({ done: true });
+      }
     } catch (err: any) {
       if (err.message === "Cancelled") {
         send({ cancelled: true });
@@ -233,12 +394,16 @@ export function registerVoiceIpc(): void {
   });
 
   ipcMain.handle("voice:delete", async (_e, modelId: string) => {
-    // Dispose transcriber if loaded for this model (releases ONNX file locks)
-    if (currentModelId === modelId && transcriber) {
-      try {
-        if (typeof transcriber.dispose === "function") await transcriber.dispose();
-      } catch { /* ignore */ }
-      transcriber = null;
+    // Dispose transcriber/gigaam if loaded for this model (releases ONNX file locks)
+    if (currentModelId === modelId) {
+      if (isGigaAMLoaded()) {
+        await disposeGigaAM();
+      } else if (transcriber) {
+        try {
+          if (typeof transcriber.dispose === "function") await transcriber.dispose();
+        } catch { /* ignore */ }
+        transcriber = null;
+      }
       currentModelId = null;
       // Windows needs time to release file locks after ONNX dispose
       await new Promise((r) => setTimeout(r, 500));
@@ -265,41 +430,61 @@ export function registerVoiceIpc(): void {
 
   ipcMain.handle("voice:transcribe", async (_e, { audio, modelId, language }: { audio: Float32Array; modelId: string; language?: string }) => {
     console.log("[voice:transcribe] start, modelId:", modelId, "samples:", audio?.length, "language:", language);
-    const model = WHISPER_MODELS[modelId];
+    const model = VOICE_MODELS_REPO[modelId];
     if (!model) throw new Error("Unknown voice model: " + modelId);
     const status = getModelStatus(modelId);
     console.log("[voice:transcribe] model status:", status);
     if (status !== "ready") throw new Error("Model not downloaded: " + modelId);
 
-    // Lazy-init or switch model
+    const dir = join(VOICE_MODELS_DIR, modelId);
+
+    if (model.type === "tarball") {
+      // ─── GigaAM / tarball models: custom ONNX pipeline ───
+      if (!isGigaAMLoaded() || currentModelId !== modelId) {
+        // Dispose previous model
+        if (transcriber && typeof transcriber.dispose === "function") {
+          try { await transcriber.dispose(); } catch { /* ignore */ }
+          transcriber = null;
+        }
+        if (isGigaAMLoaded()) await disposeGigaAM();
+
+        console.log("[voice:transcribe] loading GigaAM...");
+        await loadGigaAM(join(dir, model.extractDir));
+        currentModelId = modelId;
+        console.log("[voice:transcribe] GigaAM loaded");
+      }
+
+      console.log("[voice:transcribe] GigaAM inference, samples:", audio.length, "duration:", (audio.length / 16000).toFixed(1), "s");
+      const text = await transcribeGigaAM(audio);
+      console.log("[voice:transcribe] result:", text);
+      return text;
+    }
+
+    // ─── HuggingFace / transformers.js pipeline (Whisper, Moonshine) ───
     if (!transcriber || currentModelId !== modelId) {
       if (transcriber && typeof transcriber.dispose === "function") {
         try { await transcriber.dispose(); } catch { /* ignore */ }
       }
+      if (isGigaAMLoaded()) await disposeGigaAM();
+
       console.log("[voice:transcribe] loading pipeline...");
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const hf = require("@huggingface/transformers");
-      // Override CDN wasmPaths set by transformers during init —
-      // CDN https:// URLs fail in Node.js/Electron (ERR_UNSUPPORTED_ESM_URL_SCHEME).
-      // Point to local transformers dist dir which bundles the WASM files.
-      // Resolve onnxruntime-web from transformers' context (1.22.0-dev, not desktop's 1.24.3)
       const hfDir = dirname(require.resolve("@huggingface/transformers"));
       const ortWebDistDir = pathToFileURL(
         dirname(require.resolve("onnxruntime-web", { paths: [hfDir] })) + "/"
       ).href;
       hf.env.backends.onnx.wasm.wasmPaths = ortWebDistDir;
       const { pipeline } = hf;
-      const modelDir = join(VOICE_MODELS_DIR, modelId);
-      console.log("[voice:transcribe] cache_dir:", modelDir, "repo:", model.repo);
+      console.log("[voice:transcribe] cache_dir:", dir, "repo:", model.repo);
       transcriber = await pipeline("automatic-speech-recognition", model.repo, {
-        cache_dir: modelDir,
+        cache_dir: dir,
         local_files_only: true,
       });
       currentModelId = modelId;
       console.log("[voice:transcribe] pipeline loaded");
     }
 
-    // Audio comes as raw Float32Array PCM (16kHz mono) from renderer
     console.log("[voice:transcribe] running inference, samples:", audio.length, "duration:", (audio.length / 16000).toFixed(1), "s");
     const result = await transcriber(audio, {
       language: language || undefined,

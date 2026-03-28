@@ -66,13 +66,23 @@ export class IndexService {
     // Pre-fetch all tags
     const tagsMap = await this.buildAllTags();
 
-    const items = allSections.map((s) => ({
-      id: s.id,
-      title: s.title,
-      tags: tagsMap.get(s.id) ?? "",
-      breadcrumbs: this.buildBreadcrumbsFromMap(s.parent_id, parentMap),
-      body: extractBody(s),
-    }));
+    // Process in small chunks to avoid blocking the event loop (JSON parsing +
+    // text extraction is synchronous and can freeze the main thread).
+    const CHUNK = 8;
+    const items: { id: string; title: string; tags: string; breadcrumbs: string; body: string }[] = [];
+    for (let i = 0; i < allSections.length; i++) {
+      const s = allSections[i];
+      items.push({
+        id: s.id,
+        title: s.title,
+        tags: tagsMap.get(s.id) ?? "",
+        breadcrumbs: this.buildBreadcrumbsFromMap(s.parent_id, parentMap),
+        body: extractBody(s),
+      });
+      if ((i + 1) % CHUNK === 0) {
+        await yieldToEventLoop();
+      }
+    }
 
     await this.ftsRepo.reindexAll(items);
 
@@ -82,7 +92,8 @@ export class IndexService {
       if (loaded) {
         console.log(`[index] Reindexing embeddings for ${items.length} sections...`);
         await this.embeddingRepo.deleteAll();
-        for (const item of items) {
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
           try {
             const text = [item.breadcrumbs, item.title, item.tags, item.body]
               .filter(Boolean)
@@ -92,6 +103,9 @@ export class IndexService {
             await this.embeddingRepo.upsert(item.id, embedding, hash);
           } catch (err) {
             console.warn(`[index] Failed to compute embedding for ${item.id}:`, err);
+          }
+          if ((i + 1) % CHUNK === 0) {
+            await yieldToEventLoop();
           }
         }
         console.log("[index] Embedding reindex complete");
@@ -180,6 +194,11 @@ export class IndexService {
     }
     return map;
   }
+}
+
+/** Yield to the event loop so IPC and UI remain responsive during heavy loops. */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 export function extractBody(section: Section): string {

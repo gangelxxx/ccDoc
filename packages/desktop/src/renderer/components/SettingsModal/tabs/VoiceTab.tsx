@@ -1,27 +1,105 @@
+import { useMemo } from "react";
 import { useAppStore } from "../../../stores/app.store.js";
 import { useT } from "../../../i18n.js";
+import { ModelList, type ModelCardInfo } from "../ModelList.js";
 
-const VOICE_MODELS = [
-  { id: "whisper-tiny", params: "39M", sizeLabel: "~75 MB", quality: 2 },
-  { id: "whisper-base", params: "74M", sizeLabel: "~150 MB", quality: 3, recommended: true },
-  { id: "whisper-small", params: "244M", sizeLabel: "~470 MB", quality: 4 },
+type VoiceLang = "en" | "multi" | "ru";
+
+interface VoiceModelDef {
+  id: string;
+  accuracy: number;
+  speed: number;
+  sizeLabel: string;
+  lang: VoiceLang;
+  canTranslate?: boolean;
+}
+
+const VOICE_MODELS: VoiceModelDef[] = [
+  { id: "gigaam-v3",           accuracy: 85, speed: 90, sizeLabel: "152 MB",  lang: "ru" },
+  { id: "moonshine-v2-tiny",   accuracy: 45, speed: 95, sizeLabel: "31,0 MB", lang: "en" },
+  { id: "moonshine-base",      accuracy: 55, speed: 90, sizeLabel: "58,0 MB", lang: "en" },
+  { id: "whisper-small",       accuracy: 70, speed: 85, sizeLabel: "487 MB",  lang: "multi", canTranslate: true },
+  { id: "whisper-medium",      accuracy: 80, speed: 45, sizeLabel: "760 MB",  lang: "multi", canTranslate: true },
+  { id: "whisper-large",       accuracy: 80, speed: 15, sizeLabel: "1,1 GB",  lang: "multi", canTranslate: true },
+  { id: "whisper-turbo",       accuracy: 80, speed: 20, sizeLabel: "1,6 GB",  lang: "multi", canTranslate: true },
 ];
 
-function QualityStars({ count }: { count: number }) {
+const LANG_KEYS: Record<VoiceLang, string> = {
+  en: "voiceLangEn",
+  multi: "voiceLangMulti",
+  ru: "voiceLangRu",
+};
+
+function RatingBar({ value }: { value: number }) {
   return (
-    <span style={{ letterSpacing: 1 }}>
-      {"★".repeat(count)}{"☆".repeat(5 - count)}
-    </span>
+    <div className="voice-bar-track">
+      <div className="voice-bar-fill" style={{ width: `${value}%` }} />
+    </div>
   );
 }
 
-export function VoiceTab() {
+interface VoiceTabProps {
+  voiceModelDraft: string;
+  onVoiceModelChange: (id: string) => void;
+}
+
+export function VoiceTab({ voiceModelDraft, onVoiceModelChange }: VoiceTabProps) {
   const {
-    voiceModelId, setVoiceModelId,
     voiceStatuses, voiceDownloading, voiceProgress, voiceCancelling, voiceErrors,
     startVoiceDownload, cancelVoiceDownload, deleteVoiceModel,
   } = useAppStore();
   const t = useT();
+
+  // Normalize voice store (single download) → Record format for ModelList
+  const downloading = useMemo(() => {
+    if (!voiceDownloading) return {};
+    return { [voiceDownloading]: voiceProgress };
+  }, [voiceDownloading, voiceProgress]);
+
+  const cancelling = useMemo(() => {
+    if (!voiceDownloading || !voiceCancelling) return {};
+    return { [voiceDownloading]: true };
+  }, [voiceDownloading, voiceCancelling]);
+
+  const handleDelete = async (modelId: string) => {
+    await deleteVoiceModel(modelId);
+    if (voiceModelDraft === modelId) onVoiceModelChange("");
+  };
+
+  const renderCardContent = (m: VoiceModelDef, info: ModelCardInfo) => {
+    const localeKey = m.id.replace(/-/g, "_");
+    return (
+      <>
+        <div className="voice-card-header">
+          <div className="voice-card-left">
+            <div className="voice-card-name">
+              {t(`voice_${localeKey}` as any)}
+              {info.isActive && <span className="voice-active-badge">✓ {t("active")}</span>}
+            </div>
+            <div className="voice-card-desc">
+              {t(`voice_${localeKey}_desc` as any)}
+            </div>
+          </div>
+          <div className="voice-card-bars">
+            <div className="voice-bar-row">
+              <span className="voice-bar-label">{t("voiceAccuracy")}</span>
+              <RatingBar value={m.accuracy} />
+            </div>
+            <div className="voice-bar-row">
+              <span className="voice-bar-label">{t("voiceSpeed")}</span>
+              <RatingBar value={m.speed} />
+            </div>
+          </div>
+        </div>
+        <div className="voice-card-tags">
+          <span className="voice-lang-tag">⊕ {t(LANG_KEYS[m.lang] as any)}</span>
+          {m.canTranslate && (
+            <span className="voice-translate-tag">⇄ {t("voiceTranslateEn")}</span>
+          )}
+        </div>
+      </>
+    );
+  };
 
   return (
     <div className="settings-section">
@@ -30,79 +108,19 @@ export function VoiceTab() {
         {t("voiceDescription")}
       </div>
 
-      <div className="embedding-models-list">
-        {VOICE_MODELS.map((m) => {
-          const status = (voiceStatuses ?? {})[m.id] || "none";
-          const isReady = status === "ready";
-          const isPartial = status === "partial";
-          const isActive = voiceModelId === m.id && isReady;
-          const isDownloading = voiceDownloading === m.id;
-          const downloadError = (voiceErrors ?? {})[m.id];
-
-          return (
-            <div key={m.id} className={`embedding-model-card${isActive ? " active" : ""}`}>
-              <div className="embedding-model-info">
-                <div className="embedding-model-name">
-                  {t(`voice_${m.id.replace("-", "_")}` as any)}
-                  {m.recommended && <span style={{ marginLeft: 6, fontSize: 12 }} title={t("voiceRecommended")}>⭐</span>}
-                </div>
-                <div className="embedding-model-desc">
-                  {t(`voice_${m.id.replace("-", "_")}_desc` as any)} &middot; {m.params} &middot; <QualityStars count={m.quality} />
-                </div>
-                {isDownloading && (
-                  <div className="embedding-progress">
-                    <div className="embedding-progress-bar" style={{ width: `${voiceProgress}%` }} />
-                  </div>
-                )}
-                {isDownloading && voiceCancelling && (
-                  <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>{t("stopping")}</div>
-                )}
-                {downloadError && !isDownloading && (
-                  <div style={{ fontSize: 11, color: "var(--error, #c00)", marginTop: 4 }}>{downloadError}</div>
-                )}
-              </div>
-              <span className="embedding-model-size">{m.sizeLabel}</span>
-
-              {/* Not downloaded, not downloading */}
-              {status === "none" && !isDownloading && (
-                <button className="btn" onClick={() => startVoiceDownload(m.id)}>{t("download")}</button>
-              )}
-
-              {/* Partially downloaded — resume + delete */}
-              {isPartial && !isDownloading && (
-                <>
-                  <button className="btn" onClick={() => startVoiceDownload(m.id)}>{t("voiceResume")}</button>
-                  <button className="btn" style={{ color: "var(--error, #c00)" }} onClick={() => deleteVoiceModel(m.id)} title={t("voiceDelete")}>✕</button>
-                </>
-              )}
-
-              {/* Downloading */}
-              {isDownloading && !voiceCancelling && (
-                <button className="btn" onClick={cancelVoiceDownload}>{Math.round(voiceProgress)}% ✕</button>
-              )}
-              {isDownloading && voiceCancelling && (
-                <button className="btn" disabled>{t("stopping")}</button>
-              )}
-
-              {/* Fully downloaded, not active, not downloading */}
-              {isReady && !isActive && !isDownloading && (
-                <>
-                  <button className="btn" onClick={() => setVoiceModelId(m.id)}>{t("select")}</button>
-                  <button className="btn" style={{ color: "var(--error, #c00)" }} onClick={() => deleteVoiceModel(m.id)} title={t("voiceDelete")}>✕</button>
-                </>
-              )}
-
-              {/* Fully downloaded, active, not downloading */}
-              {isReady && isActive && !isDownloading && (
-                <>
-                  <button className="btn btn-primary" disabled>{t("active")}</button>
-                  <button className="btn" style={{ color: "var(--error, #c00)" }} onClick={() => deleteVoiceModel(m.id)} title={t("voiceDelete")}>✕</button>
-                </>
-              )}
-            </div>
-          );
-        })}
-      </div>
+      <ModelList
+        models={VOICE_MODELS}
+        statuses={voiceStatuses ?? {}}
+        activeModelId={voiceModelDraft}
+        downloading={downloading}
+        cancelling={cancelling}
+        errors={voiceErrors ?? {}}
+        onSelect={onVoiceModelChange}
+        onDownload={startVoiceDownload}
+        onCancel={cancelVoiceDownload}
+        onDelete={handleDelete}
+        renderCardContent={renderCardContent}
+      />
     </div>
   );
 }

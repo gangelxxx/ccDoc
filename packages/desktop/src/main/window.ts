@@ -52,6 +52,10 @@ export function createWindow(): void {
     }
   });
 
+  // Block navigation to external URLs
+  mainWindow.webContents.on("will-navigate", (e) => e.preventDefault());
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+
   // Detect renderer crashes
   mainWindow.webContents.on("render-process-gone", (_event, details) => {
     console.error("[RENDERER CRASHED]", details.reason, details.exitCode);

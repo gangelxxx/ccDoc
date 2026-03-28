@@ -1,5 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
+import DOMPurify from "dompurify";
 import { useAppStore } from "../../stores/app.store.js";
 import { Trash2, AlertTriangle, Loader2, Copy, Check } from "lucide-react";
 import { useT } from "../../i18n.js";
@@ -117,7 +118,7 @@ export function ProjectPickerModal({ onClose }: Props) {
               <div>
                 <h3 style={{ margin: 0 }}>{t("deleteProjectTitle")}</h3>
                 <p style={{ margin: "8px 0 0", color: "var(--text-secondary)", fontSize: 13, lineHeight: 1.5 }}
-                  dangerouslySetInnerHTML={{ __html: t("deleteProjectWarning", deleteTarget.name) }}
+                  dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(t("deleteProjectWarning", deleteTarget.name)) }}
                 />
                 <p style={{ margin: "6px 0 0", color: "var(--text-muted)", fontSize: 12 }}>
                   {t("deleteProjectIrreversible")}

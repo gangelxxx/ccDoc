@@ -14,19 +14,23 @@ export const DEFAULT_CONTENT_LIMIT = 6000;
 export const MAX_CONTENT_LIMIT = 10_000;
 export const PLAN_RESEARCH_MAX_ROUNDS = 2; // After this many rounds, strip read-only tools in planMode to force writing
 
+// Soft budget: warn model when it uses too many read-only rounds
+export const CHAT_SOFT_BUDGET = 6;   // Warn after N read-only rounds in regular chat
+export const CHAT_HARD_BUDGET = 10;  // Strong warning after N read-only rounds
+
 export const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
 export const CAPABLE_MODEL = "claude-sonnet-4-6";
 
 export const READ_ONLY_TOOLS = new Set([
   "get_tree", "get_section", "get_file_with_sections", "get_sections_batch",
-  "search", "get_history", "list_backups",
+  "search", "semantic_search", "get_history", "list_backups",
   "get_project_tree", "get_file_outlines", "read_project_file", "search_project_files", "find_symbols",
   "web_search",
   "read_buffer", "list_buffer",
 ]);
 
 export const PLAN_TOOLS = new Set([
-  "get_tree", "get_section", "get_file_with_sections", "get_sections_batch", "search",
+  "get_tree", "get_section", "get_file_with_sections", "get_sections_batch", "search", "semantic_search",
   "get_project_tree", "get_file_outlines", "read_project_file", "search_project_files", "find_symbols",
   "web_search",
   "create_section",

@@ -12,7 +12,7 @@ export interface VoiceSlice {
   voiceErrors: Record<string, string>;
   voiceTranscribing: boolean;
   fetchVoiceStatuses: () => Promise<void>;
-  initVoiceProgressListener: () => void;
+  initVoiceProgressListener: () => (() => void) | void;
   startVoiceDownload: (modelId: string) => void;
   cancelVoiceDownload: () => void;
   deleteVoiceModel: (modelId: string) => Promise<void>;
@@ -43,7 +43,7 @@ export const createVoiceSlice: SliceCreator<VoiceSlice> = (set, get) => ({
   },
 
   initVoiceProgressListener: () => {
-    window.api.onVoiceProgress((data: any) => {
+    return window.api.onVoiceProgress((data: any) => {
       const modelId = data.modelId;
       if (!modelId) return;
       if (data.done) {

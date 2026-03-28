@@ -56,7 +56,7 @@ export const createLlmSessionsSlice: SliceCreator<LlmSessionsSlice> = (set, get)
     }
 
     set({ llmSessions: updated, llmCurrentSessionId: id });
-    window.api.sessionsSave(updated);
+    window.api.sessionsSave(updated).catch(() => {});
   },
 
   loadLlmSession: (id) => {
@@ -114,6 +114,6 @@ export const createLlmSessionsSlice: SliceCreator<LlmSessionsSlice> = (set, get)
       patch.llmResolveUserInput = null;
     }
     set(patch as any);
-    window.api.sessionsSave(updated);
+    window.api.sessionsSave(updated).catch(() => {});
   },
 });

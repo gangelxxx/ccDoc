@@ -27,7 +27,11 @@ import {
   TOOL_RESULT_LIMIT,
   READ_ONLY_TOOLS,
   PLAN_RESEARCH_MAX_ROUNDS,
+  CHAT_SOFT_BUDGET,
+  CHAT_HARD_BUDGET,
 } from "../llm-utils.js";
+
+import { ToolDedupTracker, type DedupResult } from "./llm/tool-dedup.js";
 
 import { buildSystemPrompt } from "./llm/system-prompt.js";
 import { buildTools, TOOL_DESCRIPTIONS } from "./llm/tool-definitions.js";
@@ -40,6 +44,17 @@ export { splitMarkdownIntoSections } from "./llm/split-markdown.js";
 
 type SetState = (partial: Partial<AppState> | ((s: AppState) => Partial<AppState>)) => void;
 type GetState = () => AppState;
+
+/** Check if a message is too simple/short to warrant semantic pre-fetch. */
+function isSimpleMessage(msg: string): boolean {
+  const lower = msg.trim().toLowerCase();
+  if (lower.length < 15 && !lower.includes("?") && !lower.includes("как") &&
+      !lower.includes("что") && !lower.includes("где") && !lower.includes("почему")) {
+    return true;
+  }
+  const greetings = ["привет", "здравствуй", "спасибо", "пока", "hi", "hello", "thanks", "ok", "ок", "норм", "да", "нет"];
+  return greetings.some(g => lower === g || lower.startsWith(g + " "));
+}
 
 /** Monotonic counter to detect stale engine instances after stop → new message. */
 let engineGeneration = 0;
@@ -86,7 +101,10 @@ export async function sendLlmMessageImpl(
 
   // --- Mutable state for tool execution ---
   const toolState = { mutated: false, lastCreatedId: null as string | null };
+  const dedupTracker = new ToolDedupTracker();
   let llmTaskTokens = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
+  let softBudgetWarned = false;
+  let hardBudgetWarned = false;
   const myGeneration = ++engineGeneration;
   /** Check if this engine instance is still the active one (not superseded by stop → new message). */
   const isStale = () => get().llmAborted || myGeneration !== engineGeneration;
@@ -178,7 +196,53 @@ export async function sendLlmMessageImpl(
       get, set, llmApiKey: llmApiKey!, model, llmTaskId, llmTaskTokens,
     });
 
-    const systemPrompt = systemParts.join("\n");
+    // --- Pre-fetch: project snapshot + semantic context (Шаги 3-4) ---
+    let prefetchedContext = "";
+    if (token && includeSourceCode) {
+      try {
+        // Project snapshot (cached, ~700 tokens)
+        const snapshot = await window.api.semanticSnapshot(token);
+        if (snapshot) {
+          const parts: string[] = [];
+          if (snapshot.codeTree) {
+            parts.push(`## Project code structure\n<code_tree>\n${snapshot.codeTree}\n</code_tree>`);
+          }
+          if (snapshot.docTree) {
+            parts.push(`## Documentation structure\n<doc_tree>\n${snapshot.docTree}\n</doc_tree>`);
+          }
+          if (parts.length > 0) {
+            prefetchedContext += parts.join("\n\n") + "\n\n";
+          }
+        }
+
+        // Semantic pre-fetch (auto-retrieve relevant chunks, ~2-3K tokens)
+        if (text && text.length > 15 && !isSimpleMessage(text)) {
+          const prefetch = await window.api.semanticPrefetch(token, text, 3000, 0.35);
+          if (prefetch && prefetch.chunks.length > 0) {
+            const header = "## Relevant context (auto-retrieved)\n\n" +
+              "The following code and documentation sections are most relevant to the user's query. " +
+              "Review them before using any tools — you likely already have what you need.\n\n";
+            const body = prefetch.chunks.map((r: any, i: number) => {
+              const chunk = r.chunk;
+              if (chunk.kind === "code") {
+                return `### [${i + 1}] ${chunk.filePath}::${chunk.symbolName || `L${chunk.startLine}-${chunk.endLine}`}\n` +
+                  "```" + chunk.language + "\n" + chunk.content + "\n```";
+              } else {
+                return `### [${i + 1}] ${chunk.sectionPath}${chunk.heading ? " > " + chunk.heading : ""}\n` +
+                  chunk.content;
+              }
+            }).join("\n\n");
+            prefetchedContext += header + body + "\n\n";
+            console.log(`[LLM] [Prefetch] ${prefetch.chunks.length} chunks, ${prefetch.totalTokens} tokens`);
+          }
+        }
+      } catch (err) {
+        console.warn("[LLM] [Prefetch] Failed:", err);
+        // Non-fatal: continue without prefetch
+      }
+    }
+
+    const systemPrompt = systemParts.join("\n") + (prefetchedContext ? "\n\n" + prefetchedContext : "");
     console.group("[LLM] New chat request");
     console.log("[LLM] System prompt:\n", systemPrompt);
     console.log("[LLM] Tools:", finalTools.map(t => t.name));
@@ -308,6 +372,31 @@ export async function sendLlmMessageImpl(
 
         const toolBlocks = contentBlocks.filter((b: any) => b.type === "tool_use");
 
+        // Guard: stop_reason=tool_use but no actual tool_use blocks (e.g. only thinking)
+        if (toolBlocks.length === 0) {
+          console.warn("[LLM] stop_reason=tool_use but no tool_use blocks — treating as end_turn");
+          const thinkingText = contentBlocks
+            .filter((b: any) => b.type === "text")
+            .map((b: any) => b.text)
+            .join("\n")
+            .trim();
+          if (thinkingText) {
+            const reply = applyPlanMarkers(thinkingText, get, set);
+            set((s) => ({
+              llmMessages: [
+                ...s.llmMessages.filter((m) => typeof m.content !== "string" || (!m.content.startsWith("🔧") && !m.content.startsWith("🔄"))),
+                { role: "assistant", content: reply },
+              ],
+              llmLoading: false,
+            }));
+          }
+          await silentRefreshUI();
+          get().saveLlmSession();
+          get().finishBgTask(llmTaskId);
+          console.groupEnd();
+          return toolState.lastCreatedId;
+        }
+
         // --- ask_user handling: if present, execute only ask_user, cancel the rest ---
         const askUserBlock = toolBlocks.find((b: any) => b.name === "ask_user");
         if (askUserBlock) {
@@ -370,11 +459,10 @@ export async function sendLlmMessageImpl(
         }
 
         // Extract any intermediate text the model wrote alongside tool calls
-        const intermediateText = contentBlocks
-          .filter((b: any) => b.type === "text")
-          .map((b: any) => b.text)
-          .join("\n")
-          .trim();
+        const intermediateText = applyPlanMarkers(
+          contentBlocks.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n").trim(),
+          get, set,
+        );
 
         // Show tool calls in UI (with preceding text if any)
         const descCounts = new Map<string, number>();
@@ -408,15 +496,32 @@ export async function sendLlmMessageImpl(
                 console.log(`[LLM] BLOCKED read-only tool after budget: ${block.name}`);
                 return { type: "tool_result", tool_use_id: block.id, content: "ERROR: Research budget exceeded. You MUST now write the plan using create_section. Do NOT read more code or documentation — write the plan immediately with all information you already have.", is_error: true };
               }
-              console.log(`[LLM] Executing tool (parallel): ${block.name}`, JSON.stringify(block.input).slice(0, 300));
-              const raw = await executeTool(block.name, block.input);
-              const result = truncateToolResult(compressToolResult(raw));
+              // Dedup check (search / read / allow)
+              const dedup = checkDedup(dedupTracker, block.name, block.input || {}, round);
+              if (dedup.action === "block") {
+                console.log(`[LLM] [ToolDedup] BLOCKED: ${block.name}`, dedup.message);
+                return { type: "tool_result", tool_use_id: block.id, content: dedup.message!, is_error: true };
+              }
+              // Apply merged read range if dedup suggests it
+              const effectiveInput = dedup.mergedInput
+                ? { ...block.input, startLine: dedup.mergedInput.startLine, endLine: dedup.mergedInput.endLine }
+                : block.input;
+              console.log(`[LLM] Executing tool (parallel): ${block.name}`, JSON.stringify(effectiveInput).slice(0, 300));
+              const raw = await executeTool(block.name, effectiveInput);
+              let result = truncateToolResult(compressToolResult(raw));
+              if (dedup.action === "warn") {
+                console.log(`[LLM] [ToolDedup] WARN: ${block.name}`, dedup.message);
+                result = dedup.message + "\n\n" + result;
+              }
+              // Record after execution
+              recordDedup(dedupTracker, block.name, effectiveInput, round);
               console.log(`[LLM] Tool result (${block.name}): ${raw.length} chars${raw.length > TOOL_RESULT_LIMIT ? " [truncated]" : ""}`, result.slice(0, 500));
               return { type: "tool_result", tool_use_id: block.id, content: result };
             })
           );
           toolResults.push(...results);
         } else {
+          let hadMutation = false;
           for (const block of contentBlocks) {
             if (block.type === "tool_use") {
               if (budgetExceeded && READ_ONLY_TOOLS.has(block.name)) {
@@ -424,12 +529,36 @@ export async function sendLlmMessageImpl(
                 toolResults.push({ type: "tool_result", tool_use_id: block.id, content: "ERROR: Research budget exceeded. You MUST now write the plan using create_section. Do NOT read more code or documentation — write the plan immediately with all information you already have.", is_error: true });
                 continue;
               }
-              console.log(`[LLM] Executing tool: ${block.name}`, JSON.stringify(block.input).slice(0, 300));
-              const raw = await executeTool(block.name, block.input);
-              const result = truncateToolResult(compressToolResult(raw));
+              // Dedup check (search / read / allow)
+              const dedup = checkDedup(dedupTracker, block.name, block.input || {}, round);
+              if (dedup.action === "block") {
+                console.log(`[LLM] [ToolDedup] BLOCKED: ${block.name}`, dedup.message);
+                toolResults.push({ type: "tool_result", tool_use_id: block.id, content: dedup.message!, is_error: true });
+                continue;
+              }
+              // Apply merged read range if dedup suggests it
+              const effectiveInput = dedup.mergedInput
+                ? { ...block.input, startLine: dedup.mergedInput.startLine, endLine: dedup.mergedInput.endLine }
+                : block.input;
+              console.log(`[LLM] Executing tool: ${block.name}`, JSON.stringify(effectiveInput).slice(0, 300));
+              const raw = await executeTool(block.name, effectiveInput);
+              let result = truncateToolResult(compressToolResult(raw));
+              if (dedup.action === "warn") {
+                console.log(`[LLM] [ToolDedup] WARN: ${block.name}`, dedup.message);
+                result = dedup.message + "\n\n" + result;
+              }
+              // Record after execution
+              recordDedup(dedupTracker, block.name, effectiveInput, round);
+              // Reset dedup after mutations (model may re-read changed data)
+              if (!READ_ONLY_TOOLS.has(block.name)) hadMutation = true;
               console.log(`[LLM] Tool result (${block.name}): ${raw.length}→${result.length} chars`, result.slice(0, 500));
               toolResults.push({ type: "tool_result", tool_use_id: block.id, content: result });
             }
+          }
+          if (hadMutation) {
+            dedupTracker.onMutation();
+            softBudgetWarned = false;
+            hardBudgetWarned = false;
           }
         }
 
@@ -446,6 +575,36 @@ export async function sendLlmMessageImpl(
         if (isPlanOnlyRound && freePlanRounds < 30) {
           freePlanRounds++;
           round--;
+        }
+
+        // Skip API round-trip for update_plan-only rounds (saves ~75K cache read tokens per skip).
+        // create_plan is NOT skipped — model needs to see "Plan created" confirmation.
+        const isUpdatePlanOnly = isPlanOnlyRound
+          && toolBlocks.some((b: any) => b.name === "update_plan")
+          && !toolBlocks.some((b: any) => b.name === "create_plan");
+        if (isUpdatePlanOnly && freePlanRounds <= 30) {
+          apiMessages = [...apiMessages, { role: "user", content: toolResults }];
+          console.log("[LLM] Plan-only round (update_plan) — skipping API round-trip, continuing loop");
+          console.groupEnd();
+          continue;
+        }
+
+        // Track read-only rounds for soft budget (ignore update_plan/create_plan — they're "neutral")
+        const nonPlanBlocks = toolBlocks.filter((b: any) => b.name !== "update_plan" && b.name !== "create_plan");
+        if (nonPlanBlocks.length > 0 && nonPlanBlocks.every((b: any) => READ_ONLY_TOOLS.has(b.name))) {
+          dedupTracker.incrementReadOnlyRound();
+        }
+
+        // Soft budget warnings for regular chat
+        if (!planMode) {
+          const roRounds = dedupTracker.getReadOnlyRoundCount();
+          if (roRounds >= CHAT_HARD_BUDGET && !hardBudgetWarned) {
+            hardBudgetWarned = true;
+            toolResults.push({ type: "text", text: "🛑 STOP RESEARCHING. You have used " + roRounds + " rounds of read-only tools. Provide your answer NOW with the information you already have." } as any);
+          } else if (roRounds >= CHAT_SOFT_BUDGET && !softBudgetWarned) {
+            softBudgetWarned = true;
+            toolResults.push({ type: "text", text: "⚠️ EFFICIENCY: You've used " + roRounds + " research rounds. You likely have enough information — synthesize your findings and respond." } as any);
+          }
         }
 
         // Warn model when approaching the round limit (fire only once)
@@ -524,11 +683,9 @@ export async function sendLlmMessageImpl(
           return toolState.lastCreatedId;
         }
 
-        // Final text response — extract text blocks
-        const textParts = contentBlocks
-          .filter((b: any) => b.type === "text")
-          .map((b: any) => b.text);
-        const reply = textParts.join("\n") || "";
+        // Final text response — extract text blocks and apply plan markers
+        const rawReply = contentBlocks.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n") || "";
+        const reply = applyPlanMarkers(rawReply, get, set);
         console.log("[LLM] Final reply:", reply.slice(0, 300));
         console.groupEnd();
 
@@ -574,4 +731,119 @@ export async function sendLlmMessageImpl(
     get().finishBgTask(llmTaskId);
     return null;
   }
+}
+
+/**
+ * Single-shot LLM call (no tool-use loop, no streaming UI).
+ * Returns the raw text response from the model.
+ */
+export async function callLlmOnce(
+  prompt: string,
+  apiKey: string,
+  model: string,
+  maxTokens: number = 8192,
+): Promise<string> {
+  const data = await window.api.llmChat({
+    apiKey,
+    system: "You are a helpful assistant. Respond only with the requested JSON.",
+    messages: [{ role: "user", content: prompt }],
+    model,
+    maxTokens,
+    skipMessageCache: true,
+  });
+
+  const contentBlocks = data.content || [];
+  const textParts = contentBlocks
+    .filter((b: any) => b.type === "text")
+    .map((b: any) => b.text);
+  return textParts.join("\n");
+}
+
+// -- Dedup helpers ----------------------------------------------------------
+
+const DEDUP_SEARCH_TOOLS = new Set([
+  "search_project_files", "find_symbols", "search", "semantic_search",
+]);
+
+const DEDUP_READ_TOOLS = new Set(["read_project_file"]);
+
+/** Route a tool call to the appropriate dedup check (search / read / pass-through). */
+function checkDedup(
+  tracker: ToolDedupTracker,
+  toolName: string,
+  input: Record<string, any>,
+  round: number,
+): DedupResult {
+  if (DEDUP_SEARCH_TOOLS.has(toolName)) {
+    return tracker.checkSearch(toolName, input, round);
+  }
+  if (DEDUP_READ_TOOLS.has(toolName)) {
+    return tracker.checkRead(input, round);
+  }
+  return { action: "allow" };
+}
+
+/** Record a completed tool call in the dedup tracker. */
+function recordDedup(
+  tracker: ToolDedupTracker,
+  toolName: string,
+  input: Record<string, any>,
+  round: number,
+): void {
+  if (DEDUP_SEARCH_TOOLS.has(toolName)) {
+    tracker.recordSearch(toolName, input, round);
+  } else if (DEDUP_READ_TOOLS.has(toolName)) {
+    tracker.recordRead(input, round);
+  }
+}
+
+// -- Plan marker parsing ----------------------------------------------------
+
+const PLAN_MARKER_RE = /\[PLAN:\s*([^\]]+)\]/g;
+
+/**
+ * Parse [PLAN: 0=done, 1=done, 2=in_progress] markers from text,
+ * apply plan updates, and return text with markers stripped.
+ */
+function applyPlanMarkers(text: string, get: () => any, set: (fn: any) => void): string {
+  if (!text.includes("[PLAN:")) return text;
+
+  const plan = get().llmCurrentPlan;
+  if (!plan) return text.replace(PLAN_MARKER_RE, "").trim();
+
+  let updated = false;
+  const newSteps = plan.steps.map((s: any) => ({ ...s }));
+
+  for (const match of text.matchAll(PLAN_MARKER_RE)) {
+    const entries = match[1].split(",").map((e: string) => e.trim());
+    for (const entry of entries) {
+      const [idxStr, status] = entry.split("=").map((s: string) => s.trim());
+      const idx = parseInt(idxStr, 10);
+      if (isNaN(idx) || idx < 0 || idx >= newSteps.length) continue;
+      if (status !== "done" && status !== "in_progress") continue;
+      newSteps[idx].status = status;
+      updated = true;
+      // Auto-advance
+      if (status === "done" && idx + 1 < newSteps.length && newSteps[idx + 1].status === "pending") {
+        newSteps[idx + 1].status = "in_progress";
+      }
+    }
+  }
+
+  if (updated) {
+    const updatedPlan = { steps: newSteps };
+    const snapshot = { steps: newSteps.map((s: any) => ({ ...s })) };
+    const allDone = newSteps.every((s: any) => s.status === "done");
+
+    set((s: any) => ({
+      llmCurrentPlan: allDone ? null : updatedPlan,
+      llmMessages: [
+        ...s.llmMessages.map((m: any) => m.plan ? { ...m, plan: snapshot } : m),
+        { role: "assistant" as const, content: "", plan: { ...snapshot, steps: [...snapshot.steps] } },
+      ],
+    }));
+    console.log("[LLM] Auto-applied plan markers:", newSteps.map((s: any, i: number) => `${i}=${s.status}`).join(", "));
+  }
+
+  return text.replace(PLAN_MARKER_RE, "").trim();
 }

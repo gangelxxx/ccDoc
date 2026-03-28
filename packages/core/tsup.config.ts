@@ -19,5 +19,6 @@ export default defineConfig({
     "minisearch",
     "marked",
     "elkjs",
+    "uuid",
   ],
 });

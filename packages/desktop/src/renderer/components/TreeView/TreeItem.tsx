@@ -9,6 +9,7 @@ export interface TreeItemProps {
   editingId: string | null;
   selectedIds: Set<string>;
   expandedNodes: Set<string>;
+  externallyChangedIds: Set<string>;
   onToggleExpanded: (id: string) => void;
   onExpandNode: (id: string) => void;
   onSelect: (id: string) => void;
@@ -18,6 +19,7 @@ export interface TreeItemProps {
   onStartEdit: (id: string | null) => void;
   onCreateChild: (parentId: string, parentType?: string) => void;
   onContextMenu: (x: number, y: number, node: TreeNode) => void;
+  onClearExternalChange: (id: string) => void;
   dragItem: DragState | null;
   dropTarget: DropState | null;
   onDragStart: (node: TreeNode) => void;
@@ -36,6 +38,7 @@ export function TreeItem({
   editingId,
   selectedIds,
   expandedNodes,
+  externallyChangedIds,
   onToggleExpanded,
   onExpandNode,
   onSelect,
@@ -45,6 +48,7 @@ export function TreeItem({
   onStartEdit,
   onCreateChild,
   onContextMenu,
+  onClearExternalChange,
   dragItem,
   dropTarget,
   onDragStart,
@@ -65,6 +69,7 @@ export function TreeItem({
   const isActive = node.id === activeId;
   const isSelected = selectedIds.has(node.id);
   const isEditing = editingId === node.id;
+  const isExternallyChanged = externallyChangedIds.has(node.id);
   const hasChildren = node.children.length > 0;
   const isFolder = node.type === "folder";
   const isFile = node.type === "file";
@@ -194,6 +199,7 @@ export function TreeItem({
             onMultiSelect(node.id, false, false);
             onSelect(node.id);
           }
+          if (isExternallyChanged) onClearExternalChange(node.id);
         }}
         onKeyDown={(e) => {
           if (e.key === "Delete" && !isEditing) {
@@ -215,6 +221,7 @@ export function TreeItem({
             onClick={(e) => {
               e.stopPropagation();
               onToggleExpanded(node.id);
+              if (isExternallyChanged) onClearExternalChange(node.id);
             }}
           >
             {expanded ? "\u25BC" : "\u25B6"}
@@ -246,8 +253,11 @@ export function TreeItem({
         ) : (
           <span className="tree-item-title">{node.title}</span>
         )}
-        {!isEditing && isFile && (node as any).summary && (
-          <span className="tree-item-summary-badge" title={(node as any).summary}>S</span>
+        {!isEditing && isFile && node.summary && (
+          <span className="tree-item-summary-badge" title={node.summary}>S</span>
+        )}
+        {isExternallyChanged && (
+          <span className="tree-item-changed-dot" />
         )}
 
         {!isEditing && (
@@ -291,6 +301,7 @@ export function TreeItem({
               editingId={editingId}
               selectedIds={selectedIds}
               expandedNodes={expandedNodes}
+              externallyChangedIds={externallyChangedIds}
               onToggleExpanded={onToggleExpanded}
               onExpandNode={onExpandNode}
               onSelect={onSelect}
@@ -300,6 +311,7 @@ export function TreeItem({
               onStartEdit={onStartEdit}
               onCreateChild={onCreateChild}
               onContextMenu={onContextMenu}
+              onClearExternalChange={onClearExternalChange}
               dragItem={dragItem}
               dropTarget={dropTarget}
               onDragStart={onDragStart}

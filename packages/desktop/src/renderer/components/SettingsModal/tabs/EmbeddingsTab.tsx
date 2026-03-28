@@ -2,8 +2,17 @@ import { useState } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { useAppStore } from "../../../stores/app.store.js";
 import { useT } from "../../../i18n.js";
+import { ModelList, type ModelCardInfo } from "../ModelList.js";
 
-const LOCAL_MODELS = [
+interface EmbeddingModelDef {
+  id: string;
+  name: string;
+  description: string;
+  sizeLabel: string;
+  dimensions: number;
+}
+
+const LOCAL_MODELS: EmbeddingModelDef[] = [
   { id: "multilingual-e5-small", name: "multilingual-e5-small", description: "Multilingual, 100+ languages", sizeLabel: "130 MB", dimensions: 384 },
   { id: "all-MiniLM-L6-v2", name: "all-MiniLM-L6-v2", description: "English only, fast and compact", sizeLabel: "90 MB", dimensions: 384 },
 ];
@@ -16,6 +25,26 @@ export function EmbeddingsTab() {
   } = useAppStore();
   const t = useT();
   const [showOnlineKey, setShowOnlineKey] = useState(false);
+
+  const activeLocalModelId = embeddingConfig.mode === "local" ? embeddingConfig.localModelId : "";
+
+  const handleSelect = (id: string) => {
+    setEmbeddingConfig({ mode: "local", localModelId: id });
+  };
+
+  const handleDelete = async (id: string) => {
+    await deleteEmbeddingModel(id);
+    if (embeddingConfig.localModelId === id && embeddingConfig.mode === "local") {
+      setEmbeddingConfig({ mode: "none" });
+    }
+  };
+
+  const renderCardContent = (m: EmbeddingModelDef, _info: ModelCardInfo) => (
+    <>
+      <div className="embedding-model-name">{m.name}</div>
+      <div className="embedding-model-desc">{m.description} &middot; {m.dimensions}D</div>
+    </>
+  );
 
   return (
     <div className="settings-section">
@@ -74,72 +103,19 @@ export function EmbeddingsTab() {
       </button>
 
       <div className="embedding-section-title" style={{ marginTop: 16 }}>{t("localModels")}</div>
-      <div className="embedding-models-list">
-        {LOCAL_MODELS.map((m) => {
-          const status = (embeddingStatuses ?? {})[m.id] || "none";
-          const isReady = status === "ready";
-          const isPartial = status === "partial";
-          const isActive = embeddingConfig.mode === "local" && embeddingConfig.localModelId === m.id && isReady;
-          const downloadPercent = (embeddingDownloading ?? {})[m.id];
-          const isDownloading = downloadPercent !== undefined;
-          const isCancelling = (embeddingCancelling ?? {})[m.id] === true;
-          const downloadError = (embeddingErrors ?? {})[m.id];
-          return (
-            <div key={m.id} className={`embedding-model-card${isActive ? " active" : ""}`}>
-              <div className="embedding-model-info">
-                <div className="embedding-model-name">{m.name}</div>
-                <div className="embedding-model-desc">{m.description} &middot; {m.dimensions}D</div>
-                {(isDownloading || isCancelling) && (
-                  <div className="embedding-progress">
-                    <div className="embedding-progress-bar" style={{ width: `${downloadPercent ?? 0}%` }} />
-                  </div>
-                )}
-                {downloadError && !isDownloading && (
-                  <div style={{ fontSize: 11, color: "var(--error, #c00)", marginTop: 4 }}>{downloadError}</div>
-                )}
-              </div>
-              <span className="embedding-model-size">{m.sizeLabel}</span>
-
-              {/* Not downloaded */}
-              {status === "none" && !isDownloading && !isCancelling && (
-                <button className="btn" onClick={() => startEmbeddingDownload(m.id)}>{t("download")}</button>
-              )}
-
-              {/* Partially downloaded — resume + delete */}
-              {isPartial && !isDownloading && !isCancelling && (
-                <>
-                  <button className="btn" onClick={() => startEmbeddingDownload(m.id)}>{t("voiceResume")}</button>
-                  <button className="btn" style={{ color: "var(--error, #c00)" }} onClick={() => deleteEmbeddingModel(m.id)} title={t("voiceDelete")}>✕</button>
-                </>
-              )}
-
-              {/* Downloading */}
-              {isDownloading && !isCancelling && (
-                <button className="btn" onClick={() => cancelEmbeddingDownload(m.id)}>{Math.round(downloadPercent)}% ✕</button>
-              )}
-              {isCancelling && (
-                <button className="btn" disabled>{t("stopping")}</button>
-              )}
-
-              {/* Ready, not active, not downloading */}
-              {isReady && !isActive && !isDownloading && (
-                <>
-                  <button className="btn" onClick={() => setEmbeddingConfig({ mode: "local", localModelId: m.id })}>{t("select")}</button>
-                  <button className="btn" style={{ color: "var(--error, #c00)" }} onClick={() => deleteEmbeddingModel(m.id)} title={t("voiceDelete")}>✕</button>
-                </>
-              )}
-
-              {/* Ready + active */}
-              {isReady && isActive && !isDownloading && (
-                <>
-                  <button className="btn btn-primary" disabled>{t("active")}</button>
-                  <button className="btn" style={{ color: "var(--error, #c00)" }} onClick={() => deleteEmbeddingModel(m.id)} title={t("voiceDelete")}>✕</button>
-                </>
-              )}
-            </div>
-          );
-        })}
-      </div>
+      <ModelList
+        models={LOCAL_MODELS}
+        statuses={embeddingStatuses ?? {}}
+        activeModelId={activeLocalModelId}
+        downloading={embeddingDownloading ?? {}}
+        cancelling={embeddingCancelling ?? {}}
+        errors={embeddingErrors ?? {}}
+        onSelect={handleSelect}
+        onDownload={startEmbeddingDownload}
+        onCancel={cancelEmbeddingDownload}
+        onDelete={handleDelete}
+        renderCardContent={renderCardContent}
+      />
 
       {embeddingConfig.mode !== "none" && (
         <button

@@ -5,7 +5,6 @@ const api = {
   listProjects: () => ipcRenderer.invoke("projects:list"),
   addProject: () => ipcRenderer.invoke("projects:add"),
   removeProject: (token: string) => ipcRenderer.invoke("projects:remove", token),
-  renameProject: (token: string, name: string) => ipcRenderer.invoke("projects:rename", token, name),
   touchProject: (token: string) => ipcRenderer.invoke("projects:touch", token),
 
   // Sections
@@ -96,6 +95,13 @@ const api = {
     return () => { ipcRenderer.removeListener("import-docs:progress", handler); };
   },
 
+  // Semantic indexing progress
+  onSemanticProgress: (callback: (data: { token: string; item: string }) => void) => {
+    const handler = (_event: unknown, data: any) => callback(data);
+    ipcRenderer.on("semantic:progress", handler);
+    return () => { ipcRenderer.removeListener("semantic:progress", handler); };
+  },
+
   // Background tasks from main process
   onBgTaskStart: (callback: (data: { id: string; label: string }) => void) => {
     const handler = (_event: unknown, data: any) => callback(data);
@@ -140,6 +146,40 @@ const api = {
   sourceFindSymbols: (token: string, opts: {
     name_pattern?: string; kind?: string; file_glob?: string; max_results?: number;
   }) => ipcRenderer.invoke("source:find-symbols", token, opts),
+
+  // Semantic Index
+  semanticSearch: (token: string, query: string, topK?: number, filter?: string) =>
+    ipcRenderer.invoke("semantic:search", token, query, topK, filter) as Promise<{
+      results: Array<{ score: number; chunk: any }>;
+      formatted: string;
+      indexing: boolean;
+    }>,
+  semanticPrefetch: (token: string, userMessage: string, maxTokens?: number, minScore?: number) =>
+    ipcRenderer.invoke("semantic:prefetch", token, userMessage, maxTokens, minScore) as Promise<{
+      chunks: Array<{ score: number; chunk: any }>;
+      totalTokens: number;
+    } | null>,
+  semanticSnapshot: (token: string) =>
+    ipcRenderer.invoke("semantic:snapshot", token) as Promise<{ codeTree: string; docTree: string } | null>,
+  semanticStats: (token: string) => ipcRenderer.invoke("semantic:stats", token),
+  semanticStatus: (token: string) =>
+    ipcRenderer.invoke("semantic:status", token) as Promise<{
+      ready: boolean;
+      indexing: boolean;
+      stats: { totalChunks: number; codeChunks: number; docChunks: number; indexSizeBytes: number; indexingTimeMs: number } | null;
+    }>,
+  semanticReindex: (token: string) => ipcRenderer.invoke("semantic:reindex", token),
+  semanticClearIndex: (token: string) => ipcRenderer.invoke("semantic:clear-index", token),
+  semanticInvalidateSnapshot: (token: string) => ipcRenderer.invoke("semantic:invalidate-snapshot", token),
+
+  // Indexing config
+  applyIndexingConfig: () => ipcRenderer.invoke("indexing:apply-config"),
+  scanExclusionSuggestions: (token: string) => ipcRenderer.invoke("indexing:scan-suggestions", token) as Promise<string[]>,
+  scanExtensionSuggestions: (token: string) => ipcRenderer.invoke("indexing:scan-extensions", token) as Promise<string[]>,
+  scanFileSizeSuggestion: (token: string) => ipcRenderer.invoke("indexing:scan-file-sizes", token) as Promise<{
+    fileCount: number; maxSizeKB: number; maxFile: string;
+    p99SizeKB: number; recommendedKB: number; coverAllKB: number;
+  } | null>,
 
   // LLM
   llmModels: (apiKey: string) => ipcRenderer.invoke("llm:models", apiKey),

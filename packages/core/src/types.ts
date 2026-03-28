@@ -140,11 +140,30 @@ export interface IdeaMessage {
   completed?: boolean;
   editedAt?: number;
   images?: IdeaImage[];
+  title?: string;
+  group?: string;
+  originalIds?: string[];
 }
 
 export interface IdeaData {
   messages: IdeaMessage[];
   kanbanId?: string;
+}
+
+export type IdeaProcessingMode = "title" | "polish" | "deduplicate" | "group" | "full";
+
+export interface IdeaProcessingResult {
+  messages: IdeaMessage[];
+  removedDuplicates: Array<{
+    keptId: string;
+    removedIds: string[];
+    reason: string;
+  }>;
+  groups: Array<{
+    name: string;
+    messageIds: string[];
+  }>;
+  summary: string;
 }
 
 export interface ExportHash {
@@ -161,6 +180,7 @@ export interface TreeNode {
   icon: string | null;
   sort_key: string;
   summary: string | null;
+  updated_at: string;
   children: TreeNode[];
 }
 

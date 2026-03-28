@@ -25,6 +25,8 @@ export type {
   IdeaImage,
   IdeaMessage,
   IdeaData,
+  IdeaProcessingMode,
+  IdeaProcessingResult,
   PdfOutlineEntry,
 } from "./types.js";
 
@@ -54,6 +56,8 @@ export type { FtsSearchResult } from "./db/fts.repo.js";
 export { ProjectPassportRepo } from "./db/passport.repo.js";
 export { EmbeddingRepo } from "./db/embedding.repo.js";
 export type { EmbeddingRow } from "./db/embedding.repo.js";
+export { SemanticCacheRepo } from "./db/semantic-cache.repo.js";
+export type { SemanticCacheRow } from "./db/semantic-cache.repo.js";
 
 // Services
 export { ProjectsService } from "./services/projects.service.js";
@@ -82,7 +86,7 @@ export { extractTextForSearch } from "./converters/prosemirror-text-extractor.js
 export { kanbanToMarkdown, kanbanToPlain, markdownToKanban, emptyKanbanData } from "./converters/kanban.js";
 export { drawingToText, textToDrawing, drawingToPlain } from "./converters/drawing/index.js";
 export { splitMarkdownByHeadings } from "./converters/markdown-splitter.js";
-export { ideaToPlain } from "./converters/idea.js";
+export { ideaToPlain, ideaToGroupedPlain } from "./converters/idea.js";
 export type { SplitResult, SplitSection } from "./converters/markdown-splitter.js";
 
 // Knowledge Graph

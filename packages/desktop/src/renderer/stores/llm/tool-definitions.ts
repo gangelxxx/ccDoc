@@ -126,6 +126,34 @@ function buildCoreTools(): ToolDefinition[] {
       },
     },
     {
+      name: "patch_section",
+      description: "Apply targeted edits to a section without reading it first. Use instead of get_section → update_section when you know exactly what to change.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          section_id: { type: "string", description: "Section UUID or slug" },
+          patches: {
+            type: "array",
+            description: "List of patches to apply sequentially",
+            items: {
+              type: "object",
+              properties: {
+                action: {
+                  type: "string",
+                  enum: ["replace_heading", "append", "prepend", "insert_after", "delete_heading"],
+                  description: "replace_heading: replace content under a heading; append: add to end; prepend: add to start; insert_after: insert new content after a heading's block; delete_heading: remove heading and its content",
+                },
+                heading: { type: "string", description: "Target heading text e.g. '## Architecture' (for replace/insert_after/delete)" },
+                content: { type: "string", description: "New markdown content (for replace/append/prepend/insert_after)" },
+              },
+              required: ["action"],
+            },
+          },
+        },
+        required: ["section_id", "patches"],
+      },
+    },
+    {
       name: "move_section",
       description: "Move section to new parent and/or reorder.",
       input_schema: {
@@ -337,6 +365,35 @@ function buildSourceCodeTools(): ToolDefinition[] {
 }
 
 /**
+ * Builds semantic search tool (available when source code access is enabled).
+ */
+function buildSemanticSearchTool(): ToolDefinition[] {
+  return [{
+    name: "semantic_search",
+    description: "Search code and documentation by meaning, not just keywords. Returns the most relevant code snippets and doc sections. Prefer this over search_project_files for conceptual queries like 'how does plan generation work' or 'context compression logic'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        query: {
+          type: "string",
+          description: "Natural language description of what you're looking for. Examples: 'plan generation logic', 'how context is compressed', 'tool execution and caching'",
+        },
+        top_k: {
+          type: "number",
+          description: "Number of results to return (default: 5, max: 15).",
+        },
+        filter: {
+          type: "string",
+          enum: ["all", "code", "docs"],
+          description: "Filter results by type (default: all).",
+        },
+      },
+      required: ["query"],
+    },
+  }];
+}
+
+/**
  * Builds web search tools (only when web search is configured).
  */
 function buildWebSearchTools(): ToolDefinition[] {
@@ -481,7 +538,7 @@ function buildPlanTools(): ToolDefinition[] {
   return [
     {
       name: "create_plan",
-      description: "Create a work plan for a complex task. Shows as a checklist in chat. Use for tasks with 3+ steps.",
+      description: "Create a work plan for a complex task. Shows as a checklist in chat. Use for tasks with 3+ steps. Plan progress is tracked automatically via [PLAN:] markers in your text — no update tool needed.",
       input_schema: {
         type: "object" as const,
         properties: {
@@ -490,18 +547,8 @@ function buildPlanTools(): ToolDefinition[] {
         required: ["steps"],
       },
     },
-    {
-      name: "update_plan",
-      description: "Mark a plan step as done or in_progress. Call after completing each step.",
-      input_schema: {
-        type: "object" as const,
-        properties: {
-          step_index: { type: "number", description: "Step index (0-based)" },
-          status: { type: "string", enum: ["in_progress", "done"], description: "New status" },
-        },
-        required: ["step_index", "status"],
-      },
-    },
+    // update_plan is handled via text markers [PLAN: 0=done, 1=in_progress] — parsed by engine.
+    // Tool executor still handles "update_plan" calls for backwards compatibility with old sessions.
   ];
 }
 
@@ -522,6 +569,7 @@ export function buildTools(params: {
     ...buildPlanTools(),
     buildAskUserTool(),
     ...(includeSourceCode ? buildSourceCodeTools() : []),
+    ...(includeSourceCode ? buildSemanticSearchTool() : []),
   ];
 
   if (webSearchEnabled) {
@@ -553,6 +601,7 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
   delete_section: "Удаляю секцию",
   move_section: "Перемещаю секцию",
   bulk_update_sections: "Обновляю несколько секций",
+  patch_section: "Точечно редактирую секцию",
   reorder_children: "Переупорядочиваю секции",
   duplicate_section: "Дублирую секцию",
   restore_section: "Восстанавливаю секцию",
@@ -568,6 +617,7 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
   read_project_file: "Читаю исходный код",
   search_project_files: "Ищу в коде",
   find_symbols: "Ищу символы в коде",
+  semantic_search: "Семантический поиск по коду и документации",
   web_search: "Ищу в интернете",
   ask_user: "Задаю уточняющий вопрос",
   run_agent: "Запускаю агента",

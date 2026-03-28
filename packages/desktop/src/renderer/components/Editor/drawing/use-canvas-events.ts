@@ -124,8 +124,8 @@ export function useCanvasEvents(params: UseCanvasEventsParams) {
         startTextEditing(el);
         return;
       }
-      // For lines/arrows, double-click to add/edit label
-      if ((el.type === "line" || el.type === "arrow") && !e.shiftKey) {
+      // For lines/arrows/shapes, double-click to add/edit label
+      if ((el.type === "line" || el.type === "arrow" || el.type === "rectangle" || el.type === "ellipse" || el.type === "diamond") && !e.shiftKey) {
         startBoundTextEditing(el);
         return;
       }

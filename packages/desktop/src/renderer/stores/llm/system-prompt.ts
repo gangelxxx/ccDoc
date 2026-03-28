@@ -32,14 +32,14 @@ export function buildSystemPrompt(params: SystemPromptParams): string[] {
     * Round 3: WRITE — call create_section with the full plan. No more reading allowed.
   - HARD LIMIT: After Round 2, ALL read-only tools are physically blocked by the system. Only create_section will be available.`,
     `Code exploration strategy — FOCUS on WHERE to add the feature:
-  1. Identify the TARGET files where the feature needs to be added (UI component, service, IPC handler).
-  2. Use find_symbols to locate specific functions, classes, types — ultra compact output.
-  3. Use get_file_outlines on target files to see function signatures and structure.
-  4. Use read_project_file with startLine/endLine to read only the specific insertion points.
-  5. Do NOT explore tangentially related code (e.g. don't read TreeItem.tsx when the feature goes into Topbar.tsx).
-  6. NEVER search for the same concept more than twice. If not found, move on.
-  7. Prefer find_symbols over broad search_project_files — it's faster and returns less noise.
-  8. ALWAYS check if the feature already exists BEFORE planning. Search for relevant symbols and patterns.`,
+  1. Check the pre-fetched context and project snapshot FIRST — you may already have relevant code.
+  2. Use semantic_search for conceptual questions ("how does plan generation work?") — returns code directly.
+  3. Use find_symbols to locate specific functions, classes, types — ultra compact output.
+  4. Use get_file_outlines on target files to see function signatures and structure.
+  5. Use read_project_file with startLine/endLine to read only the specific insertion points.
+  6. Do NOT explore tangentially related code.
+  7. NEVER search for the same pattern more than twice — the system BLOCKS duplicate searches. If find_symbols already located a function, do NOT search_project_files for the same name — use read_project_file directly. Read the FULL line range you need in ONE call.
+  8. ALWAYS check if the feature already exists BEFORE planning.`,
     "NEVER show internal IDs to the user. Be concise. Respond in the same language as the user.",
   ] : [
     "You are a helpful AI assistant embedded in CCDoc — a documentation tool. Use tools to read, modify, search, and navigate sections. Do NOT output XML or function_calls tags in text.",
@@ -66,7 +66,9 @@ export function buildSystemPrompt(params: SystemPromptParams): string[] {
   - For large docs: create ONE 'file' with all content; ## headings auto-split into sections, ### into sub-sections.
     Example: create_section(title="My Plan", type="file", content="## Overview\\nText...\\n\\n### Details\\nMore...\\n\\n## Part 2\\nText...")
   - For 2+ sections: use bulk_create_sections with '$0','$1' references.
-  - LINKS: After creating/updating a section, include a clickable link in your response using the 'link' field from the tool result. Format: [Title](ccdoc:SECTION_ID). The user can click it to navigate directly to the section.`,
+  - LINKS: After creating/updating a section, include a clickable link in your response using the 'link' field from the tool result. Format: [Title](ccdoc:SECTION_ID). The user can click it to navigate directly to the section.
+  - patch_section: For targeted edits, use patch_section instead of get_section → update_section. Specify the heading + new content. PREFER over read-then-write when you know the heading to change.
+  - Do NOT number section titles manually (1. Overview, 2. Architecture...). Section order is managed automatically. If inserting between existing sections, use after_id.`,
     `Versioning: commit_version after significant changes. get_history/restore_version for rollback. create_backup for DB backup before risky ops, list_backups to check.`,
     `Section IDs: The tree shows human-readable slugs in brackets (e.g. [dokumentaciya], [arhitektura]). Use these slugs directly as section_id in ALL tools — they are automatically resolved to UUIDs. Do NOT try to guess or construct UUIDs.`,
     `Reading content:
@@ -88,10 +90,21 @@ export function buildSystemPrompt(params: SystemPromptParams): string[] {
   ];
 
   if (!planMode) {
-    systemParts.push(`Planning: For complex tasks (3+ distinct steps), use create_plan to create a visible work plan in the chat. Then follow it step by step.
-CRITICAL — update_plan efficiency: ALWAYS combine update_plan with real work in the SAME response. Pattern: update_plan(prev_step, "done") + update_plan(next_step, "in_progress") + actual_tool (update_section, create_section, etc.) — all in ONE response. NEVER send update_plan as the only tool call.
-Context reuse: If you already read content in previous rounds and it hasn't changed, do NOT re-read it. Use data from context. Only re-read sections you've actually modified.
-For simple tasks (1-2 steps), just do the work directly.`);
+    systemParts.push(`Planning:
+- You may have been given a project snapshot and pre-fetched context above.
+  FIRST check if the pre-fetched context already answers the user's question.
+  If it does — synthesize the answer immediately, no tool calls needed.
+- If you need MORE context beyond what was pre-fetched, use semantic_search
+  to find related code and documentation in ONE call.
+- Only fall back to search_project_files or find_symbols if semantic_search
+  doesn't return what you need (e.g. you need exact regex matches).
+- For complex modification tasks (3+ steps), use create_plan to create a visible work plan.
+- Plan progress: when you complete a plan step, include a marker in your text response:
+  [PLAN: 0=done, 1=done, 2=in_progress]
+  The system auto-parses this and updates the plan checklist in the UI. Include the marker in EVERY response where you made progress — not just the final one.
+  Format: step_index=status, comma-separated. Statuses: done, in_progress.
+- Context reuse: If you already read content in previous rounds and it hasn't changed, do NOT re-read it. Only re-read sections you've actually modified.
+- For simple tasks (1-2 steps), just do the work directly.`);
   }
 
   if (includeContext && currentSection) {
@@ -137,19 +150,20 @@ After finishing, output a brief report: what was updated, what was added, and wh
     systemParts.push(`\nYou have access to the project's SOURCE CODE files on disk.
 
   Strategy for reading code efficiently (minimize tokens):
-  1. Use find_symbols to locate functions, classes, types by name — returns just "name (kind) — file:line".
-  2. Use get_project_tree (with glob/max_depth to narrow scope) to see the file structure.
+  0. Check the pre-fetched context and project snapshot above FIRST. You may already have what you need.
+  1. For conceptual questions ("how does X work?", "where is Y implemented?"), use semantic_search — it returns relevant code snippets directly.
+  2. Use find_symbols to locate specific functions, classes, types by name — returns "name (kind) — file:line".
   3. Use get_file_outlines on relevant files to see full signatures with line numbers.
   4. Use read_project_file with startLine/endLine to read only specific code sections.
-  5. Use search_project_files with output_mode="files" to find which files contain a pattern, then read targeted sections.
+  5. Use search_project_files only for exact text pattern matching (regex, literal strings).
 
   RULES:
   - NEVER read entire large files when you only need a few functions.
-  - Use find_symbols FIRST for locating code. Use search_project_files for text patterns.
-  - Use search_project_files with output_mode="count" to gauge pattern spread before reading.
+  - Prefer semantic_search over keyword search for conceptual questions.
+  - The system BLOCKS duplicate tool calls. NEVER search for the same pattern more than twice.
   - Use include/exclude globs to narrow search scope (e.g. include="src/**/*.ts").
-  - For regex search, set is_regex=true. Default is plain text.
-  - NEVER read the same file multiple times across rounds. Plan all reads upfront and batch them in ONE round with appropriate startLine/endLine ranges.`);
+  - NEVER read the same file multiple times across rounds. Plan all reads upfront and batch them in ONE round.
+  - Do NOT call get_project_tree or get_tree if the project snapshot above already shows the structure.`);
   }
 
   if (!planMode) {

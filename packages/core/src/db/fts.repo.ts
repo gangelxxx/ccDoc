@@ -70,16 +70,19 @@ export class FtsRepo {
   async reindexAll(
     sections: { id: string; title: string; tags: string; breadcrumbs: string; body: string }[]
   ): Promise<void> {
-    const statements: { sql: string; args: any[] }[] = [
-      { sql: "DELETE FROM sections_text", args: [] },
-    ];
-    for (const s of sections) {
-      statements.push({
+    await this.db.execute("DELETE FROM sections_text");
+
+    // Insert in small batches to avoid locking the DB for too long
+    // (a single giant batch blocks all other queries until it completes).
+    const BATCH = 50;
+    for (let i = 0; i < sections.length; i += BATCH) {
+      const chunk = sections.slice(i, i + BATCH);
+      const statements = chunk.map((s) => ({
         sql: "INSERT INTO sections_text (section_id, title, tags, breadcrumbs, body) VALUES (?, ?, ?, ?, ?)",
-        args: [s.id, s.title, s.tags, s.breadcrumbs, s.body],
-      });
+        args: [s.id, s.title, s.tags, s.breadcrumbs, s.body] as any[],
+      }));
+      await this.db.batch(statements, "write");
     }
-    await this.db.batch(statements, "write");
   }
 
   async getByIds(ids: string[]): Promise<Map<string, { title: string; breadcrumbs: string }>> {
