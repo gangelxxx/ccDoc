@@ -1,6 +1,58 @@
 # Changelog
 
-## Unreleased
+## 0.1.18
+
+### Semantic Search
+
+- New semantic index: chunks code files by top-level declarations and docs by headings, embeds via e5-small (384 dims), cosine-similarity search.
+- All heavy work (file I/O, embedding, search) runs in a dedicated worker thread.
+- New `SemanticCacheRepo` — persistent cache of chunk embeddings in SQLite (`semantic_chunks` table, migrations 10-11).
+- `IndexScheduler` — staleness detection and periodic background re-indexing (checks every 5 min).
+- FTS reindex also moved to a worker thread (`fts-reindex.ts` / `fts-worker.ts`).
+- New IPC handlers: `semantic:*` — thin proxy to the worker.
+
+### PDF Export
+
+- New "Export to PDF" button in the editor toolbar.
+- Exports current section with all children to a styled PDF: auto-generated table of contents, page breaks per H2, syntax highlighting for code blocks.
+- Uses a hidden `BrowserWindow` + `printToPDF` under the hood.
+- Added `@media print` styles that hide UI chrome and remove scroll constraints, so browser print also works cleanly.
+
+### GigaAM v3 Speech Recognition
+
+- Standalone ONNX inference for GigaAM v3 (CTC-based ASR).
+- Implements mel spectrogram + CTC decode directly, without `@huggingface/transformers` pipeline.
+- Uses quantized `model.int8.onnx` encoder, 257-token vocab.
+
+### Idea Processing
+
+- LLM-based idea processing: title generation, text polishing, deduplication, grouping.
+- New types: `IdeaProcessingMode`, `IdeaProcessingResult`.
+- New `IdeaProcessingPreview` component — shows changes, duplicates, and groups before applying.
+- Ideas now have `title`, `group`, and `originalIds` fields.
+
+### LLM Tool Dedup
+
+- Tracks tool call history within a session to detect redundant searches.
+- Blocks exact duplicate searches, overlapping globs, cross-tool redundancy (e.g. search after find_symbols).
+- Warns on overlapping/adjacent file reads with merged range suggestion.
+
+### Settings & Appearance
+
+- New settings: `fontFamily` (default / serif / sans / mono / system), `fontSize` (small / medium / large), `colorScheme` (teal / blue / purple).
+- New Indexing tab in settings — configure semantic index intensity, excluded dirs, code extensions, max file size, staleness interval.
+- New `ModelList` component in settings.
+
+### Status Bar
+
+- New `BgProcessItem` — reusable component for background processes (processing / done / error states, elapsed timer, cancel button).
+
+### Other
+
+- `TreeNode` now includes `updated_at` field.
+- Package versions reset to `0.1.0` (core, desktop, source-tools); mcp-server bumped to `0.2.0`.
+
+## 0.1.17
 
 ### Knowledge Graph
 
@@ -70,8 +122,6 @@
 - Text selection is now preserved visually when you click away from the editor (shown as a highlight). Clearing the selection removes the highlight.
 - Editor selection is cleared when switching between sections.
 - Editor view reference is now tracked in the store.
-- New "Export to PDF" button in the editor toolbar. Exports the current section (with all children) to a styled PDF with auto-generated table of contents and page breaks per H2.
-- Added `@media print` styles that hide UI chrome and remove scroll constraints, so browser print also works cleanly.
 
 ### Developer Mode
 
@@ -85,4 +135,3 @@
 - `getMainWindow` is now exported from services for use in IPC handlers.
 - Removed hardcoded window icon path (was failing on some setups).
 - New tests: embedding repo, embedding service, history service, sections repo, sections service, online embedding.
-- Package versions reset to `0.1.0` (core, desktop, source-tools); mcp-server bumped to `0.2.0`.
