@@ -7,10 +7,6 @@ settings:
 importers:
 
   .:
-    dependencies:
-      '@libsql/win32-x64-msvc':
-        specifier: 0.4.7
-        version: 0.4.7
     devDependencies:
       cross-env:
         specifier: ^10.1.0
@@ -5197,7 +5193,8 @@ snapshots:
   '@libsql/linux-x64-musl@0.4.7':
     optional: true
 
-  '@libsql/win32-x64-msvc@0.4.7': {}
+  '@libsql/win32-x64-msvc@0.4.7':
+    optional: true
 
   '@malept/cross-spawn-promise@2.0.0':
     dependencies:
