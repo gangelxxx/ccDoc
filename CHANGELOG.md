@@ -1,5 +1,92 @@
 # Changelog
 
+## 0.1.19
+
+### Multi-Project Workspaces
+
+- Link external projects as dependencies or references via a dialog (`LinkProjectDialog`).
+- Unified tree builder merges root project tree with linked project nodes into a single navigation.
+- `WorkspaceService` — create/retrieve workspaces, link/unlink projects.
+- `ProjectScanner` — detects language, frameworks, entry points, config files, and counts LOC for any directory.
+- `DependencyScanner` — discovers local dependencies from package.json, pnpm-workspace, .gitmodules, pyproject.toml, go.mod, Cargo.toml.
+- `CcdocDetector` — checks if a directory is an existing ccDoc project (`.ccdoc/project.token`).
+- `ProjectResolver` — validates and resolves project paths with path traversal protection.
+- `CrossProjectSearch` — full-text search across root + linked project databases, with root result boosting.
+- New `UserFolder` sidebar component — personal document tree separate from project tree.
+- New `workspace.slice` in the store.
+
+### Model Tiers
+
+- Three-tier LLM configuration: strong, medium, weak. Each tier can use a different provider, model, and settings.
+- Assign tiers to tasks: chat, passport generation, summaries.
+- Provider scripts — built-in and custom scripts for different LLM providers.
+- `LlmTestService` — automated model testing suite: connection, tool selection, parameter handling, error recovery, multi-turn, structured output, instruction following. Supports light / medium / heavy difficulty.
+- New `ModelTiersTab`, `ModelTierForm`, `ModelTestResults` in settings.
+
+### Section Snapshots
+
+- Local content snapshots for every section — captured on edits from manual, assistant, MCP, or import sources.
+- Rapid manual edits are coalesced within a 30-second window to avoid flooding.
+- Auto-pruned by count and age.
+- `SectionSnapshotsPanel` — view snapshot history, word-level diffs between versions, restore or delete snapshots.
+- New `HistoryTab` in settings — storage stats for commits, snapshots, and caches with cleanup actions.
+
+### Spellcheck
+
+- TipTap editor extension with async spellcheck and ProseMirror decorations for misspelled words.
+- Supports Cyrillic and Latin scripts, skips code blocks and inline code.
+- `SpellcheckTab` in settings — enable/disable, select languages (Russian, English).
+
+### Git Integration & Auto-Commit
+
+- `GitService` — wraps git CLI: repo detection, diff (staged + unstaged), status, file listing, commit.
+- `useAutoCommit` hook — monitors for changes, generates commit messages.
+- `CommitConfirmModal` — review changed/untracked files with diffs, tristate checkboxes, status badges (M/A/D/R/?), rollback/add-to-VCS/gitignore per file.
+
+### Trash
+
+- Deleted sections move to a Trash folder instead of being permanently removed.
+- `TrashService` — ensures trash infrastructure exists, handles moves.
+- Trash Ideas section for deleted idea messages.
+- Supports language switching for folder titles.
+
+### Doc Generator
+
+- Job queue for automatic documentation generation from scanned project code.
+- Full and incremental generation modes with progress reporting per file.
+- `DocCollector` — spawns worker thread for off-main-thread section collection.
+
+### Vault
+
+- Versioned key-value store (`VaultService`).
+- Stores JSON values with revision history, auto-prunes old revisions (default 50).
+
+### Editor
+
+- Right-click context menu: cut/copy/paste/select-all/paste-as-markdown with keyboard shortcuts.
+- Source-aware read/write routing — dispatches operations to user API or project API depending on section source.
+- Idea progress tracking (0–100%) with named stages, gauge icon, and slider popup.
+
+### UI & Keyboard
+
+- Sidebar hidden when no project is open.
+- Ctrl+Shift+H opens section snapshots panel.
+- Ctrl+Shift+Alt+I opens quick idea (was Ctrl+Shift+I).
+- Taskbar/dock progress bar for background tasks (`useIconProgress`).
+- Tree items show loading spinners and progress indicators.
+- Linked projects displayed in tree with link badges and italic titles.
+- `useShallow` optimization for store selectors in `ContentArea`.
+
+### DB & Migrations
+
+- Migration 12+: `section_snapshots` table, `vault` table, `workspace` / `linked_projects` tables, `section_prefs` table.
+
+### Other
+
+- `UserService` — facade for user-scope services (sections, FTS, indexing, find, history) backed by a dedicated user database.
+- New store slices: `workspace`, `user`, `section-snapshots`, `section-prefs`, `spellcheck`, `history-settings`.
+- New tests: vault repo/service, builtin scripts, editor context menu, LLM test service, script runner, session context, settings model tiers.
+
 ## 0.1.18
 
 ### Semantic Search
