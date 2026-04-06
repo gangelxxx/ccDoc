@@ -1,3 +1,5 @@
+import type { ProgressStage } from "@ccdoc/core";
+
 // ─── Settings types ─────────────────────────────────────────
 // INVARIANT: Settings is max 2 levels deep — deepPatch relies on this.
 
@@ -7,6 +9,42 @@ export interface LlmConfigData {
   effort: "low" | "medium" | "high";
   thinking: boolean;
   inheritFromParent?: boolean;
+}
+
+// ─── Multi-provider model tiers ────────────────────────────
+
+export type ModelTier = "strong" | "medium" | "weak";
+
+export interface ProviderScriptRef {
+  type: "builtin" | "custom";
+  /** For builtin: ID of built-in script ("anthropic-oauth", "openai", ...) */
+  builtinId?: string;
+  /** For custom: path to JS file */
+  customPath?: string;
+  /** For custom: inline JS code */
+  customCode?: string;
+}
+
+export interface ModelTierConfig {
+  providerScript: ProviderScriptRef;
+  modelId: string;
+  baseUrl: string;
+  apiKey: string;
+  effort: "low" | "medium" | "high";
+  thinking: boolean;
+  thinkingBudget: number;
+  maxTokens: number;
+  temperature: number;
+}
+
+export interface ModelTiersConfig {
+  strong: ModelTierConfig;
+  medium: ModelTierConfig;
+  weak: ModelTierConfig;
+  /** Tier assignments for each use case */
+  chatTier: ModelTier;
+  passportTier: ModelTier;
+  summaryTier: ModelTier;
 }
 
 export interface EmbeddingConfigData {
@@ -42,6 +80,19 @@ export interface IndexingConfigData {
   stalenessIntervalMin: number;
 }
 
+export interface SpellcheckConfigData {
+  enabled: boolean;
+  languages: string[];
+  userDictionary: string[];
+}
+
+export interface HistorySettingsData {
+  historyRetainDays: number;       // 0 = keep all (default)
+  maxSnapshotsPerSection: number;  // default 30
+  snapshotMaxAgeDays: number;      // default 30
+  snapshotCoalesceIntervalSec: number; // default 30
+}
+
 export type FontFamily = "default" | "serif" | "sans" | "mono" | "system";
 export type FontSize = "small" | "medium" | "large";
 export type ColorScheme = "teal" | "blue" | "purple";
@@ -69,11 +120,24 @@ export interface Settings {
   embedding: EmbeddingConfigData;
   // Indexing
   indexing: IndexingConfigData;
+  // Spellcheck
+  spellcheck: SpellcheckConfigData;
+  // History & storage
+  history: HistorySettingsData;
+  // Auto-verify plans
+  autoVerifyPlan: boolean;
+  // Icon progress
+  showIconProgress: boolean;
+  // Progress stages
+  progressStages: ProgressStage[];
   // Voice STT
   voiceModelId: string;
+  // Multi-provider model tiers
+  modelTiers: ModelTiersConfig;
   // Developer mode
   devMode: boolean;
   devTrackToolIssues: boolean;
+  devToolFeedback: boolean;
   // Version (0 = not migrated yet)
   _version: number;
 }
@@ -117,9 +181,68 @@ export const SETTINGS_DEFAULTS: Settings = {
     maxFileSizeKB: 500,
     stalenessIntervalMin: 5,
   },
+  spellcheck: {
+    enabled: true,
+    languages: ["ru", "en"],
+    userDictionary: [],
+  },
+  history: {
+    historyRetainDays: 0,
+    maxSnapshotsPerSection: 30,
+    snapshotMaxAgeDays: 30,
+    snapshotCoalesceIntervalSec: 30,
+  },
+  autoVerifyPlan: true,
+  showIconProgress: true,
+  progressStages: [
+    { id: 'new',     name: 'New',            percent: 0,   color: '#94a3b8' },
+    { id: 'dev',     name: 'In Development', percent: 25,  color: '#3b82f6' },
+    { id: 'test',    name: 'Testing',        percent: 50,  color: '#f59e0b' },
+    { id: 'prod',    name: 'In Production',  percent: 75,  color: '#22c55e' },
+    { id: 'done',    name: 'Done',           percent: 100, color: '#10b981' },
+  ],
   voiceModelId: "",
+  modelTiers: {
+    strong: {
+      providerScript: { type: "builtin", builtinId: "anthropic-oauth" },
+      modelId: "claude-sonnet-4-20250514",
+      baseUrl: "https://api.anthropic.com",
+      apiKey: "",
+      effort: "high",
+      thinking: true,
+      thinkingBudget: 10000,
+      maxTokens: 16384,
+      temperature: 1,
+    },
+    medium: {
+      providerScript: { type: "builtin", builtinId: "anthropic-oauth" },
+      modelId: "claude-sonnet-4-20250514",
+      baseUrl: "https://api.anthropic.com",
+      apiKey: "",
+      effort: "medium",
+      thinking: false,
+      thinkingBudget: 5000,
+      maxTokens: 8192,
+      temperature: 0.7,
+    },
+    weak: {
+      providerScript: { type: "builtin", builtinId: "anthropic-oauth" },
+      modelId: "claude-haiku-4-5-20251001",
+      baseUrl: "https://api.anthropic.com",
+      apiKey: "",
+      effort: "low",
+      thinking: false,
+      thinkingBudget: 2000,
+      maxTokens: 4096,
+      temperature: 0,
+    },
+    chatTier: "medium",
+    passportTier: "weak",
+    summaryTier: "weak",
+  },
   devMode: false,
   devTrackToolIssues: false,
+  devToolFeedback: false,
   _version: 0,
 };
 
@@ -128,6 +251,8 @@ export const SETTINGS_DEFAULTS: Settings = {
 export const LLM_CONFIG_KEYS = [
   "llmChat", "llmPassport", "llmSummary",
 ] as const;
+
+export const MODEL_TIER_KEYS: ModelTier[] = ["strong", "medium", "weak"];
 
 // ─── Validation ─────────────────────────────────────────────
 
@@ -201,8 +326,64 @@ export function validateSettings(raw: any): Settings {
     }));
   }
 
+  // Spellcheck
+  if (!s.spellcheck || typeof s.spellcheck !== "object") {
+    s.spellcheck = { ...SETTINGS_DEFAULTS.spellcheck };
+  } else {
+    s.spellcheck = { ...SETTINGS_DEFAULTS.spellcheck, ...s.spellcheck };
+    if (typeof s.spellcheck.enabled !== "boolean") s.spellcheck.enabled = true;
+    if (!Array.isArray(s.spellcheck.languages)) s.spellcheck.languages = ["ru", "en"];
+    if (!Array.isArray(s.spellcheck.userDictionary)) s.spellcheck.userDictionary = [];
+  }
+
+  // History
+  if (!s.history || typeof s.history !== "object") {
+    s.history = { ...SETTINGS_DEFAULTS.history };
+  } else {
+    s.history = { ...SETTINGS_DEFAULTS.history, ...s.history };
+    s.history.historyRetainDays = clamp(s.history.historyRetainDays, 0, 365);
+    s.history.maxSnapshotsPerSection = clamp(s.history.maxSnapshotsPerSection, 1, 100);
+    s.history.snapshotMaxAgeDays = clamp(s.history.snapshotMaxAgeDays, 1, 365);
+    s.history.snapshotCoalesceIntervalSec = clamp(s.history.snapshotCoalesceIntervalSec, 5, 300);
+  }
+
+  // Model tiers
+  if (!s.modelTiers || typeof s.modelTiers !== "object") {
+    s.modelTiers = { ...SETTINGS_DEFAULTS.modelTiers };
+  } else {
+    for (const tier of MODEL_TIER_KEYS) {
+      if (!s.modelTiers[tier] || typeof s.modelTiers[tier] !== "object") {
+        s.modelTiers[tier] = { ...SETTINGS_DEFAULTS.modelTiers[tier] };
+      } else {
+        const t = s.modelTiers[tier];
+        if (!t.providerScript || typeof t.providerScript !== "object") {
+          t.providerScript = { ...SETTINGS_DEFAULTS.modelTiers[tier].providerScript };
+        }
+        if (typeof t.modelId !== "string") t.modelId = SETTINGS_DEFAULTS.modelTiers[tier].modelId;
+        if (typeof t.baseUrl !== "string") t.baseUrl = SETTINGS_DEFAULTS.modelTiers[tier].baseUrl;
+        if (typeof t.apiKey !== "string") t.apiKey = "";
+        if (!["low", "medium", "high"].includes(t.effort)) t.effort = SETTINGS_DEFAULTS.modelTiers[tier].effort;
+        if (typeof t.thinking !== "boolean") t.thinking = SETTINGS_DEFAULTS.modelTiers[tier].thinking;
+        t.thinkingBudget = clamp(t.thinkingBudget ?? SETTINGS_DEFAULTS.modelTiers[tier].thinkingBudget, 1000, 100000);
+        t.maxTokens = clamp(t.maxTokens ?? SETTINGS_DEFAULTS.modelTiers[tier].maxTokens, 256, 65536);
+        t.temperature = clamp(t.temperature ?? SETTINGS_DEFAULTS.modelTiers[tier].temperature, 0, 2);
+      }
+    }
+    for (const tierKey of ["chatTier", "passportTier", "summaryTier"] as const) {
+      if (!["strong", "medium", "weak"].includes(s.modelTiers[tierKey])) {
+        s.modelTiers[tierKey] = SETTINGS_DEFAULTS.modelTiers[tierKey];
+      }
+    }
+  }
+
+  if (typeof s.autoVerifyPlan !== "boolean") s.autoVerifyPlan = true;
+  if (typeof s.showIconProgress !== "boolean") s.showIconProgress = true;
+  if (!Array.isArray(s.progressStages) || s.progressStages.length < 2) {
+    s.progressStages = [...SETTINGS_DEFAULTS.progressStages];
+  }
   if (typeof s.devMode !== "boolean") s.devMode = false;
   if (typeof s.devTrackToolIssues !== "boolean") s.devTrackToolIssues = false;
+  if (typeof s.devToolFeedback !== "boolean") s.devToolFeedback = false;
 
   s._version = typeof s._version === "number" ? s._version : 0;
 

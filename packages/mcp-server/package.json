@@ -1,6 +1,6 @@
 {
   "name": "@ccdoc/mcp-server",
-  "version": "0.1.18",
+  "version": "0.2.0",
   "private": true,
   "bin": {
     "ccdoc-mcp": "dist/index.js",
@@ -13,6 +13,7 @@
   "dependencies": {
     "@ccdoc/core": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.12.1",
+    "libsql": "^0.4.7",
     "zod": "^3.24.0"
   },
   "devDependencies": {

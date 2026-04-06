@@ -1,5 +1,6 @@
 import { AlignLeft, AlignCenter, AlignRight } from "lucide-react";
 import type { SectionProps } from "./shared.js";
+import { useT } from "../../../../i18n.js";
 
 interface TextSectionProps extends SectionProps {
   hasText: boolean;
@@ -7,19 +8,21 @@ interface TextSectionProps extends SectionProps {
 }
 
 export function TextSection({ firstEl, updateSelectedProps, hasText, hasBoundText }: TextSectionProps) {
+  const t = useT();
+
   return (
     <>
       {/* Font family (text) */}
       {hasText && (
         <>
-          <div className="drawing-sidebar-label">Семейство шрифтов</div>
+          <div className="drawing-sidebar-label">{t("drawFontFamily")}</div>
           <div className="drawing-sidebar-row">
             {(["hand", "normal", "code", "headline"] as const).map((f) => (
               <button
                 key={f}
                 className={`drawing-tool-btn${firstEl?.fontFamily === f ? " active" : ""}`}
                 onClick={() => updateSelectedProps({ fontFamily: f })}
-                title={f === "hand" ? "Рукописный" : f === "normal" ? "Обычный" : f === "code" ? "Моноширинный" : "Заголовочный"}
+                title={f === "hand" ? t("drawHandwritten") : f === "normal" ? t("drawNormal") : f === "code" ? t("drawMonospace") : t("drawHeadline")}
               >
                 <span style={{
                   fontFamily: f === "hand" ? "cursive" : f === "normal" ? "Arial" : f === "code" ? "monospace" : "Georgia",
@@ -31,7 +34,7 @@ export function TextSection({ firstEl, updateSelectedProps, hasText, hasBoundTex
             ))}
           </div>
 
-          <div className="drawing-sidebar-label">Размер шрифта</div>
+          <div className="drawing-sidebar-label">{t("drawFontSize")}</div>
           <div className="drawing-sidebar-row">
             {([{ label: "S", size: 14 }, { label: "M", size: 20 }, { label: "L", size: 28 }, { label: "XL", size: 40 }] as const).map((f) => (
               <button
@@ -44,7 +47,7 @@ export function TextSection({ firstEl, updateSelectedProps, hasText, hasBoundTex
             ))}
           </div>
 
-          <div className="drawing-sidebar-label">Выравнивание текста</div>
+          <div className="drawing-sidebar-label">{t("drawTextAlignment")}</div>
           <div className="drawing-sidebar-row">
             {(["left", "center", "right"] as const).map((a) => (
               <button
@@ -62,7 +65,7 @@ export function TextSection({ firstEl, updateSelectedProps, hasText, hasBoundTex
       {/* Bound text font size (shapes with text) */}
       {hasBoundText && (
         <>
-          <div className="drawing-sidebar-label">Размер шрифта</div>
+          <div className="drawing-sidebar-label">{t("drawFontSize")}</div>
           <div className="drawing-sidebar-row">
             {([{ label: "S", size: 12 }, { label: "M", size: 16 }, { label: "L", size: 22 }, { label: "XL", size: 32 }] as const).map((f) => (
               <button

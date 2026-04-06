@@ -77,31 +77,31 @@ export const createUiSlice: SliceCreator<UiSlice> = (set, get) => ({
     const next = get().theme === "light" ? "dark" : "light";
     document.documentElement.setAttribute("data-theme", next);
     set({ theme: next });
-    window.api.settingsPatch({ theme: next });
+    window.api.settingsPatch({ theme: next }, "ui:theme");
   },
   language: "en" as Lang, // overwritten by boot
   setLanguage: (lang) => {
     set({ language: lang });
-    window.api.settingsPatch({ language: lang });
+    window.api.settingsPatch({ language: lang }, "ui:language");
   },
 
   fontFamily: "default" as FontFamily, // overwritten by boot
   setFontFamily: (v) => {
     document.documentElement.setAttribute("data-font-family", v);
     set({ fontFamily: v });
-    window.api.settingsPatch({ fontFamily: v });
+    window.api.settingsPatch({ fontFamily: v }, "ui:fontFamily");
   },
   fontSize: "medium" as FontSize, // overwritten by boot
   setFontSize: (v) => {
     document.documentElement.setAttribute("data-font-size", v);
     set({ fontSize: v });
-    window.api.settingsPatch({ fontSize: v });
+    window.api.settingsPatch({ fontSize: v }, "ui:fontSize");
   },
   colorScheme: "teal" as ColorScheme, // overwritten by boot
   setColorScheme: (v) => {
     document.documentElement.setAttribute("data-color-scheme", v);
     set({ colorScheme: v });
-    window.api.settingsPatch({ colorScheme: v });
+    window.api.settingsPatch({ colorScheme: v }, "ui:colorScheme");
   },
 
   sidebarWidth: 268, // overwritten by boot
@@ -119,7 +119,7 @@ export const createUiSlice: SliceCreator<UiSlice> = (set, get) => ({
   },
   savePanelWidths: () => {
     const { sidebarWidth, llmPanelWidth } = get();
-    window.api.settingsPatch({ sidebarWidth, llmPanelWidth });
+    window.api.settingsPatch({ sidebarWidth, llmPanelWidth }, "ui:panelWidths");
   },
 
   sectionLoading: false,
@@ -132,7 +132,7 @@ export const createUiSlice: SliceCreator<UiSlice> = (set, get) => ({
     const next = order[(idx + 1) % order.length];
     document.documentElement.setAttribute("data-content-width", next);
     set({ contentWidth: next });
-    window.api.settingsPatch({ contentWidth: next });
+    window.api.settingsPatch({ contentWidth: next }, "ui:contentWidth");
   },
 
   sidebarCollapsed: false,

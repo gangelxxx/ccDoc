@@ -1,6 +1,6 @@
 {
   "name": "@ccdoc/desktop",
-  "version": "0.1.18",
+  "version": "0.1.0",
   "private": true,
   "main": "dist/main/index.js",
   "scripts": {
@@ -12,8 +12,10 @@
   "dependencies": {
     "@ccdoc/core": "workspace:*",
     "@huggingface/transformers": "^3.4.1",
+    "@tanstack/react-virtual": "^3.13.23",
     "@tiptap/core": "^2.11.5",
     "@tiptap/extension-code-block-lowlight": "^2",
+    "@tiptap/extension-color": "^2.27.2",
     "@tiptap/extension-highlight": "^2.27.2",
     "@tiptap/extension-image": "^2.27.2",
     "@tiptap/extension-link": "^2.27.2",
@@ -25,7 +27,6 @@
     "@tiptap/extension-task-item": "^2.11.5",
     "@tiptap/extension-task-list": "^2.11.5",
     "@tiptap/extension-text-align": "^2.27.2",
-    "@tiptap/extension-color": "^2.27.2",
     "@tiptap/extension-text-style": "^2.27.2",
     "@tiptap/extension-underline": "^2.27.2",
     "@tiptap/pm": "^2.11.5",
@@ -35,12 +36,15 @@
     "d3-force": "^3.0.0",
     "d3-selection": "^3.0.0",
     "d3-zoom": "^3.0.0",
+    "dictionary-en": "^4.0.0",
+    "dictionary-ru": "^3.0.0",
     "diff": "^8.0.3",
     "dompurify": "^3.3.2",
     "elkjs": "^0.11.1",
     "lowlight": "^3.3.0",
     "lucide-react": "^0.577.0",
     "marked": "^15.0.6",
+    "nspell": "^2.1.5",
     "onnxruntime-web": "^1.24.0",
     "pdfjs-dist": "^4.0.379",
     "picomatch": "^4.0.3",
@@ -56,7 +60,7 @@
     "appId": "com.ccdoc.app",
     "productName": "ccDoc",
     "directories": {
-      "output": "release"
+      "output": "../../bin"
     },
     "files": [
       "dist/**/*",
@@ -93,7 +97,12 @@
       "category": "Development",
       "icon": "build/icons"
     },
-    "extraResources": [],
+    "extraResources": [
+      {
+        "from": "../mcp-server/dist",
+        "to": "mcp-server/dist"
+      }
+    ],
     "asar": true,
     "publish": null
   },

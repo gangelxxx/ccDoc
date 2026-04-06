@@ -1,5 +1,5 @@
 import type { Client } from "@libsql/client";
-import type { Section, SectionType } from "../types.js";
+import type { Section, SectionType, RichNode, TreeStats } from "../types.js";
 
 export class SectionsRepo {
   constructor(private db: Client) {}
@@ -45,6 +45,27 @@ export class SectionsRepo {
       args: [parentId],
     });
     return result.rows as unknown as Section[];
+  }
+
+  /** Root-level sections (metadata only) with has_children flag for lazy loading. */
+  async getRootMeta(): Promise<(Section & { has_children: number })[]> {
+    const result = await this.db.execute(
+      "SELECT id, parent_id, title, type, sort_key, icon, summary, deleted_at, created_at, updated_at, '' as content, " +
+      "EXISTS(SELECT 1 FROM sections c WHERE c.parent_id = s.id AND c.deleted_at IS NULL) as has_children " +
+      "FROM sections s WHERE parent_id IS NULL AND deleted_at IS NULL ORDER BY sort_key"
+    );
+    return result.rows as unknown as (Section & { has_children: number })[];
+  }
+
+  /** Children (metadata only) with has_children flag for lazy loading. */
+  async getChildrenMetaWithFlag(parentId: string): Promise<(Section & { has_children: number })[]> {
+    const result = await this.db.execute({
+      sql: "SELECT id, parent_id, title, type, sort_key, icon, summary, deleted_at, created_at, updated_at, '' as content, " +
+        "EXISTS(SELECT 1 FROM sections c WHERE c.parent_id = s.id AND c.deleted_at IS NULL) as has_children " +
+        "FROM sections s WHERE parent_id = ? AND deleted_at IS NULL ORDER BY sort_key",
+      args: [parentId],
+    });
+    return result.rows as unknown as (Section & { has_children: number })[];
   }
 
   async create(section: {
@@ -175,5 +196,96 @@ export class SectionsRepo {
     const args = parentId === null ? [] : [parentId];
     const result = await this.db.execute({ sql, args });
     return (result.rows[0]?.sort_key as string) ?? null;
+  }
+
+  // ─── Rich node queries for LLM gt/read tools ──────────────────
+
+  /** Children with rich metadata (content_length, children_count) and pagination. */
+  async getChildrenRich(parentId: string | null, opts: {
+    offset?: number; limit?: number;
+    sort?: "default" | "updated" | "size" | "title";
+  } = {}): Promise<{ total: number; rows: RichNode[] }> {
+    const offset = opts.offset ?? 0;
+    const limit = opts.limit ?? 50;
+    const where = parentId === null
+      ? "parent_id IS NULL AND deleted_at IS NULL"
+      : "parent_id = ? AND deleted_at IS NULL";
+    const args = parentId === null ? [] : [parentId];
+
+    // Total count
+    const countResult = await this.db.execute({ sql: `SELECT COUNT(*) as cnt FROM sections WHERE ${where}`, args });
+    const total = Number(countResult.rows[0]?.cnt ?? 0);
+
+    // Sort clause
+    let orderBy = "sort_key";
+    switch (opts.sort) {
+      case "updated": orderBy = "updated_at DESC"; break;
+      case "size": orderBy = "LENGTH(content) DESC"; break;
+      case "title": orderBy = "title COLLATE NOCASE"; break;
+    }
+
+    const sql = `SELECT s.id, s.parent_id, s.title, s.type, s.icon, s.summary, s.updated_at,
+      LENGTH(s.content) as content_length,
+      (SELECT COUNT(*) FROM sections c WHERE c.parent_id = s.id AND c.deleted_at IS NULL) as children_count
+      FROM sections s WHERE ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`;
+
+    const result = await this.db.execute({ sql, args: [...args, limit, offset] });
+    return { total, rows: result.rows as unknown as RichNode[] };
+  }
+
+  /** Single node with rich metadata. */
+  async getNodeInfo(id: string): Promise<RichNode | null> {
+    const result = await this.db.execute({
+      sql: `SELECT s.id, s.parent_id, s.title, s.type, s.icon, s.summary, s.updated_at,
+        LENGTH(s.content) as content_length,
+        (SELECT COUNT(*) FROM sections c WHERE c.parent_id = s.id AND c.deleted_at IS NULL) as children_count
+        FROM sections s WHERE s.id = ? AND s.deleted_at IS NULL`,
+      args: [id],
+    });
+    return (result.rows[0] as unknown as RichNode) ?? null;
+  }
+
+  /** Tree-wide statistics. */
+  async getTreeStats(): Promise<TreeStats> {
+    const statsResult = await this.db.execute(
+      `SELECT COUNT(*) as total_nodes, COALESCE(SUM(LENGTH(content)), 0) as total_content_length,
+        MAX(updated_at) as last_updated,
+        COUNT(CASE WHEN type='folder' THEN 1 END) as folders,
+        COUNT(CASE WHEN type='file' THEN 1 END) as files,
+        COUNT(CASE WHEN type='section' THEN 1 END) as sections,
+        COUNT(CASE WHEN type='idea' THEN 1 END) as ideas,
+        COUNT(CASE WHEN type='todo' THEN 1 END) as todos,
+        COUNT(CASE WHEN type='kanban' THEN 1 END) as kanbans,
+        COUNT(CASE WHEN type='drawing' THEN 1 END) as drawings
+      FROM sections WHERE deleted_at IS NULL`
+    );
+    const r = statsResult.rows[0] as any;
+
+    // max_depth via recursive CTE
+    const depthResult = await this.db.execute(
+      `WITH RECURSIVE d(id, lvl) AS (
+        SELECT id, 0 FROM sections WHERE parent_id IS NULL AND deleted_at IS NULL
+        UNION ALL
+        SELECT s.id, d.lvl + 1 FROM sections s JOIN d ON s.parent_id = d.id WHERE s.deleted_at IS NULL
+      ) SELECT MAX(lvl) as max_depth FROM d`
+    );
+    const maxDepth = Number(depthResult.rows[0]?.max_depth ?? 0);
+
+    const types: Record<string, number> = {};
+    if (r.folders > 0) types.folder = Number(r.folders);
+    if (r.files > 0) types.file = Number(r.files);
+    if (r.sections > 0) types.section = Number(r.sections);
+    if (r.ideas > 0) types.idea = Number(r.ideas);
+    if (r.todos > 0) types.todo = Number(r.todos);
+    if (r.kanbans > 0) types.kanban = Number(r.kanbans);
+    if (r.drawings > 0) types.drawing = Number(r.drawings);
+
+    return {
+      total_nodes: Number(r.total_nodes),
+      total_content_length: Number(r.total_content_length),
+      max_depth: maxDepth,
+      types,
+      last_updated: r.last_updated ?? "",
+    };
   }
 }

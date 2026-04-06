@@ -1,7 +1,7 @@
 import { createClient, type Client } from "@libsql/client";
 import { mkdirSync } from "fs";
 import { dirname } from "path";
-import { APP_DB_PATH, projectDbPath, CCDOC_DIR, PROJECTS_DIR, BACKUPS_DIR } from "../constants.js";
+import { APP_DB_PATH, projectDbPath, CCDOC_DIR, PROJECTS_DIR, BACKUPS_DIR, USER_DIR, USER_DB_PATH } from "../constants.js";
 import { migrateAppDb, migrateProjectDb } from "./migrations.js";
 
 export function ensureDirs(): void {
@@ -26,6 +26,18 @@ export async function openProjectDb(token: string): Promise<Client> {
   const dbPath = projectDbPath(token);
   mkdirSync(dirname(dbPath), { recursive: true });
   const db = createClient({ url: `file:${dbPath}` });
+  try {
+    await migrateProjectDb(db);
+  } catch (err) {
+    db.close();
+    throw err;
+  }
+  return db;
+}
+
+export async function openUserDb(): Promise<Client> {
+  mkdirSync(USER_DIR, { recursive: true });
+  const db = createClient({ url: `file:${USER_DB_PATH}` });
   try {
     await migrateProjectDb(db);
   } catch (err) {

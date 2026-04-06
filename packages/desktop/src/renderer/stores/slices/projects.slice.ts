@@ -44,10 +44,15 @@ export const createProjectsSlice: SliceCreator<ProjectsSlice> = (set, get) => ({
   selectProject: async (project) => {
     set({ treeLoading: true });
     try {
-      set({ currentProject: project, currentSection: null, navHistory: [], navIndex: -1, canGoBack: false, canGoForward: false, historyViewCommit: null, historyViewSections: [], historyViewSectionId: null, historyViewContent: null, historyViewCurrentContent: null, history: [], externallyChangedIds: new Set<string>(), externalChangePending: false, externalChangeTimestamp: null });
+      set({ currentProject: project, currentSection: null, activeSectionToken: null, _sectionCache: new Map(), navHistory: [], navIndex: -1, canGoBack: false, canGoForward: false, historyViewCommit: null, historyViewSections: [], historyViewSectionId: null, historyViewContent: null, historyViewCurrentContent: null, history: [], externallyChangedIds: new Set<string>(), externalChangePending: false, externalChangeTimestamp: null });
       await window.api.touchProject(project.token);
-      const tree = await window.api.getTree(project.token);
-      set({ tree });
+
+      // Ensure workspace exists (creates if needed) — enables project name in tree
+      await get().ensureWorkspace(project.token, project.name);
+
+      // loadRootTree will use unified tree (workspace always exists now)
+      await get().loadRootTree();
+
       get().loadHistory().catch(() => {});
       get().loadPassport().catch(() => {});
       get().loadProjects().catch(() => {});
@@ -59,7 +64,7 @@ export const createProjectsSlice: SliceCreator<ProjectsSlice> = (set, get) => ({
   },
 
   removeProject: async (token) => {
-    const taskId = get().startBgTask("Удаление проекта");
+    const taskId = get().startBgTask("Deleting project");
     try {
       await window.api.removeProject(token);
       const { currentProject } = get();

@@ -41,14 +41,6 @@ export function NoProjectState({ mainContentRef, llmResize }: CommonProps) {
   return (
     <div className="content-area-wrap">
       <div className="main-content" ref={mainContentRef} onClick={llmResize.handleContentClick}>
-        <Topbar
-          sidebarCollapsed={sidebarCollapsed}
-          toggleSidebar={toggleSidebar}
-          canGoBack={false}
-          canGoForward={false}
-          goBack={goBack}
-          goForward={goForward}
-        />
         <div className="empty-state">
           <h3>{t("welcomeTitle")}</h3>
           <p>

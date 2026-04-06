@@ -1,4 +1,5 @@
 import type { IdeaProcessingMode, IdeaProcessingResult } from "@ccdoc/core";
+import { PLAN_VERIFICATION_BLOCK } from "../llm/verification-constants.js";
 import type { TreeNode, SliceCreator } from "../types.js";
 import {
   estimateInputTokens,
@@ -6,7 +7,35 @@ import {
   buildSlugMap,
 } from "../../llm-utils.js";
 import { buildIdeaProcessingPrompt, parseProcessingResult } from "../llm/idea-processing-prompt.js";
-import { callLlmOnce } from "../llm-engine.js";
+import { buildPlanPhasesPrompt, parsePhasesResult } from "../llm/plan-phases-prompt.js";
+import { callLlmOnceTier, callTierRaw, extractResponseText } from "../llm-engine.js";
+import { t as translate } from "../../i18n.js";
+
+/** Source-aware section read for idea helpers. Uses state from the provided getter. */
+function _ideaGet(get: () => any) {
+  return async (sectionId: string): Promise<any> => {
+    const state = get();
+    if (state.sectionSource === "user") {
+      return window.api.user.get(sectionId);
+    }
+    const token = state.activeSectionToken || state.currentProject?.token;
+    if (!token) return null;
+    return window.api.getSection(token, sectionId);
+  };
+}
+
+function _ideaSave(get: () => any) {
+  return async (sectionId: string, title: string, content: string): Promise<void> => {
+    const state = get();
+    if (state.sectionSource === "user") {
+      await window.api.user.update(sectionId, title, content);
+    } else {
+      const token = state.activeSectionToken || state.currentProject?.token;
+      if (!token) return;
+      await window.api.updateSection(token, sectionId, title, content);
+    }
+  };
+}
 
 export interface PassportSlice {
   passport: Record<string, string>;
@@ -15,7 +44,7 @@ export interface PassportSlice {
   deletePassportField: (key: string) => Promise<void>;
   generatePassport: () => Promise<void>;
   generateSectionSummary: (sectionId: string) => Promise<void>;
-  expandIdeaToPlan: (ideaId: string, messageId?: string, messageText?: string, messageImages?: { id: string; name: string; mediaType: string; data: string }[]) => Promise<string | null>;
+  expandIdeaToPlan: (ideaId: string, messageId?: string, messageText?: string, messageImages?: { id: string; name: string; mediaType: string; data: string }[], splitIntoPhases?: boolean) => Promise<string | null>;
   processIdeaWithLLM: (ideaId: string, mode?: IdeaProcessingMode) => void;
   applyIdeaProcessingResult: (ideaId: string, result: IdeaProcessingResult) => Promise<void>;
   ideaProcessingTask: import("../types.js").IdeaProcessingTask | null;
@@ -23,6 +52,9 @@ export interface PassportSlice {
   openIdeaProcessingResult: () => Promise<void>;
   addIdeaMessage: (sectionId: string, text: string, images?: { id: string; name: string; mediaType: string; data: string }[]) => Promise<{ id: string; text: string; createdAt: number }>;
   deleteIdeaMessage: (sectionId: string, messageId: string) => Promise<void>;
+  permanentDeleteIdeaMessage: (messageId: string) => Promise<void>;
+  restoreIdeaMessage: (messageId: string) => Promise<{ success: boolean; error?: string }>;
+  emptyIdeaTrash: () => Promise<void>;
   getIdeaMessages: (sectionId: string) => Promise<{ id: string; text: string; createdAt: number; planId?: string; images?: { id: string; name: string; mediaType: string; data: string }[] }[]>;
 }
 
@@ -49,14 +81,17 @@ export const createPassportSlice: SliceCreator<PassportSlice> = (set, get) => ({
   },
 
   generatePassport: async () => {
-    const { currentProject, llmApiKey, llmPassportConfig, passport, setPassportField, startBgTask, finishBgTask } = get();
-    const { model, maxTokens, temperature, thinking, thinkingBudget } = llmPassportConfig;
-    if (!currentProject?.token || !llmApiKey) return;
-    const taskId = startBgTask("Генерация паспорта проекта");
+    const { currentProject, modelTiers, passport, setPassportField, startBgTask, finishBgTask } = get();
+    if (!currentProject?.token) return;
+    const tierName = modelTiers.passportTier;
+    const tierConfig = modelTiers[tierName];
+    const taskId = startBgTask(translate(get().language as any, "bgGeneratingPassport"));
     try {
-      const tree = await window.api.getTree(currentProject.token);
-      const treeText = JSON.stringify(tree, null, 2);
+      const token = currentProject.token;
+      const tree = await window.api.getTree(token);
+      const treeText = formatCompactTree(tree, 0, false);
 
+      // Collect section content with a total budget of ~20000 chars
       const collectIds = (nodes: any[]): string[] => {
         const ids: string[] = [];
         for (const n of nodes) {
@@ -66,44 +101,89 @@ export const createPassportSlice: SliceCreator<PassportSlice> = (set, get) => ({
         return ids;
       };
       const sectionSamples: string[] = [];
-      for (const id of collectIds(tree).slice(0, 5)) {
+      let totalChars = 0;
+      const BUDGET = 20000;
+      for (const id of collectIds(tree)) {
+        if (totalChars >= BUDGET) break;
         try {
-          const content = await window.api.getSectionContent(currentProject.token, id, "markdown");
-          if (content?.trim()) sectionSamples.push(content.slice(0, 500));
+          const content = await window.api.getSectionContent(token, id, "markdown");
+          if (content?.trim()) {
+            const slice = content.slice(0, Math.min(2000, BUDGET - totalChars));
+            sectionSamples.push(slice);
+            totalChars += slice.length;
+          }
         } catch {}
       }
 
-      const prompt = `Analyze this documentation project and generate a passport.
+      // Source code context (may not be available)
+      let sourceTree = "";
+      let readmeContent = "";
+      let packageJson = "";
+      let claudeMd = "";
+      try { sourceTree = await window.api.sourceTree(token, undefined, 3); } catch {}
+      try {
+        const readme = await window.api.sourceRead(token, "README.md");
+        if (readme) readmeContent = (typeof readme === "string" ? readme : readme.content || "").slice(0, 5000);
+      } catch {}
+      try {
+        const pkg = await window.api.sourceRead(token, "package.json");
+        if (pkg) packageJson = (typeof pkg === "string" ? pkg : pkg.content || "").slice(0, 2000);
+      } catch {}
+      try {
+        const claude = await window.api.sourceRead(token, "CLAUDE.md");
+        if (claude) claudeMd = (typeof claude === "string" ? claude : claude.content || "").slice(0, 5000);
+      } catch {}
+      // Try alternative build configs if no package.json
+      if (!packageJson) {
+        for (const cfg of ["Cargo.toml", "pyproject.toml", "go.mod", "Makefile"]) {
+          try {
+            const f = await window.api.sourceRead(token, cfg);
+            if (f) { packageJson = (typeof f === "string" ? f : f.content || "").slice(0, 2000); break; }
+          } catch {}
+        }
+      }
 
-Tree structure:
-${treeText.slice(0, 3000)}
+      // Build current values string
+      const currentValues = ["name", "description", "stack", "architecture", "conventions", "commands", "structure", "notes"]
+        .map((k) => `- ${k}: ${passport[k] || "(empty)"}`)
+        .join("\n");
 
-Sample content from sections:
+      const prompt = `Analyze this project comprehensively and generate a detailed project passport.
+
+## Documentation tree:
+${treeText.slice(0, 5000)}
+
+## Documentation content:
 ${sectionSamples.join("\n---\n")}
+${sourceTree ? `\n## Source code structure:\n${sourceTree.slice(0, 5000)}` : ""}
+${readmeContent ? `\n## README.md:\n${readmeContent}` : ""}
+${packageJson ? `\n## Build config:\n${packageJson}` : ""}
+${claudeMd ? `\n## CLAUDE.md:\n${claudeMd}` : ""}
 
-Current passport values:
-- Name: ${passport.name || "(empty)"}
-- Stack: ${passport.stack || "(empty)"}
-- Conventions: ${passport.conventions || "(empty)"}
+## Current passport values:
+${currentValues}
 
-Based on the project structure and content, generate a JSON object with these fields:
-- "name": project name (string, short)
-- "stack": technology stack used (string, comma-separated)
-- "conventions": code conventions observed (string)
+Generate a JSON object with these fields (all values are strings, use \\n for newlines within values):
+- "name": project name (short, 2-5 words)
+- "description": what this project is, what problem it solves, who it's for (2-5 sentences)
+- "stack": technology stack — languages, frameworks, databases, tools (comma-separated)
+- "architecture": architecture overview — layers, modules, key patterns, data flow (detailed paragraph)
+- "conventions": code conventions — naming, file organization, patterns, rules (detailed paragraph)
+- "commands": build/run/test/dev commands, one per line (e.g. "npm run dev — start dev server\\nnpm test — run tests")
+- "structure": key directories and files with one-line descriptions, one per line
+- "notes": important gotchas, limitations, things a new developer should know
+
+Be thorough and specific. Each field should contain maximum useful information for an AI assistant working with this project.
 
 Only output valid JSON, nothing else.`;
 
-      const passportSystem = "You are a helpful assistant that analyzes documentation projects. Respond only with valid JSON.";
+      const passportSystem = "You are an expert software analyst. Analyze the provided project information and generate a comprehensive project passport. Respond only with valid JSON.";
       const passportMessages = [{ role: "user", content: prompt }];
       get().updateBgTask(taskId, { tokens: { input: estimateInputTokens(passportSystem, passportMessages), output: 0 } });
-      const data = await window.api.llmChat({
-        apiKey: llmApiKey,
+      const data = await callTierRaw("passportTier", {
         system: passportSystem,
         messages: passportMessages,
-        model,
-        maxTokens: thinking ? Math.max(maxTokens, thinkingBudget + 1024) : maxTokens,
-        temperature: thinking ? 1.0 : temperature,
-        ...(thinking ? { thinking: { type: "enabled", budget_tokens: thinkingBudget } } : {}),
+        ...(tierConfig.thinking ? { thinking: { type: "enabled", budget_tokens: tierConfig.thinkingBudget } } : {}),
       });
 
       if (data.usage) {
@@ -112,14 +192,14 @@ Only output valid JSON, nothing else.`;
         });
       }
 
-      const textBlock = data.content?.find((b: any) => b.type === "text");
-      if (textBlock?.text) {
-        const jsonMatch = textBlock.text.match(/\{[\s\S]*\}/);
+      const text = extractResponseText(data);
+      if (text) {
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
           const parsed = JSON.parse(jsonMatch[0]);
-          if (parsed.name) await setPassportField("name", parsed.name);
-          if (parsed.stack) await setPassportField("stack", parsed.stack);
-          if (parsed.conventions) await setPassportField("conventions", parsed.conventions);
+          for (const key of ["name", "description", "stack", "architecture", "conventions", "commands", "structure", "notes"]) {
+            if (parsed[key]) await setPassportField(key, parsed[key]);
+          }
         }
       }
     } catch (err) {
@@ -140,10 +220,9 @@ Only output valid JSON, nothing else.`;
   },
 
   generateSectionSummary: async (sectionId: string) => {
-    const { currentProject, llmApiKey, llmSummaryConfig, language, startBgTask, finishBgTask, updateBgTask } = get();
-    const { model, maxTokens, temperature, thinking, thinkingBudget } = llmSummaryConfig;
-    if (!currentProject?.token || !llmApiKey) return;
-    const taskId = startBgTask(language === "ru" ? "Генерация саммари" : "Generating summary");
+    const { currentProject, modelTiers, language } = get();
+    if (!currentProject?.token) return;
+    const tierConfig = modelTiers[modelTiers.summaryTier];
     try {
       let content = await window.api.getSectionContent(currentProject.token, sectionId, "markdown");
 
@@ -166,25 +245,13 @@ Only output valid JSON, nothing else.`;
       const langInstruction = language === "ru" ? "Respond in Russian." : "Respond in English.";
       const summarySystem = `You are a helpful assistant. Write a single short sentence (up to 100 characters) summarizing what this document is about. Output only the sentence, nothing else. ${langInstruction}`;
       const summaryMessages = [{ role: "user", content: content.slice(0, 3000) }];
-      updateBgTask(taskId, { tokens: { input: estimateInputTokens(summarySystem, summaryMessages), output: 0 } });
-      const data = await window.api.llmChat({
-        apiKey: llmApiKey,
+      const data = await callTierRaw("summaryTier", {
         system: summarySystem,
         messages: summaryMessages,
-        model,
-        maxTokens,
-        temperature: thinking ? 1.0 : temperature,
-        ...(thinking ? { thinking: { type: "enabled", budget_tokens: thinkingBudget } } : {}),
+        ...(tierConfig.thinking ? { thinking: { type: "enabled", budget_tokens: tierConfig.thinkingBudget } } : {}),
       });
 
-      if (data.usage) {
-        updateBgTask(taskId, {
-          tokens: { input: data.usage.input_tokens || 0, output: data.usage.output_tokens || 0 },
-        });
-      }
-
-      const textBlock = data.content?.find((b: any) => b.type === "text");
-      const summary = textBlock?.text?.trim() || null;
+      const summary = extractResponseText(data)?.trim() || null;
       if (!summary) return;
 
       await window.api.setSectionSummary(currentProject.token, sectionId, summary);
@@ -199,16 +266,23 @@ Only output valid JSON, nothing else.`;
       set((s) => ({ tree: updateNode(s.tree) }));
     } catch (err) {
       console.error("[generateSectionSummary] failed:", err);
-    } finally {
-      finishBgTask(taskId);
     }
   },
 
-  expandIdeaToPlan: async (ideaId: string, messageId?: string, messageText?: string, messageImages?: { id: string; name: string; mediaType: string; data: string }[]) => {
-    const { currentProject, llmApiKey, language, tree } = get();
-    if (!currentProject?.token || !llmApiKey) return null;
+  expandIdeaToPlan: async (ideaId: string, messageId?: string, messageText?: string, messageImages?: { id: string; name: string; mediaType: string; data: string }[], splitIntoPhases: boolean = true) => {
+    const { currentProject, language, tree, sectionSource, userTree } = get();
+    const isUser = sectionSource === "user";
+    if (!isUser && !currentProject?.token) return null;
+    if (!get().hasLlmAccess()) return null;
 
-    const content = messageText || await window.api.getSectionContent(currentProject.token, ideaId, "markdown");
+    let content: string;
+    if (messageText) {
+      content = messageText;
+    } else if (isUser) {
+      content = await window.api.user.getContent(ideaId, "markdown");
+    } else {
+      content = await window.api.getSectionContent(currentProject!.token, ideaId, "markdown");
+    }
     if (!content?.trim()) return null;
 
     const findNode = (nodes: TreeNode[], id: string): TreeNode | null => {
@@ -219,82 +293,37 @@ Only output valid JSON, nothing else.`;
       }
       return null;
     };
-    const ideaNode = findNode(tree, ideaId);
+    const activeTree = isUser ? userTree : tree;
+    const ideaNode = findNode(activeTree, ideaId);
     const ideaTitle = ideaNode?.title || "Idea";
 
-    // Remember existing plan child IDs before LLM creates a new one
-    const existingChildIds = new Set(
-      (ideaNode?.children || []).filter((c: TreeNode) => c.type === "section").map((c: TreeNode) => c.id)
-    );
-
-    // Pre-seed: fetch doc tree and source tree upfront to save round-trips
-    const docTree = formatCompactTree(tree, 0, true, undefined, buildSlugMap(tree));
+    // Pre-seed: compact doc tree (depth=2) and source tree (depth=2) — just structure, not content
+    const docTree = formatCompactTree(tree, 0, true, 2, buildSlugMap(tree));
     let sourceTree = "";
     try {
-      sourceTree = await window.api.sourceTree(currentProject.token);
+      sourceTree = await window.api.sourceTree(currentProject.token, undefined, 2);
     } catch { /* project may not have source path */ }
 
-    // Pre-seed: fetch content of sibling doc sections (same parent folder) to save 1-2 research rounds
-    let siblingContext = "";
+    // Pre-seed: try to find architecture description for project context
+    let archSummary = "";
     try {
-      const findParent = (nodes: TreeNode[], targetId: string, parent: TreeNode | null = null): TreeNode | null => {
-        for (const n of nodes) {
-          if (n.id === targetId) return parent;
-          const found = findParent(n.children, targetId, n);
-          if (found) return found;
-        }
-        return null;
-      };
-      const parentNode = findParent(tree, ideaId);
-      if (parentNode) {
-        const siblings = parentNode.children
-          .filter((c: TreeNode) => c.id !== ideaId && ["file", "idea"].includes(c.type))
-          .slice(0, 5); // max 5 siblings to keep context reasonable
-        if (siblings.length > 0) {
-          const siblingIds = siblings.map((s: TreeNode) => s.id);
-          const siblingContents: string[] = [];
-          for (const sid of siblingIds) {
-            try {
-              const sc = await window.api.getSectionContent(currentProject.token, sid, "markdown");
-              if (sc && typeof sc === "string" && sc.trim()) {
-                const sNode = siblings.find((s: TreeNode) => s.id === sid);
-                siblingContents.push(`### ${sNode?.title || "?"}\n${sc.slice(0, 2000)}`);
-              }
-            } catch { /* skip */ }
-          }
-          if (siblingContents.length > 0) {
-            siblingContext = `\n\n--- Контент связанных секций (уже прочитан, не нужно запрашивать повторно) ---\n${siblingContents.join("\n\n")}`;
-          }
+      const allChildren = tree.flatMap((n: TreeNode) => n.children || []);
+      const arch = allChildren.find((c: TreeNode) =>
+        c.title.toLowerCase().includes("architect") || c.title.toLowerCase().includes("архитектур")
+      );
+      if (arch) {
+        const archContent = await window.api.getSectionContent(currentProject.token, arch.id, "plain");
+        if (archContent && typeof archContent === "string" && archContent.trim()) {
+          archSummary = `\n\n--- Architecture summary ---\n${archContent.slice(0, 3000)}`;
         }
       }
-    } catch { /* ignore */ }
+    } catch { /* skip */ }
 
-    const ru = language === "ru";
-    const preSeedSection = `--- Структура документации ---\n${docTree}` +
-      (sourceTree ? `\n\n--- Файлы исходного кода ---\n${sourceTree}` : "") +
-      siblingContext;
+    const preSeedSection = `--- Documentation structure ---\n${docTree}` +
+      (sourceTree ? `\n\n--- Source code structure (top level) ---\n${sourceTree}` : "") +
+      archSummary;
 
-    const message = ru
-      ? `Создай детальный план реализации для идеи ниже.
-
-Процесс:
-1. Прочитай релевантные секции документации (структура уже ниже)
-2. Изучи исходный код проекта (используй get_file_outlines для нескольких файлов сразу, find_symbols для поиска символов)
-3. Создай план через create_section(parent_id="${ideaId}", type="section", title="<описательное название>", content="...")
-
-ВАЖНО: Название плана должно отражать СУТЬ идеи, а не просто "План реализации". Примеры хороших названий: "Тихий режим при внешних изменениях БД", "Экспорт секций в PDF", "Кэширование дерева документации".
-
-План должен включать: резюме, архитектуру, пошаговую реализацию, ключевые файлы, риски, стратегию тестирования.
-
-ВАЖНО: Исследуй документацию и код, потом пиши план. Отвечай на русском.
-
-${preSeedSection}
-
----
-
-Идея:
-${content}`
-      : `Create a detailed implementation plan for the idea below.
+    const message = `Create a detailed implementation plan for the idea below.
 
 Process:
 1. Read relevant documentation sections (structure is provided below)
@@ -305,50 +334,119 @@ IMPORTANT: The plan title must reflect the ESSENCE of the idea, not just "Implem
 
 Plan must include: summary, architecture, step-by-step implementation, key files, risks, testing strategy.
 
-IMPORTANT: Explore documentation and code BEFORE writing the plan. Respond in English.
+At the very end of the plan, you MUST add a section "✅ Mandatory result verification" with two iterations:
+- Iteration 1: check plan compliance → check for errors → fix.
+- Iteration 2: re-check plan compliance → re-check for errors → fix.
+The executor MUST NOT report completion until both iterations pass.
+
+IMPORTANT: Explore documentation and code BEFORE writing the plan.
 
 ${preSeedSection}
+
+CRITICAL: Write ALL responses, plan content, and section titles in ${language === "ru" ? "Russian" : "English"}. Every tool call content parameter must also be in ${language === "ru" ? "Russian" : "English"}.
 
 ---
 
 Idea:
 ${content}`;
 
-    const displayText = ru
-      ? `Создание плана: ${ideaTitle}\n\n${content}`
-      : `Creating plan: ${ideaTitle}\n\n${content}`;
+    const displayText = `Creating plan: ${ideaTitle}
+
+${content}`;
 
     // Start a new LLM session (saves current one if any)
     get().clearLlmMessages();
     // Configure agent settings: source code ON, context OFF (plan has its own context)
-    set({ llmPanelOpen: true, llmIncludeSourceCode: true, llmIncludeContext: false });
+    // Set session context so engine can auto-link plan to idea message
+    set({
+      llmPanelOpen: true,
+      llmIncludeSourceCode: true,
+      llmIncludeContext: false,
+      llmSessionContext: {
+        mode: "plan",
+        ideaId,
+        messageId,
+        projectToken: currentProject?.token,
+      },
+    });
     // Convert idea images to LLM attachments for vision
     const attachments = messageImages?.length
       ? messageImages.map(img => ({ type: "image" as const, name: img.name, mediaType: img.mediaType, data: img.data }))
       : undefined;
-    await get().sendLlmMessage(message, false, attachments, true, displayText, true);
-    await get().loadTree();
+    const planId = await get().sendLlmMessage(message, false, attachments, true, displayText, true);
+    console.log("[expandIdeaToPlan] planId from sendLlmMessage:", planId);
+    if (isUser) await get().loadUserTree(); else await get().loadTree();
+
+    const getSection = _ideaGet(get);
+    const saveSection = _ideaSave(get);
 
     // Link the newly created plan child to the specific message
-    if (messageId && currentProject?.token) {
+    if (messageId && planId) {
       try {
-        const updatedIdeaNode = findNode(get().tree, ideaId);
-        const newChildren = (updatedIdeaNode?.children || [])
-          .filter((c: TreeNode) => c.type === "section" && !existingChildIds.has(c.id));
-        if (newChildren.length > 0) {
-          const sec = await window.api.getSection(currentProject.token, ideaId);
+        const sec = await getSection(ideaId);
+        if (sec) {
           const data = JSON.parse(sec.content);
           const msg = data.messages?.find((m: any) => m.id === messageId);
           if (msg) {
-            msg.planId = newChildren[0].id;
-            await window.api.updateSection(currentProject.token, ideaId, sec.title, JSON.stringify(data));
+            msg.planId = planId;
+            await saveSection(ideaId, sec.title, JSON.stringify(data));
           }
         }
       } catch { /* ignore */ }
     }
 
+    // Split plan into phases via a second LLM call
+    console.log("[expandIdeaToPlan] splitIntoPhases:", splitIntoPhases, "planId:", planId, "hasAccess:", get().hasLlmAccess());
+    if (splitIntoPhases && planId && get().hasLlmAccess()) {
+      const phaseTaskId = get().startBgTask("📋 Splitting into phases...");
+      try {
+        let planContent: string;
+        if (isUser) {
+          planContent = await window.api.user.getContent(planId, "markdown");
+        } else {
+          planContent = await window.api.getSectionContent(currentProject!.token, planId, "markdown");
+        }
+        if (planContent?.trim()) {
+          const phasesPrompt = buildPlanPhasesPrompt(planContent, language);
+          const chatTierConfig = get().modelTiers[get().modelTiers.chatTier];
+          const phasesResponse = await callLlmOnceTier(
+            phasesPrompt, chatTierConfig,
+            "You are a helpful assistant that splits implementation plans into phases. Respond only with markdown.",
+          );
+          const phases = parsePhasesResult(phasesResponse);
+          for (const phase of phases) {
+            if (isUser) {
+              await window.api.user.create(planId, phase.title, "section", null, phase.content);
+            } else {
+              await window.api.createSection(currentProject!.token, planId, phase.title, "section", null, phase.content);
+            }
+          }
+          // Add verification phase as last child (if auto-verify enabled and not already present)
+          const alreadyHasVerify = phases.some(p => /верификац|verification/i.test(p.title));
+          if (phases.length > 0 && get().autoVerifyPlan && !alreadyHasVerify) {
+            const verifyTitle = "✅ Result verification";
+            if (isUser) {
+              await window.api.user.create(planId, verifyTitle, "section", null, PLAN_VERIFICATION_BLOCK.trim());
+            } else {
+              await window.api.createSection(currentProject!.token, planId, verifyTitle, "section", null, PLAN_VERIFICATION_BLOCK.trim());
+            }
+          }
+          if (phases.length > 0) {
+            if (isUser) await get().loadUserTree(); else await get().loadTree();
+          }
+        }
+      } catch (e) {
+        console.error("[expandIdeaToPlan] phase splitting failed:", e);
+      } finally {
+        get().finishBgTask(phaseTaskId);
+      }
+    }
+
     // Navigate back to the idea
-    try { await get().selectSection(ideaId); } catch { /* ignore */ }
+    try {
+      if (isUser) await get().selectUserSection(ideaId);
+      else await get().selectSection(ideaId);
+    } catch { /* ignore */ }
 
     return null;
   },
@@ -356,8 +454,10 @@ ${content}`;
   ideaProcessingTask: null,
 
   processIdeaWithLLM: (ideaId: string, mode: IdeaProcessingMode = "full") => {
-    const { currentProject, llmApiKey, llmChatConfig, language, tree } = get();
-    if (!currentProject?.token || !llmApiKey) return;
+    const { currentProject, language, tree, sectionSource, userTree } = get();
+    const isUserProc = sectionSource === "user";
+    if (!isUserProc && !currentProject?.token) return;
+    if (!get().hasLlmAccess()) return;
 
     // Find idea title for status bar
     const findNode = (nodes: any[], id: string): any => {
@@ -368,24 +468,24 @@ ${content}`;
       }
       return null;
     };
-    const ideaNode = findNode(tree, ideaId);
+    const ideaNode = findNode(isUserProc ? userTree : tree, ideaId);
     const sectionTitle = ideaNode?.title || "Ideas";
 
     const ru = language === "ru";
-    const modeLabels: Record<string, [string, string]> = {
-      title:       ["Генерация заголовков", "Generating titles"],
-      polish:      ["Улучшение формулировок", "Polishing text"],
-      deduplicate: ["Дедупликация", "Deduplication"],
-      group:       ["Группировка", "Grouping"],
-      full:        ["Полная обработка", "Full processing"],
+    const modeLabels: Record<string, string> = {
+      title:       "Generating titles",
+      polish:      "Polishing text",
+      deduplicate: "Deduplication",
+      group:       "Grouping",
+      full:        "Full processing",
     };
-    const [ruLabel, enLabel] = modeLabels[mode] || modeLabels.full;
-    const bgTaskId = get().startBgTask(`✨ ${ru ? ruLabel : enLabel}: ${sectionTitle}`);
+    const modeLabel = modeLabels[mode] || modeLabels.full;
+    const bgTaskId = get().startBgTask(`✨ ${modeLabel}: ${sectionTitle}`);
 
     // Fire-and-forget: run in background
     (async () => {
       try {
-        const section = await window.api.getSection(currentProject.token, ideaId);
+        const section = await _ideaGet(get)(ideaId);
         let data: { messages: any[]; kanbanId?: string };
         try {
           const parsed = JSON.parse(section.content);
@@ -410,11 +510,12 @@ ${content}`;
         });
 
         const prompt = buildIdeaProcessingPrompt(data.messages, mode, ru ? "ru" : "en");
-        const response = await callLlmOnce(prompt, llmApiKey, llmChatConfig.model);
+        const chatTierCfg = get().modelTiers[get().modelTiers.chatTier];
+        const response = await callLlmOnceTier(prompt, chatTierCfg);
         const result = parseProcessingResult(response, data.messages);
 
         // Update bg task label to show completion
-        get().updateBgTask(bgTaskId, { label: ru ? `✅ Обработка завершена: ${sectionTitle}` : `✅ Processing done: ${sectionTitle}` });
+        get().updateBgTask(bgTaskId, { label: `✅ Processing done: ${sectionTitle}` });
 
         set({
           ideaProcessingTask: {
@@ -429,8 +530,7 @@ ${content}`;
         });
       } catch (e: any) {
         console.error("Idea processing error:", e);
-        const ru = get().language === "ru";
-        get().updateBgTask(bgTaskId, { label: ru ? `❌ Ошибка обработки: ${sectionTitle}` : `❌ Processing error: ${sectionTitle}` });
+        get().updateBgTask(bgTaskId, { label: `❌ Processing error: ${sectionTitle}` });
         set({
           ideaProcessingTask: {
             bgTaskId,
@@ -465,30 +565,32 @@ ${content}`;
   },
 
   applyIdeaProcessingResult: async (ideaId: string, result: IdeaProcessingResult) => {
-    const { currentProject } = get();
-    if (!currentProject?.token) return;
+    const getSection = _ideaGet(get);
+    const saveSection = _ideaSave(get);
+    const isUser = get().sectionSource === "user";
 
-    const section = await window.api.getSection(currentProject.token, ideaId);
+    const section = await getSection(ideaId);
+    if (!section) return;
     let data: { messages: any[]; kanbanId?: string };
     try {
       data = JSON.parse(section.content);
     } catch { data = { messages: [] }; }
 
     const newData = { messages: result.messages, ...(data.kanbanId ? { kanbanId: data.kanbanId } : {}) };
-    await window.api.updateSection(currentProject.token, ideaId, section.title, JSON.stringify(newData));
+    await saveSection(ideaId, section.title, JSON.stringify(newData));
 
-    // Clear the processing task
     get().clearIdeaProcessingTask();
 
-    await get().loadTree();
-    try { await get().selectSection(ideaId); } catch { /* ignore */ }
+    if (isUser) { await get().loadUserTree(); await get().selectUserSection(ideaId); }
+    else { await get().loadTree(); try { await get().selectSection(ideaId); } catch { /* ignore */ } }
   },
 
   addIdeaMessage: async (sectionId: string, text: string, images?: { id: string; name: string; mediaType: string; data: string }[]) => {
-    const { currentProject } = get();
-    if (!currentProject?.token) throw new Error("No project");
+    const getSection = _ideaGet(get);
+    const saveSection = _ideaSave(get);
 
-    const section = await window.api.getSection(currentProject.token, sectionId);
+    const section = await getSection(sectionId);
+    if (!section) throw new Error("Section not found");
     let data: { messages: any[]; kanbanId?: string };
     try {
       const parsed = JSON.parse(section.content);
@@ -499,29 +601,31 @@ ${content}`;
     if (images && images.length > 0) msg.images = images;
     data.messages.push(msg);
 
-    await window.api.updateSection(currentProject.token, sectionId, section.title, JSON.stringify(data));
+    await saveSection(sectionId, section.title, JSON.stringify(data));
 
     // Sync: add card to linked kanban board
     if (data.kanbanId) {
       try {
-        const kanbanSection = await window.api.getSection(currentProject.token, data.kanbanId);
-        const kanbanData = JSON.parse(kanbanSection.content);
-        const backlogCol = kanbanData.columns?.[0];
-        if (backlogCol) {
-          const lines = text.trim().split("\n");
-          backlogCol.cards.push({
-            id: crypto.randomUUID(),
-            title: lines[0] || text,
-            description: lines.slice(1).join("\n").trim(),
-            labels: [],
-            checked: false,
-            properties: {},
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            sourceIdeaId: sectionId,
-            sourceMessageId: msg.id,
-          });
-          await window.api.updateSection(currentProject.token, data.kanbanId, kanbanSection.title, JSON.stringify(kanbanData));
+        const kanbanSection = await getSection(data.kanbanId);
+        if (kanbanSection) {
+          const kanbanData = JSON.parse(kanbanSection.content);
+          const backlogCol = kanbanData.columns?.[0];
+          if (backlogCol) {
+            const lines = text.trim().split("\n");
+            backlogCol.cards.push({
+              id: crypto.randomUUID(),
+              title: lines[0] || text,
+              description: lines.slice(1).join("\n").trim(),
+              labels: [],
+              checked: false,
+              properties: {},
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+              sourceIdeaId: sectionId,
+              sourceMessageId: msg.id,
+            });
+            await saveSection(data.kanbanId, kanbanSection.title, JSON.stringify(kanbanData));
+          }
         }
       } catch { /* kanban may be deleted */ }
     }
@@ -530,85 +634,56 @@ ${content}`;
   },
 
   deleteIdeaMessage: async (sectionId: string, messageId: string) => {
-    const { currentProject } = get();
-    if (!currentProject?.token) return;
+    const isUser = get().sectionSource === "user";
+    const token = isUser ? "__user__" : (get().activeSectionToken || get().currentProject?.token);
+    if (!token) return;
 
-    const section = await window.api.getSection(currentProject.token, sectionId);
-    let data: { messages: any[]; kanbanId?: string };
-    try { data = JSON.parse(section.content); } catch { return; }
+    await window.api.idea.deleteMessage(token, sectionId, messageId);
 
-    const msg = data.messages.find((m: any) => m.id === messageId);
-
-    // Delete plan section directly via IPC (without triggering loadTree mid-operation
-    // which causes a race condition: useEffect re-reads old messages before they're removed)
-    if (msg?.planId) {
-      await window.api.deleteSection(currentProject.token, msg.planId);
+    // Reload tree (to reflect plan deletion in sidebar + trash folder in user tree)
+    if (isUser) await get().loadUserTree();
+    else {
+      await get().loadTree();
+      await get().loadUserTree(); // trash folder may have been created
     }
+  },
 
-    // Remove the message from content
-    data.messages = data.messages.filter((m: any) => m.id !== messageId);
-    await window.api.updateSection(currentProject.token, sectionId, section.title, JSON.stringify(data));
+  permanentDeleteIdeaMessage: async (messageId: string) => {
+    await window.api.idea.permanentDelete(messageId);
+    await get().loadUserTree();
+  },
 
-    // Remove linked kanban card via kanbanId (preferred) or sibling fallback
-    const kanbanId = data.kanbanId;
-    if (kanbanId) {
-      try {
-        const kanbanSection = await window.api.getSection(currentProject.token, kanbanId);
-        const kanbanData = JSON.parse(kanbanSection.content);
-        let changed = false;
-        for (const col of kanbanData.columns ?? []) {
-          const before = col.cards.length;
-          col.cards = col.cards.filter((c: any) => c.sourceMessageId !== messageId);
-          if (col.cards.length < before) changed = true;
-        }
-        if (changed) {
-          await window.api.updateSection(currentProject.token, kanbanId, kanbanSection.title, JSON.stringify(kanbanData));
-        }
-      } catch { /* kanban may be deleted */ }
-    } else if (section.parent_id) {
-      // Fallback: find sibling kanban boards via tree (for old kanban links without kanbanId)
-      try {
-        const tree = get().tree;
-        const findNode = (nodes: any[], id: string): any => {
-          for (const n of nodes) {
-            if (n.id === id) return n;
-            const found = findNode(n.children ?? [], id);
-            if (found) return found;
-          }
-          return null;
-        };
-        const parent = findNode(tree, section.parent_id);
-        const kanbanSiblings = (parent?.children ?? []).filter((c: any) => c.type === "kanban");
-        for (const sib of kanbanSiblings) {
-          const kanbanSection = await window.api.getSection(currentProject.token, sib.id);
-          let kanbanData: any;
-          try { kanbanData = JSON.parse(kanbanSection.content); } catch { continue; }
-          let changed = false;
-          for (const col of kanbanData.columns ?? []) {
-            const before = col.cards.length;
-            col.cards = col.cards.filter((c: any) => c.sourceMessageId !== messageId);
-            if (col.cards.length < before) changed = true;
-          }
-          if (changed) {
-            await window.api.updateSection(currentProject.token, sib.id, kanbanSection.title, JSON.stringify(kanbanData));
-          }
-        }
-      } catch { /* ignore */ }
+  restoreIdeaMessage: async (messageId: string) => {
+    const result = await window.api.idea.restoreMessage(messageId);
+    await get().loadUserTree();
+    if (result.success) {
+      const isUser = get().sectionSource === "user";
+      if (!isUser) await get().loadTree();
     }
+    return result;
+  },
 
-    // Reload tree once at the end (to reflect plan deletion in sidebar)
-    await get().loadTree();
+  emptyIdeaTrash: async () => {
+    await window.api.idea.emptyTrash();
+    await get().loadUserTree();
   },
 
   getIdeaMessages: async (sectionId: string) => {
-    const { currentProject } = get();
-    if (!currentProject?.token) return [];
-
-    const section = await window.api.getSection(currentProject.token, sectionId);
+    const getSection = _ideaGet(get);
+    const section = await getSection(sectionId);
+    if (!section) return [];
     try {
       const parsed = JSON.parse(section.content);
       if (parsed.type === "doc") {
-        const text = await window.api.getSectionContent(currentProject.token, sectionId, "plain");
+        // Legacy single-text format — try to read plain text
+        const isUser = get().sectionSource === "user";
+        let text = "";
+        if (isUser) {
+          text = await window.api.user.getContent(sectionId, "plain");
+        } else {
+          const token = get().activeSectionToken || get().currentProject?.token;
+          if (token) text = await window.api.getSectionContent(token, sectionId, "plain");
+        }
         return text?.trim() ? [{ id: "legacy", text, createdAt: Date.parse(section.created_at) }] : [];
       }
       return parsed.messages || [];

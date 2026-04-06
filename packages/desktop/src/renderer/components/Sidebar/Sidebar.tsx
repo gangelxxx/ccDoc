@@ -7,6 +7,7 @@ import { HistoryPanel } from "../HistoryPanel/HistoryPanel.js";
 import { ProjectPickerModal } from "../ProjectPickerModal/ProjectPickerModal.js";
 import { FolderKanban, FileText } from "lucide-react";
 import { PassportModal } from "../PassportModal/PassportModal.js";
+import { UserFolder } from "./UserFolder.js";
 
 function collectFiles(nodes: any[]): any[] {
   const result: any[] = [];
@@ -29,7 +30,6 @@ export function Sidebar() {
     historyExpanded,
     toggleHistoryExpanded,
     tree,
-    llmApiKey,
     generateSectionSummary,
     llmLoading,
     startBgTask,
@@ -44,15 +44,31 @@ export function Sidebar() {
   const [generatingSummaries, setGeneratingSummaries] = useState(false);
 
   const handleGenerateSummaries = async () => {
-    if (!llmApiKey) return;
+    if (!useAppStore.getState().hasLlmAccess()) return;
     const files = collectFiles(tree);
     if (!files.length) return;
-    const taskId = startBgTask(t("summaryTaskLabel", files.length));
+    const { addSummarizingId, removeSummarizingId, updateBgTask } = useAppStore.getState();
+    const total = files.length;
+    const taskId = startBgTask(t("summaryTaskLabel", 0, total));
     setGeneratingSummaries(true);
     try {
-      for (const file of files) {
-        await generateSectionSummary(file.id);
-      }
+      const CONCURRENCY = 3;
+      let i = 0;
+      let done = 0;
+      const next = async (): Promise<void> => {
+        while (i < files.length) {
+          const file = files[i++];
+          addSummarizingId(file.id);
+          try {
+            await generateSectionSummary(file.id);
+          } finally {
+            removeSummarizingId(file.id);
+            done++;
+            updateBgTask(taskId, { label: t("summaryTaskLabel", done, total) });
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, total) }, () => next()));
     } finally {
       finishBgTask(taskId);
       setGeneratingSummaries(false);
@@ -67,7 +83,7 @@ export function Sidebar() {
       <div className="sidebar-header">
         <h2>CCDoc</h2>
         <div style={{ display: "flex", gap: 4 }}>
-          {currentProject && llmApiKey && (
+          {currentProject && useAppStore.getState().hasLlmAccess() && (
             <button
               className="btn-icon"
               onClick={handleGenerateSummaries}
@@ -104,6 +120,12 @@ export function Sidebar() {
         <PassportModal onClose={() => setShowPassport(false)} />
       )}
 
+      {!currentProject && (
+        <div className="sidebar-body">
+          <UserFolder />
+        </div>
+      )}
+
       {currentProject && (
         <>
           {/* Quick actions */}
@@ -120,6 +142,9 @@ export function Sidebar() {
             <div className="sidebar-section sidebar-section-tree" style={{ flex: 1 }}>
               <TreeView />
             </div>
+
+            {/* User Folder (cross-project personal folder) */}
+            <UserFolder />
 
             {/* TODO (collapsible) */}
             <div className="sidebar-section">

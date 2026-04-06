@@ -1,5 +1,5 @@
 import { ipcMain, dialog, nativeImage } from "electron";
-import { readFileSync } from "fs";
+import { readFile, writeFile } from "fs/promises";
 import { basename, extname } from "path";
 import { getProjectServices, getProjectsService, trackBgTask, suppressExternalChange } from "../services";
 import { getMainWindow } from "../window";
@@ -58,7 +58,7 @@ const MIN_IMG_PIXELS = 400; // skip tiny icons/decorations (< 20x20)
  * Reconstruct structured text from PDF text items using positional data.
  * Two-strategy approach:
  *   1. Column-based extraction with X-position co-occurrence analysis (handles
- *      narrow gaps like "Дата"/"Изделие" that never appear on the same line)
+ *      narrow gaps like "Date"/"Product" that never appear on the same line)
  *   2. Gap-based fallback (ratio-based threshold for simpler layouts)
  */
 type TextItem = { str: string; x: number; y: number; width: number; height: number; color?: string; fontName?: string };
@@ -884,7 +884,7 @@ export function registerIoIpc(): void {
     let tocHtml = "";
     if (tocEntries.length > 1) {
       const minLevel = Math.min(...tocEntries.map(e => e.level));
-      tocHtml = `<nav class="toc"><h2 class="toc-title">Содержание</h2><ul>`;
+      tocHtml = `<nav class="toc"><h2 class="toc-title">Table of Contents</h2><ul>`;
       for (const entry of tocEntries) {
         const indent = entry.level - minLevel;
         tocHtml += `<li style="margin-left:${indent * 20}px"><a href="#${entry.id}">${entry.text}</a></li>`;
@@ -947,8 +947,8 @@ export function registerIoIpc(): void {
         printBackground: true,
         margins: { marginType: "default" },
       });
-      const { writeFileSync } = await import("fs");
-      writeFileSync(result.filePath, pdf);
+      const { writeFile: writeFileAsync } = await import("fs/promises");
+      await writeFileAsync(result.filePath, pdf);
       return true;
     } finally {
       printWin.destroy();
@@ -967,19 +967,19 @@ export function registerIoIpc(): void {
     const { import_, index } = await getProjectServices(token);
     const fileIds: string[] = [];
     for (const filePath of result.filePaths) {
-      const content = readFileSync(filePath, "utf-8");
+      const content = await readFile(filePath, "utf-8");
       const fileName = basename(filePath, extname(filePath));
       const fileId = await import_.importMarkdown(folderId, fileName, content);
       fileIds.push(fileId);
     }
-    trackBgTask("Индексация поиска", () => index.reindexAll()).catch(err => console.warn("[index] reindex after markdown import:", err));
+    trackBgTask("Search indexing", (sp) => index.reindexAll(sp)).then(() => suppressExternalChange(token)).catch(err => console.warn("[index] reindex after markdown import:", err));
     return fileIds;
   });
 
   // Image picker
   ipcMain.handle("dialog:pickImage", async () => {
     const result = await dialog.showOpenDialog(getMainWindow()!, {
-      title: "Выберите изображение",
+      title: "Select image",
       filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"] }],
       properties: ["openFile"],
     });
@@ -987,7 +987,7 @@ export function registerIoIpc(): void {
     const filePath = result.filePaths[0];
     const ext = extname(filePath).slice(1).toLowerCase();
     const mime = ext === "svg" ? "image/svg+xml" : ext === "jpg" ? "image/jpeg" : `image/${ext}`;
-    const base64 = readFileSync(filePath).toString("base64");
+    const base64 = (await readFile(filePath)).toString("base64");
     return `data:${mime};base64,${base64}`;
   });
 
@@ -1002,22 +1002,22 @@ export function registerIoIpc(): void {
     const filePath = result.filePaths[0];
     const fileName = basename(filePath, extname(filePath));
 
-    return trackBgTask(`Импорт PDF: ${basename(filePath)}`, async () => {
+    return trackBgTask(`PDF import: ${basename(filePath)}`, async () => {
       console.log("[pdf] importing file:", filePath);
-      const buffer = readFileSync(filePath);
+      const buffer = await readFile(filePath);
       console.log("[pdf] file read, size:", buffer.length);
       const { pages, outline } = await extractPdfContent(buffer);
       const hasContent = pages.some(p => p.text.trim() || p.images.length > 0);
       console.log("[pdf] hasContent:", hasContent, "outline entries:", outline.length);
       if (!hasContent) {
-        throw new Error("PDF не содержит извлекаемого контента (ни текста, ни изображений).");
+        throw new Error("PDF contains no extractable content (no text or images).");
       }
       suppressExternalChange(token);
       const { import_, index } = await getProjectServices(token);
       console.log("[pdf] calling importPdfContent...");
       const fileId = await import_.importPdfContent(folderId, fileName, pages, outline);
       console.log("[pdf] import done, fileId:", fileId);
-      trackBgTask("Индексация поиска", () => index.reindexAll()).catch(err => console.warn("[index] reindex after pdf import:", err));
+      trackBgTask("Search indexing", (sp) => index.reindexAll(sp)).then(() => suppressExternalChange(token)).catch(err => console.warn("[index] reindex after pdf import:", err));
       return fileId;
     });
   });
@@ -1028,29 +1028,29 @@ export function registerIoIpc(): void {
     const { import_, index } = await getProjectServices(token);
     const fileIds: string[] = [];
     for (const filePath of filePaths) {
-      const content = readFileSync(filePath, "utf-8");
+      const content = await readFile(filePath, "utf-8");
       const fileName = basename(filePath, extname(filePath));
       const fileId = await import_.importMarkdown(folderId, fileName, content);
       fileIds.push(fileId);
     }
-    trackBgTask("Индексация поиска", () => index.reindexAll()).catch(err => console.warn("[index] reindex after markdown drop:", err));
+    trackBgTask("Search indexing", (sp) => index.reindexAll(sp)).then(() => suppressExternalChange(token)).catch(err => console.warn("[index] reindex after markdown drop:", err));
     return fileIds;
   });
 
   // Import PDF from file path (drag-and-drop)
   ipcMain.handle("import:pdf-file", async (_e, token: string, folderId: string, filePath: string) => {
-    return trackBgTask(`Импорт PDF: ${basename(filePath)}`, async () => {
-      const buffer = readFileSync(filePath);
+    return trackBgTask(`PDF import: ${basename(filePath)}`, async () => {
+      const buffer = await readFile(filePath);
       const { pages, outline } = await extractPdfContent(buffer);
       const hasContent = pages.some(p => p.text.trim() || p.images.length > 0);
       if (!hasContent) {
-        throw new Error("PDF не содержит извлекаемого контента (ни текста, ни изображений).");
+        throw new Error("PDF contains no extractable content (no text or images).");
       }
       const fileName = basename(filePath, extname(filePath));
       suppressExternalChange(token);
       const { import_, index } = await getProjectServices(token);
       const fileId = await import_.importPdfContent(folderId, fileName, pages, outline);
-      trackBgTask("Индексация поиска", () => index.reindexAll()).catch(err => console.warn("[index] reindex after pdf drop:", err));
+      trackBgTask("Search indexing", (sp) => index.reindexAll(sp)).then(() => suppressExternalChange(token)).catch(err => console.warn("[index] reindex after pdf drop:", err));
       return fileId;
     });
   });

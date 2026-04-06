@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, memo } from "react";
 import { useAppStore } from "../../stores/app.store.js";
+import { useShallow } from "zustand/react/shallow";
 import { TipTapEditor, EditorToolbar } from "./TipTapEditor.js";
 import { ContextMenu } from "../ContextMenu/ContextMenu.js";
 import { GripVertical } from "lucide-react";
@@ -51,7 +52,7 @@ const LazyEditor = memo(function LazyEditor({
   sectionId, content, title, onEditorReady,
 }: {
   sectionId: string; content: string; title: string;
-  onEditorReady: (editor: Editor) => void;
+  onEditorReady: (editor: Editor, sectionId?: string, sectionTitle?: string, fromFocus?: boolean) => void;
 }) {
   const [visible, setVisible] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -76,7 +77,8 @@ const LazyEditor = memo(function LazyEditor({
         initialContent={content}
         title={title}
         showToolbar={false}
-        onEditorReady={onEditorReady}
+        onEditorReady={(editor) => onEditorReady(editor, sectionId, title, false)}
+        onEditorFocus={(editor) => onEditorReady(editor, sectionId, title, true)}
       />
     </div>
   );
@@ -85,12 +87,41 @@ const LazyEditor = memo(function LazyEditor({
 interface Props {
   fileId: string;
   fileTitle: string;
-  onActiveEditorChange?: (editor: Editor | null) => void;
+  onActiveEditorChange?: (editor: Editor | null, sectionId?: string, sectionTitle?: string) => void;
 }
 
 export function FileView({ fileId, fileTitle, onActiveEditorChange }: Props) {
   const t = useT();
-  const { tree, renameSection, deleteSection, loadTree, fileSectionsVersion } = useAppStore();
+  const renameSection = useAppStore((s) => s.renameSection);
+  const deleteSection = useAppStore((s) => s.deleteSection);
+  const loadTree = useAppStore((s) => s.loadTree);
+  const fileSectionsVersion = useAppStore((s) => s.fileSectionsVersion);
+  // Subscribe only to the specific file node's children titles (not the entire tree)
+  // to avoid re-renders when unrelated parts of the tree change.
+  // useShallow ensures shallow comparison of the returned object (no render storm).
+  const fileChildrenTitles = useAppStore(useShallow((s) => {
+    const findNode = (nodes: any[], id: string): any => {
+      for (const n of nodes) {
+        if (n.id === id) return n;
+        if (n.children?.length) {
+          const found = findNode(n.children, id);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+    const fileNode = findNode(s.tree, fileId);
+    if (!fileNode?.children) return null;
+    const titles: Record<string, string> = {};
+    const collect = (nodes: any[]) => {
+      for (const n of nodes) {
+        titles[n.id] = n.title;
+        if (n.children) collect(n.children);
+      }
+    };
+    collect(fileNode.children);
+    return titles;
+  }));
   const [sections, setSections] = useState<FileSection[]>([]);
   const [loading, setLoading] = useState(true);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -100,21 +131,39 @@ export function FileView({ fileId, fileTitle, onActiveEditorChange }: Props) {
     onActiveEditorChange?.(editor);
   }, [onActiveEditorChange]);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; sectionId: string } | null>(null);
+  const [fileContextMenu, setFileContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [dragSectionId, setDragSectionId] = useState<string | null>(null);
   const [dropIndicator, setDropIndicator] = useState<{ index: number } | null>(null);
 
-  const handleEditorReady = useCallback((editor: Editor) => {
+  const onActiveEditorChangeRef = useRef(onActiveEditorChange);
+  onActiveEditorChangeRef.current = onActiveEditorChange;
+
+  // Track whether user has explicitly focused a section (vs auto-mount)
+  const userFocused = useRef(false);
+
+  const handleEditorReady = useCallback((editor: Editor, sectionId?: string, sectionTitle?: string, fromFocus?: boolean) => {
     setActiveEditor(editor);
+    // Only update section ID on explicit user focus, not on mount
+    if (fromFocus) {
+      userFocused.current = true;
+      onActiveEditorChangeRef.current?.(editor, sectionId, sectionTitle);
+    } else if (!userFocused.current) {
+      // On mount, only pass the editor (for toolbar formatting), but not section ID
+      onActiveEditorChangeRef.current?.(editor);
+    }
   }, [setActiveEditor]);
 
   const loadSections = async () => {
     const t0 = performance.now();
     console.log(`[perf] FileView.loadSections START fileId=${fileId.substring(0, 8)}`);
     try {
-      const result = await window.api.getFileWithSections(
-        useAppStore.getState().currentProject!.token,
-        fileId,
-      );
+      const state = useAppStore.getState();
+      const result = state.sectionSource === "user"
+        ? await window.api.user.getFileWithSections(fileId)
+        : await window.api.getFileWithSections(
+            state.activeSectionToken || state.currentProject!.token,
+            fileId,
+          );
       const flat = flattenSections(result.sections, fileId);
       const totalContentLen = flat.reduce((s, f) => s + (f.content?.length ?? 0), 0);
       console.log(`[perf] FileView.loadSections DONE +${(performance.now() - t0).toFixed(0)}ms sections=${flat.length} totalContentLen=${totalContentLen}`);
@@ -142,43 +191,57 @@ export function FileView({ fileId, fileTitle, onActiveEditorChange }: Props) {
 
   // Sync section titles from tree (handles renames from tree context menu)
   useEffect(() => {
-    if (sections.length === 0) return;
-    const findNode = (nodes: any[], id: string): any => {
-      for (const n of nodes) {
-        if (n.id === id) return n;
-        if (n.children?.length) {
-          const found = findNode(n.children, id);
-          if (found) return found;
-        }
-      }
-      return null;
-    };
-    const fileNode = findNode(tree, fileId);
-    if (!fileNode?.children) return;
-    const titles = new Map<string, string>();
-    const collect = (nodes: any[]) => {
-      for (const n of nodes) {
-        titles.set(n.id, n.title);
-        if (n.children) collect(n.children);
-      }
-    };
-    collect(fileNode.children);
+    if (sections.length === 0 || !fileChildrenTitles) return;
     const syncTitles = (sections: FileSection[]): FileSection[] =>
       sections.map(s => ({
         ...s,
-        title: titles.get(s.id) ?? s.title,
+        title: fileChildrenTitles[s.id] ?? s.title,
         children: s.children ? syncTitles(s.children) : undefined,
       }));
     setSections(prev => syncTitles(prev));
-  }, [tree, fileId]);
+  }, [fileChildrenTitles]);
 
 
   const addSectionDirect = async (parentId: string) => {
-    const token = useAppStore.getState().currentProject!.token;
-    await window.api.createSection(token, parentId, "Untitled", "section");
-    await loadSections();
-    await loadTree();
+    const state = useAppStore.getState();
+    if (state.sectionSource === "user") {
+      await window.api.user.create(parentId, "Untitled", "section");
+      await loadSections();
+      await state.loadUserTree();
+    } else {
+      const token = state.activeSectionToken || state.currentProject!.token;
+      await window.api.createSection(token, parentId, "Untitled", "section");
+      await loadSections();
+      await loadTree();
+    }
   };
+
+  const handlePasteMarkdown = useCallback(async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (!text?.trim()) return;
+      const state = useAppStore.getState();
+      if (state.sectionSource === "user") {
+        // Paste markdown not supported for user sections yet — fallback to no-op
+        console.warn("[FileView] paste-md not yet supported for user sections");
+        return;
+      }
+      const token = state.activeSectionToken || state.currentProject!.token;
+      await window.api.importMarkdownClipboard(token, fileId, text);
+      await loadSections();
+      await loadTree();
+    } catch (err) {
+      console.warn("[FileView] paste-md failed:", err);
+    }
+  }, [fileId, loadTree]);
+
+  const handleFileContextMenu = useCallback((e: React.MouseEvent) => {
+    // Only show file-level menu when clicking outside section blocks
+    const target = e.target as HTMLElement;
+    if (target.closest(".file-section-block") || target.closest(".file-section-header")) return;
+    e.preventDefault();
+    setFileContextMenu({ x: e.clientX, y: e.clientY });
+  }, []);
 
   const handleAddSection = () => addSectionDirect(fileId);
   const handleAddSubsection = (parentId: string) => addSectionDirect(parentId);
@@ -223,10 +286,17 @@ export function FileView({ fileId, fileTitle, onActiveEditorChange }: Props) {
       ? siblings[swapIdx].id                                    // place after the next sibling
       : (swapIdx > 0 ? siblings[swapIdx - 1].id : null);       // place before the previous sibling (null = first)
     try {
-      const token = useAppStore.getState().currentProject!.token;
-      await window.api.moveSection(token, id, null, afterId);
-      await loadSections();
-      await loadTree();
+      const state = useAppStore.getState();
+      if (state.sectionSource === "user") {
+        await window.api.user.move(id, null, afterId);
+        await loadSections();
+        await state.loadUserTree();
+      } else {
+        const token = state.activeSectionToken || state.currentProject!.token;
+        await window.api.moveSection(token, id, null, afterId);
+        await loadSections();
+        await loadTree();
+      }
     } catch (err) {
       console.warn("[FileView] Move failed:", err);
     }
@@ -243,10 +313,18 @@ export function FileView({ fileId, fileTitle, onActiveEditorChange }: Props) {
     // Determine new parent: same parent as the section at the target position
     const targetParentId = toIndex < flat.length ? flat[toIndex].parentId : flat[flat.length - 1].parentId;
     try {
-      const token = useAppStore.getState().currentProject!.token;
-      await window.api.moveSection(token, draggedId, targetParentId === fileId ? null : targetParentId, afterId);
-      await loadSections();
-      await loadTree();
+      const state = useAppStore.getState();
+      const newParent = targetParentId === fileId ? null : targetParentId;
+      if (state.sectionSource === "user") {
+        await window.api.user.move(draggedId, newParent, afterId);
+        await loadSections();
+        await state.loadUserTree();
+      } else {
+        const token = state.activeSectionToken || state.currentProject!.token;
+        await window.api.moveSection(token, draggedId, newParent, afterId);
+        await loadSections();
+        await loadTree();
+      }
     } catch (err) {
       console.warn("[FileView] Drag reorder failed:", err);
     }
@@ -257,7 +335,7 @@ export function FileView({ fileId, fileTitle, onActiveEditorChange }: Props) {
   }
 
   return (
-    <div className="file-view" ref={containerRef}>
+    <div className="file-view" ref={containerRef} onContextMenu={handleFileContextMenu}>
       {sections.length === 0 ? (
         <div className="file-view-empty">
           <p>{t("noSectionsYet")}</p>
@@ -362,6 +440,16 @@ export function FileView({ fileId, fileTitle, onActiveEditorChange }: Props) {
             {t("addSectionBtn")}
           </button>
         </>
+      )}
+      {fileContextMenu && (
+        <ContextMenu
+          x={fileContextMenu.x}
+          y={fileContextMenu.y}
+          onClose={() => setFileContextMenu(null)}
+          items={[
+            { label: t("pasteMarkdown"), icon: "📋", onClick: handlePasteMarkdown },
+          ]}
+        />
       )}
       {contextMenu && (() => {
         const siblings = findSiblings(contextMenu.sectionId, sections);

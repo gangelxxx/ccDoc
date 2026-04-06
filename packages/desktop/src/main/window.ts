@@ -1,7 +1,7 @@
 /**
  * Window creation, spell-check setup, context menu.
  */
-import { BrowserWindow, Menu } from "electron";
+import { BrowserWindow } from "electron";
 import { join } from "path";
 
 let mainWindow: BrowserWindow | null = null;
@@ -23,33 +23,8 @@ export function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      spellcheck: true,
+      spellcheck: false,
     },
-  });
-
-  mainWindow.webContents.session.setSpellCheckerLanguages(["ru", "en-US"]);
-
-  // Allow microphone and other safe permissions
-  mainWindow.webContents.session.setPermissionRequestHandler(
-    (_webContents, permission, callback) => {
-      const blocked = ["geolocation", "notifications"];
-      callback(!blocked.includes(permission));
-    }
-  );
-
-  mainWindow.webContents.on("context-menu", (_event, params) => {
-    if (params.misspelledWord) {
-      const menuItems: Electron.MenuItemConstructorOptions[] = params.dictionarySuggestions.map((suggestion) => ({
-        label: suggestion,
-        click: () => mainWindow!.webContents.replaceMisspelling(suggestion),
-      }));
-      if (menuItems.length > 0) menuItems.push({ type: "separator" });
-      menuItems.push({
-        label: "Add to dictionary",
-        click: () => mainWindow!.webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord),
-      });
-      Menu.buildFromTemplate(menuItems).popup();
-    }
   });
 
   // Block navigation to external URLs

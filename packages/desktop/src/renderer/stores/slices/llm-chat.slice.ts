@@ -1,6 +1,6 @@
 import type { LlmAttachment, LlmMessage, SliceCreator } from "../types.js";
 import { sendLlmMessageImpl } from "../llm-engine.js";
-import { buildDocTreeSummary, buildDocUpdatePrompt } from "../llm/doc-update-prompt.js";
+import { buildDocTreeSummary, buildDocUpdatePrompt, buildLinkedDocGenPrompt, buildLinkedDocUpdatePrompt } from "../llm/doc-update-prompt.js";
 
 export interface LlmChatSlice {
   llmCurrentPlan: import("../llm/types.js").LlmPlan | null;
@@ -18,7 +18,7 @@ export interface LlmChatSlice {
   llmPendingOptions: string[] | null;
   /** Resolve callback for the ask_user promise */
   llmResolveUserInput: ((answer: string) => void) | null;
-  llmSessionMode: "chat" | "doc-update";
+  llmTargetProjectToken: string | null;
   setLlmIncludeContext: (v: boolean) => void;
   setLlmIncludeSourceCode: (v: boolean) => void;
   setWaitingForUser: (question: string, options: string[] | null, resolve: (answer: string) => void) => void;
@@ -28,6 +28,8 @@ export interface LlmChatSlice {
   retryLlmMessage: (userMsgIndex?: number) => void;
   clearLlmMessages: () => void;
   startDocUpdateSession: () => void;
+  startLinkedDocGenSession: (linkedProjectId: string, mode?: "generate" | "update") => void;
+  startDocUpdateQueue: (projects: Array<{ type: "main" } | { type: "linked"; linkedProjectId: string; mode: "generate" | "update" }>) => Promise<void>;
 }
 
 export const createLlmChatSlice: SliceCreator<LlmChatSlice> = (set, get) => ({
@@ -42,7 +44,8 @@ export const createLlmChatSlice: SliceCreator<LlmChatSlice> = (set, get) => ({
   llmPendingQuestion: null,
   llmPendingOptions: null,
   llmResolveUserInput: null,
-  llmSessionMode: "chat",
+  llmSessionContext: null,
+  llmTargetProjectToken: null,
   setLlmIncludeContext: (v: boolean) => set({ llmIncludeContext: v }),
   setLlmIncludeSourceCode: (v: boolean) => set({ llmIncludeSourceCode: v }),
 
@@ -67,10 +70,14 @@ export const createLlmChatSlice: SliceCreator<LlmChatSlice> = (set, get) => ({
   },
 
   stopLlmChat: () => {
+    // Guard: no-op if already stopped
+    if (get().llmAborted && !get().llmLoading) return;
     const { llmResolveUserInput, llmMessages } = get();
     if (llmResolveUserInput) {
       llmResolveUserInput("__ABORTED__");
     }
+    // Abort the in-flight HTTP request to Anthropic API in main process
+    window.api.llmAbort().catch(() => {});
     // Filter out tool-status messages immediately so UI is clean
     const STATUS_EMOJIS = ["\u{1F527}", "\u{1F504}", "\u{1F50D}", "\u{1F4DD}", "\u{1F4CB}", "\u{1F4D0}"];
     const filtered = llmMessages.filter((m) =>
@@ -142,7 +149,8 @@ export const createLlmChatSlice: SliceCreator<LlmChatSlice> = (set, get) => ({
       llmPendingQuestion: null,
       llmPendingOptions: null,
       llmResolveUserInput: null,
-      llmSessionMode: "chat",
+      llmSessionContext: null,
+      llmTargetProjectToken: null,
     });
   },
 
@@ -176,12 +184,130 @@ export const createLlmChatSlice: SliceCreator<LlmChatSlice> = (set, get) => ({
       llmPendingQuestion: null,
       llmPendingOptions: null,
       llmResolveUserInput: null,
-      llmSessionMode: "doc-update",
+      llmSessionContext: { mode: "doc-update", projectToken: currentProject.token },
+      llmTargetProjectToken: null,
+      llmIncludeSourceCode: true,
       llmPanelOpen: true,
     });
 
     // Send the doc-update prompt with source code enabled, no section context
-    get().sendLlmMessage(userMessage, false, undefined, true, "🔄 Обновление документации...");
+    get().sendLlmMessage(userMessage, false, undefined, true, "🔄 Updating documentation...");
+  },
+
+  startLinkedDocGenSession: (linkedProjectId: string, mode: "generate" | "update" = "generate") => {
+    const { currentProject, tree, llmLoading, llmResolveUserInput, linkedProjects } = get();
+    if (!currentProject || llmLoading) return;
+
+    // Find the linked project
+    const lp = linkedProjects.find(p => p.id === linkedProjectId);
+    if (!lp) return;
+
+    if (!lp.project_token) {
+      get().addToast("error", "Project has no CCDoc — cannot work with documentation");
+      return;
+    }
+
+    const projectName = lp.alias || lp.source_path.split(/[\\/]/).pop() || "unnamed";
+
+    let userMessage: string;
+    let displayText: string;
+
+    if (mode === "update") {
+      // Find the linked node in the tree and build its doc tree summary
+      const linkedNode = tree.find(n => n.id === `linked:${linkedProjectId}`);
+      const docTree = linkedNode ? buildDocTreeSummary(linkedNode.children) : "(empty)";
+      userMessage = buildLinkedDocUpdatePrompt(projectName, lp.source_path, docTree);
+      displayText = `🔄 Updating documentation: ${projectName}...`;
+    } else {
+      userMessage = buildLinkedDocGenPrompt(projectName, lp.source_path);
+      displayText = `📝 Generating documentation: ${projectName}...`;
+    }
+
+    // Save current session if any
+    const { llmMessages } = get();
+    if (llmMessages.length > 0) {
+      get().saveLlmSession();
+    }
+
+    // Resolve pending ask_user promise to prevent dangling await
+    if (llmResolveUserInput) {
+      llmResolveUserInput("__ABORTED__");
+    }
+
+    // Clear and switch to doc-update mode targeting the linked project
+    set({
+      llmMessages: [],
+      llmTokensUsed: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
+      llmCurrentSessionId: null,
+      sessionBuffer: { entries: {}, totalChars: 0 },
+      llmAborted: false,
+      llmWaitingForUser: false,
+      llmPendingQuestion: null,
+      llmPendingOptions: null,
+      llmResolveUserInput: null,
+      llmSessionContext: { mode: "doc-update", projectToken: lp.project_token || undefined },
+      llmTargetProjectToken: lp.project_token,
+      llmIncludeSourceCode: true,
+      llmPanelOpen: true,
+    });
+
+    // Send with source code enabled
+    get().sendLlmMessage(userMessage, false, undefined, true, displayText);
+  },
+
+  startDocUpdateQueue: async (projects) => {
+    const prepareSession = (targetToken: string | null) => {
+      const { llmMessages, llmResolveUserInput } = get();
+      if (llmMessages.length > 0) get().saveLlmSession();
+      if (llmResolveUserInput) llmResolveUserInput("__ABORTED__");
+      set({
+        llmMessages: [],
+        llmTokensUsed: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
+        llmCurrentSessionId: null,
+        sessionBuffer: { entries: {}, totalChars: 0 },
+        llmAborted: false,
+        llmWaitingForUser: false,
+        llmPendingQuestion: null,
+        llmPendingOptions: null,
+        llmResolveUserInput: null,
+        llmSessionContext: { mode: "doc-update", projectToken: targetToken || undefined },
+        llmTargetProjectToken: targetToken,
+        llmIncludeSourceCode: true,
+        llmPanelOpen: true,
+      });
+    };
+
+    for (const proj of projects) {
+      const { currentProject, tree, linkedProjects } = get();
+      if (!currentProject) break;
+
+      if (proj.type === "main") {
+        prepareSession(null);
+        const docTree = buildDocTreeSummary(tree);
+        const userMessage = buildDocUpdatePrompt(docTree);
+        await get().sendLlmMessage(userMessage, false, undefined, true, "🔄 Updating documentation...");
+      } else {
+        const lp = linkedProjects.find(p => p.id === proj.linkedProjectId);
+        if (!lp?.project_token) continue;
+
+        const projectName = lp.alias || lp.source_path.split(/[\\/]/).pop() || "unnamed";
+        let userMessage: string;
+        let displayText: string;
+
+        if (proj.mode === "update") {
+          const linkedNode = tree.find(n => n.id === `linked:${proj.linkedProjectId}`);
+          const docTree = linkedNode ? buildDocTreeSummary(linkedNode.children) : "(empty)";
+          userMessage = buildLinkedDocUpdatePrompt(projectName, lp.source_path, docTree);
+          displayText = `🔄 Updating documentation: ${projectName}...`;
+        } else {
+          userMessage = buildLinkedDocGenPrompt(projectName, lp.source_path);
+          displayText = `📝 Generating documentation: ${projectName}...`;
+        }
+
+        prepareSession(lp.project_token);
+        await get().sendLlmMessage(userMessage, false, undefined, true, displayText);
+      }
+    }
   },
 
   sendLlmMessage: (text, includeContext, attachments, includeSourceCode, displayText, planMode) => {

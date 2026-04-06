@@ -48,9 +48,15 @@ export function TopbarMenu() {
           {currentSection && (
             <button onClick={async () => {
               setOpen(false);
-              if (!currentProject) return;
               try {
-                await window.api.copySectionAsMarkdown(currentProject.token, currentSection.id);
+                const st = useAppStore.getState();
+                if (st.sectionSource === "user") {
+                  await window.api.user.copySectionAsMarkdown(currentSection.id);
+                } else {
+                  if (!currentProject) return;
+                  const copyToken = st.activeSectionToken || currentProject.token;
+                  await window.api.copySectionAsMarkdown(copyToken, currentSection.id);
+                }
                 addToast("success", t("markdownCopied"));
               } catch {
                 addToast("error", t("copyFailed"));

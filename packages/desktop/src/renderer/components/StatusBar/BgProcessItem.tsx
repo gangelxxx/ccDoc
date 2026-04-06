@@ -21,6 +21,7 @@ interface BgProcessItemProps {
   status: BgProcessStatus;
   label: string;
   startedAt: number;
+  progress?: number; // 0..1
   onCancel?: () => void;
   onClick?: () => void;
 }
@@ -48,7 +49,7 @@ function Elapsed({ since }: { since: number }) {
   return <span className="status-bar-elapsed">{formatElapsed(sec)}</span>;
 }
 
-export function BgProcessItem({ status, label, startedAt, onCancel, onClick }: BgProcessItemProps) {
+export function BgProcessItem({ status, label, startedAt, progress, onCancel, onClick }: BgProcessItemProps) {
   const t = useT();
 
   const isDone = status === "done";
@@ -69,6 +70,9 @@ export function BgProcessItem({ status, label, startedAt, onCancel, onClick }: B
         <Loader2 size={12} className="status-bar-spinner" />
       )}
       <span className="status-bar-label">{label}</span>
+      {!isDone && progress !== undefined && (
+        <span className="status-bar-progress">{Math.round(progress * 100)}%</span>
+      )}
       {!isDone && <Elapsed since={startedAt} />}
       {onCancel && (
         <button

@@ -1,5 +1,21 @@
 import type { Client } from "@libsql/client";
 
+/** Keys that are internal (not user-facing passport fields). Hidden from UI and MCP overview. */
+export const INTERNAL_PASSPORT_KEYS = new Set([
+  "auto_commit_enabled",
+  "fts_index_version",
+  "fts_last_indexed_at",
+  "semantic_last_indexed_at",
+  "code_max_mtime",
+  "indexing_auto_configured",
+]);
+
+/** Default user-facing passport fields in display order */
+export const DEFAULT_PASSPORT_FIELDS = [
+  "name", "description", "stack", "architecture",
+  "conventions", "commands", "structure", "notes",
+] as const;
+
 export class ProjectPassportRepo {
   constructor(private db: Client) {}
 
@@ -33,5 +49,15 @@ export class ProjectPassportRepo {
       sql: "DELETE FROM project_passport WHERE key = ?",
       args: [key],
     });
+  }
+
+  /** Get only user-facing fields (excludes internal system keys) */
+  async getUserFields(): Promise<Record<string, string>> {
+    const all = await this.getAll();
+    const result: Record<string, string> = {};
+    for (const [key, value] of Object.entries(all)) {
+      if (!INTERNAL_PASSPORT_KEYS.has(key)) result[key] = value;
+    }
+    return result;
   }
 }

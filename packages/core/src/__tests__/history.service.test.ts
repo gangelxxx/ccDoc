@@ -89,12 +89,12 @@ describe("HistoryService", () => {
 
   /* ────────────────── init ────────────────── */
   describe("init", () => {
-    it("создаёт директорию и .git", async () => {
+    it("creates the directory and .git", async () => {
       await svc.init();
       expect(existsSync(join(tempDir, ".git"))).toBe(true);
     });
 
-    it("повторный init не ломает репозиторий", async () => {
+    it("repeated init does not break the repository", async () => {
       await svc.init();
       await svc.init();
       expect(existsSync(join(tempDir, ".git"))).toBe(true);
@@ -103,7 +103,7 @@ describe("HistoryService", () => {
 
   /* ────────────────── commit ────────────────── */
   describe("commit", () => {
-    it("создаёт коммит и возвращает oid", async () => {
+    it("creates a commit and returns an oid", async () => {
       const sections = [makeSection({ id: "s1", title: "Page 1" })];
       const oid = await svc.commit(sections, "first commit");
       expect(oid).toBeTruthy();
@@ -111,7 +111,7 @@ describe("HistoryService", () => {
       expect(oid.length).toBeGreaterThan(10);
     });
 
-    it("сохраняет structure.json", async () => {
+    it("saves structure.json", async () => {
       const sections = [
         makeFolder("f1", "Folder"),
         makeSection({ id: "s1", title: "Page 1", parent_id: "f1" }),
@@ -124,7 +124,7 @@ describe("HistoryService", () => {
       expect(structure.find(s => s.id === "s1")?.parent_id).toBe("f1");
     });
 
-    it("пропускает soft-deleted секции", async () => {
+    it("skips soft-deleted sections", async () => {
       const sections = [
         makeSection({ id: "s1", title: "Live" }),
         makeSection({ id: "s2", title: "Deleted", deleted_at: new Date().toISOString() }),
@@ -136,12 +136,12 @@ describe("HistoryService", () => {
       expect(structure[0].id).toBe("s1");
     });
 
-    it("возвращает пустую строку для пустого списка секций", async () => {
+    it("returns an empty string for an empty section list", async () => {
       const oid = await svc.commit([], "empty");
       expect(oid).toBe("");
     });
 
-    it("возвращает пустую строку если все секции удалены", async () => {
+    it("returns an empty string if all sections are deleted", async () => {
       const sections = [
         makeSection({ id: "s1", title: "Del", deleted_at: new Date().toISOString() }),
       ];
@@ -149,7 +149,7 @@ describe("HistoryService", () => {
       expect(oid).toBe("");
     });
 
-    it("коммитит разные типы секций", async () => {
+    it("commits different section types", async () => {
       const sections = [
         makeFolder("f1", "Root"),
         makeSection({ id: "s1", title: "Doc" }),
@@ -165,7 +165,7 @@ describe("HistoryService", () => {
       expect(types).toEqual(["drawing", "file", "folder", "idea", "kanban"]);
     });
 
-    it("сохраняет иконку секции", async () => {
+    it("saves the section icon", async () => {
       const sections = [makeSection({ id: "s1", title: "Iconic", icon: "🚀" })];
       const oid = await svc.commit(sections, "icon test");
       const structure = await svc.getStructureAtVersion(oid);
@@ -173,7 +173,7 @@ describe("HistoryService", () => {
       expect(structure[0].icon).toBe("🚀");
     });
 
-    it("последовательные коммиты создают разные oid", async () => {
+    it("sequential commits create different oids", async () => {
       const oid1 = await svc.commit([makeSection({ id: "s1", title: "V1" })], "v1");
       const oid2 = await svc.commit([makeSection({ id: "s1", title: "V2" })], "v2");
       expect(oid1).not.toBe(oid2);
@@ -182,12 +182,12 @@ describe("HistoryService", () => {
 
   /* ────────────────── log ────────────────── */
   describe("log", () => {
-    it("пустой лог для нового репозитория", async () => {
+    it("empty log for a new repository", async () => {
       const log = await svc.log();
       expect(log).toEqual([]);
     });
 
-    it("возвращает коммиты в порядке от нового к старому", async () => {
+    it("returns commits in newest-to-oldest order", async () => {
       await svc.commit([makeSection({ id: "s1", title: "V1" })], "first");
       await svc.commit([makeSection({ id: "s1", title: "V2" })], "second");
       await svc.commit([makeSection({ id: "s1", title: "V3" })], "third");
@@ -199,7 +199,7 @@ describe("HistoryService", () => {
       expect(log[2].message.trim()).toBe("first");
     });
 
-    it("коммит содержит author и timestamp", async () => {
+    it("commit contains author and timestamp", async () => {
       await svc.commit([makeSection({ id: "s1", title: "T" })], "msg", "TestUser");
       const log = await svc.log();
 
@@ -210,7 +210,7 @@ describe("HistoryService", () => {
 
   /* ────────────────── deleteCommit ────────────────── */
   describe("deleteCommit", () => {
-    it("скрывает коммит из лога", async () => {
+    it("hides a commit from the log", async () => {
       const oid = await svc.commit([makeSection({ id: "s1", title: "T" })], "to hide");
       await svc.deleteCommit(oid);
 
@@ -218,7 +218,7 @@ describe("HistoryService", () => {
       expect(log.find(c => c.oid === oid)).toBeUndefined();
     });
 
-    it("не влияет на другие коммиты", async () => {
+    it("does not affect other commits", async () => {
       const oid1 = await svc.commit([makeSection({ id: "s1", title: "Keep" })], "keep");
       const oid2 = await svc.commit([makeSection({ id: "s1", title: "Hide" })], "hide");
 
@@ -229,7 +229,7 @@ describe("HistoryService", () => {
       expect(log[0].oid).toBe(oid1);
     });
 
-    it("можно скрыть несколько коммитов", async () => {
+    it("can hide multiple commits", async () => {
       const oid1 = await svc.commit([makeSection({ id: "s1", title: "A" })], "a");
       const oid2 = await svc.commit([makeSection({ id: "s1", title: "B" })], "b");
       const oid3 = await svc.commit([makeSection({ id: "s1", title: "C" })], "c");
@@ -245,7 +245,7 @@ describe("HistoryService", () => {
 
   /* ────────────────── getStructureAtVersion ────────────────── */
   describe("getStructureAtVersion", () => {
-    it("возвращает метаданные секций", async () => {
+    it("returns section metadata", async () => {
       const sections = [
         makeFolder("f1", "Folder 1"),
         makeSection({ id: "s1", title: "Page", parent_id: "f1", sort_key: "a1" }),
@@ -261,7 +261,7 @@ describe("HistoryService", () => {
       expect(page.sort_key).toBe("a1");
     });
 
-    it("возвращает [] для несуществующего коммита", async () => {
+    it("returns [] for a nonexistent commit", async () => {
       await svc.init();
       const structure = await svc.getStructureAtVersion("deadbeef");
       expect(structure).toEqual([]);
@@ -270,7 +270,7 @@ describe("HistoryService", () => {
 
   /* ────────────────── getSectionAtVersion ────────────────── */
   describe("getSectionAtVersion", () => {
-    it("возвращает содержимое файловой секции в markdown", async () => {
+    it("returns file section content as markdown", async () => {
       const sections = [makeSection({ id: "s1", title: "Page" })];
       const oid = await svc.commit(sections, "test");
 
@@ -280,7 +280,7 @@ describe("HistoryService", () => {
       expect(result!.content).toContain("Hello world");
     });
 
-    it("возвращает null для папки", async () => {
+    it("returns null for a folder", async () => {
       const sections = [makeFolder("f1", "Folder")];
       const oid = await svc.commit(sections, "test");
 
@@ -288,7 +288,7 @@ describe("HistoryService", () => {
       expect(result).toBeNull();
     });
 
-    it("возвращает null для несуществующей секции", async () => {
+    it("returns null for a nonexistent section", async () => {
       const sections = [makeSection({ id: "s1", title: "Page" })];
       const oid = await svc.commit(sections, "test");
 
@@ -296,7 +296,7 @@ describe("HistoryService", () => {
       expect(result).toBeNull();
     });
 
-    it("возвращает содержимое drawing", async () => {
+    it("returns drawing content", async () => {
       const dsl = "## Shapes\n- rect \"Hello\"";
       const sections = [makeDrawing("d1", "Diagram", dsl)];
       const oid = await svc.commit(sections, "test");
@@ -306,7 +306,7 @@ describe("HistoryService", () => {
       expect(result!.content).toBe(dsl);
     });
 
-    it("возвращает содержимое kanban в markdown", async () => {
+    it("returns kanban content as markdown", async () => {
       const sections = [makeKanban("k1", "Board")];
       const oid = await svc.commit(sections, "test");
 
@@ -316,7 +316,7 @@ describe("HistoryService", () => {
       expect(result!.content).toContain("Task 1");
     });
 
-    it("возвращает содержимое idea как raw JSON", async () => {
+    it("returns idea content as raw JSON", async () => {
       const sections = [makeIdea("i1", "My Idea", "Great idea")];
       const oid = await svc.commit(sections, "test");
 
@@ -330,7 +330,7 @@ describe("HistoryService", () => {
 
   /* ────────────────── getAllContentsAtVersion ────────────────── */
   describe("getAllContentsAtVersion", () => {
-    it("возвращает содержимое всех секций (кроме папок)", async () => {
+    it("returns contents of all sections (except folders)", async () => {
       const sections = [
         makeFolder("f1", "Root"),
         makeSection({ id: "s1", title: "Page 1" }),
@@ -345,7 +345,7 @@ describe("HistoryService", () => {
       expect(contents["f1"]).toBeUndefined();
     });
 
-    it("пустой объект для невалидного коммита", async () => {
+    it("empty object for an invalid commit", async () => {
       await svc.init();
       const contents = await svc.getAllContentsAtVersion("deadbeef");
       expect(contents).toEqual({});
@@ -354,7 +354,7 @@ describe("HistoryService", () => {
 
   /* ────────────────── getDiff ────────────────── */
   describe("getDiff", () => {
-    it("первый коммит — всё новое", async () => {
+    it("first commit — everything is new", async () => {
       const sections = [
         makeSection({ id: "s1", title: "Page 1" }),
         makeSection({ id: "s2", title: "Page 2" }),
@@ -365,7 +365,7 @@ describe("HistoryService", () => {
       expect(diff).toContain("Page 2");
     });
 
-    it("обнаруживает добавленные секции", async () => {
+    it("detects added sections", async () => {
       const v1 = [makeSection({ id: "s1", title: "Page 1" })];
       await svc.commit(v1, "v1");
 
@@ -378,7 +378,7 @@ describe("HistoryService", () => {
       expect(diff).toContain("New Page");
     });
 
-    it("обнаруживает удалённые секции", async () => {
+    it("detects removed sections", async () => {
       const v1 = [
         makeSection({ id: "s1", title: "Page 1" }),
         makeSection({ id: "s2", title: "Page 2" }),
@@ -391,7 +391,7 @@ describe("HistoryService", () => {
       expect(diff).toContain("Page 2");
     });
 
-    it("обнаруживает изменённое содержимое", async () => {
+    it("detects changed content", async () => {
       const v1 = [makeSection({ id: "s1", title: "Page 1" })];
       await svc.commit(v1, "v1");
 
@@ -401,7 +401,7 @@ describe("HistoryService", () => {
       expect(diff).toContain("Page 1");
     });
 
-    it("обнаруживает переименование", async () => {
+    it("detects renaming", async () => {
       const v1 = [makeSection({ id: "s1", title: "Old Title" })];
       await svc.commit(v1, "v1");
 
@@ -412,7 +412,7 @@ describe("HistoryService", () => {
       expect(diff).toContain("New Title");
     });
 
-    it("'No changes detected' когда ничего не менялось", async () => {
+    it("'No changes detected' when nothing has changed", async () => {
       const v1 = [makeSection({ id: "s1", title: "Page 1" })];
       await svc.commit(v1, "v1");
 
@@ -423,7 +423,7 @@ describe("HistoryService", () => {
 
   /* ────────────────── getDiffIds ────────────────── */
   describe("getDiffIds", () => {
-    it("возвращает added/removed/changed IDs", async () => {
+    it("returns added/removed/changed IDs", async () => {
       const v1 = [
         makeSection({ id: "s1", title: "Stays" }),
         makeSection({ id: "s2", title: "Will be removed" }),
@@ -445,7 +445,7 @@ describe("HistoryService", () => {
       expect(diff.changed).not.toContain("s1");
     });
 
-    it("пустой diff если ничего не менялось", async () => {
+    it("empty diff if nothing has changed", async () => {
       const v1 = [makeSection({ id: "s1", title: "Page" })];
       const oid = await svc.commit(v1, "v1");
 
@@ -455,7 +455,7 @@ describe("HistoryService", () => {
       expect(diff.changed).toHaveLength(0);
     });
 
-    it("переименование попадает в changed", async () => {
+    it("renaming is detected as changed", async () => {
       const v1 = [makeSection({ id: "s1", title: "Old" })];
       const oid = await svc.commit(v1, "v1");
 
@@ -464,7 +464,7 @@ describe("HistoryService", () => {
       expect(diff.changed).toContain("s1");
     });
 
-    it("пропускает soft-deleted в текущих секциях", async () => {
+    it("skips soft-deleted in current sections", async () => {
       const v1 = [makeSection({ id: "s1", title: "Page" })];
       const oid = await svc.commit(v1, "v1");
 
@@ -473,7 +473,7 @@ describe("HistoryService", () => {
       expect(diff.removed).toContain("s1");
     });
 
-    it("возвращает пустой результат для невалидного коммита", async () => {
+    it("returns empty result for an invalid commit", async () => {
       await svc.init();
       const diff = await svc.getDiffIds("deadbeef", [makeSection({ id: "s1", title: "X" })]);
       expect(diff).toEqual({ added: [], removed: [], changed: [] });
@@ -482,7 +482,7 @@ describe("HistoryService", () => {
 
   /* ────────────────── restore ────────────────── */
   describe("restore", () => {
-    it("восстанавливает секции в БД", async () => {
+    it("restores sections into the DB", async () => {
       const sections = [
         makeFolder("f1", "Root"),
         makeSection({ id: "s1", title: "Page 1", parent_id: "f1" }),
@@ -504,20 +504,20 @@ describe("HistoryService", () => {
       );
       expect(inserts).toHaveLength(2);
 
-      // Проверяем данные первого INSERT (folder)
+      // Verify data of the first INSERT (folder)
       const folderInsert = inserts.find((c: any) => c[0].args[0] === "f1");
       expect(folderInsert).toBeDefined();
       expect(folderInsert![0].args[2]).toBe("Root"); // title
       expect(folderInsert![0].args[4]).toBe("folder"); // type
 
-      // Проверяем что пытался очистить FTS
+      // Verify that it tried to clear FTS
       const ftsDelete = calls.find((c: any) =>
         typeof c[0] === "string" && c[0].includes("sections_text")
       );
       expect(ftsDelete).toBeDefined();
     });
 
-    it("восстанавливает drawing как raw DSL", async () => {
+    it("restores drawing as raw DSL", async () => {
       const dsl = "## Shapes\n- rect \"Test\"";
       const sections = [makeDrawing("d1", "Diagram", dsl)];
       const oid = await svc.commit(sections, "drawing snapshot");
@@ -532,7 +532,7 @@ describe("HistoryService", () => {
       expect(inserts[0][0].args[3]).toBe(dsl); // content = raw DSL
     });
 
-    it("восстанавливает kanban как JSON", async () => {
+    it("restores kanban as JSON", async () => {
       const sections = [makeKanban("k1", "Board")];
       const oid = await svc.commit(sections, "kanban snapshot");
 
@@ -548,8 +548,8 @@ describe("HistoryService", () => {
       expect(parsed.columns[0].title).toBe("Todo");
     });
 
-    it("восстанавливает idea с сохранением всех сообщений", async () => {
-      // Idea с двумя сообщениями
+    it("restores idea preserving all messages", async () => {
+      // Idea with two messages
       const ideaContent = JSON.stringify({
         messages: [
           { id: "m1", text: "First idea", createdAt: 1000 },
@@ -573,7 +573,7 @@ describe("HistoryService", () => {
       expect(parsed.messages[1].text).toBe("Second idea");
     });
 
-    it("восстанавливает file как ProseMirror JSON", async () => {
+    it("restores file as ProseMirror JSON", async () => {
       const sections = [makeSection({ id: "s1", title: "Page" })];
       const oid = await svc.commit(sections, "pm snapshot");
 
@@ -588,10 +588,10 @@ describe("HistoryService", () => {
       expect(parsed.type).toBe("doc");
     });
 
-    it("восстанавливает секции с FK-зависимостями (дети перед родителями)", async () => {
-      // Порядок в structure.json может быть произвольным —
-      // дети могут идти перед родителями, что вызывает FK constraint.
-      // restore() должен отключать FK на время вставки.
+    it("restores sections with FK dependencies (children before parents)", async () => {
+      // Order in structure.json can be arbitrary —
+      // children may come before parents, which causes FK constraint.
+      // restore() should disable FK during insertion.
       const sections = [
         makeFolder("f1", "Root"),
         makeSection({ id: "s1", title: "File", parent_id: "f1" }),
@@ -602,7 +602,7 @@ describe("HistoryService", () => {
       const db = makeMockDb();
       await svc.restore(oid, makeMockSectionsService(db));
 
-      // Проверяем PRAGMA foreign_keys = OFF перед INSERT
+      // Verify PRAGMA foreign_keys = OFF before INSERT
       const pragmaOff = db.execute.mock.calls.findIndex((c: any) =>
         typeof c[0] === "string" && c[0].includes("foreign_keys = OFF")
       );
@@ -618,7 +618,7 @@ describe("HistoryService", () => {
       expect(pragmaOff).toBeLessThan(firstInsert);
     });
 
-    it("сохраняет icon и sort_key при восстановлении", async () => {
+    it("preserves icon and sort_key during restoration", async () => {
       const sections = [makeSection({ id: "s1", title: "P", icon: "📝", sort_key: "b5" })];
       const oid = await svc.commit(sections, "test");
 
@@ -636,7 +636,7 @@ describe("HistoryService", () => {
 
   /* ────────────────── searchAtVersion ────────────────── */
   describe("searchAtVersion", () => {
-    it("находит секции по содержимому", async () => {
+    it("finds sections by content", async () => {
       const sections = [
         makeSection({ id: "s1", title: "Page 1" }), // contains "Hello world"
         makeSection({
@@ -651,7 +651,7 @@ describe("HistoryService", () => {
       expect(results).not.toContain("s1");
     });
 
-    it("пустой массив если ничего не найдено", async () => {
+    it("returns an empty array if nothing is found", async () => {
       const sections = [makeSection({ id: "s1", title: "Page" })];
       const oid = await svc.commit(sections, "test");
 
@@ -659,7 +659,7 @@ describe("HistoryService", () => {
       expect(results).toEqual([]);
     });
 
-    it("регистронезависимый поиск", async () => {
+    it("case-insensitive search", async () => {
       const sections = [makeSection({ id: "s1", title: "Page" })]; // "Hello world"
       const oid = await svc.commit(sections, "test");
 
@@ -668,10 +668,10 @@ describe("HistoryService", () => {
     });
   });
 
-  /* ────────────────── сценарий: полный цикл ────────────────── */
-  describe("полный цикл: commit → log → view → modify → diff → restore", () => {
-    it("работает end-to-end", async () => {
-      // 1. Создаём начальную версию
+  /* ────────────────── scenario: full cycle ────────────────── */
+  describe("full cycle: commit → log → view → modify → diff → restore", () => {
+    it("works end-to-end", async () => {
+      // 1. Create the initial version
       const v1Sections = [
         makeFolder("f1", "Docs"),
         makeSection({ id: "s1", title: "Guide", parent_id: "f1" }),
@@ -679,12 +679,12 @@ describe("HistoryService", () => {
       ];
       const oid1 = await svc.commit(v1Sections, "Initial version");
 
-      // 2. Проверяем лог
+      // 2. Check the log
       let log = await svc.log();
       expect(log).toHaveLength(1);
       expect(log[0].message.trim()).toBe("Initial version");
 
-      // 3. Создаём вторую версию (изменяем + добавляем + удаляем)
+      // 3. Create a second version (change + add + remove)
       const v2Sections = [
         makeFolder("f1", "Docs"),
         makeSection({ id: "s1", title: "Guide (Updated)", parent_id: "f1", content: PM_UPDATED }),
@@ -692,32 +692,32 @@ describe("HistoryService", () => {
       ];
       const oid2 = await svc.commit(v2Sections, "Updated docs");
 
-      // 4. Проверяем diff
+      // 4. Check the diff
       const diffIds = await svc.getDiffIds(oid1, v2Sections);
       expect(diffIds.added).toContain("s3");
       expect(diffIds.removed).toContain("s2");
       expect(diffIds.changed).toContain("s1");
 
-      // 5. Проверяем что можно прочитать содержимое старой версии
+      // 5. Verify that old version content can be read
       const oldContent = await svc.getSectionAtVersion("s2", oid1);
       expect(oldContent).not.toBeNull();
       expect(oldContent!.title).toBe("FAQ");
 
-      // 6. Проверяем getAllContents
+      // 6. Check getAllContents
       const allV1 = await svc.getAllContentsAtVersion(oid1);
       expect(Object.keys(allV1)).toHaveLength(2); // s1 + s2 (folder excluded)
 
-      // 7. Восстанавливаем на v1
+      // 7. Restore to v1
       const db = makeMockDb();
       await svc.restore(oid1, makeMockSectionsService(db));
 
       const inserts = db.execute.mock.calls.filter((c: any) =>
         typeof c[0] === "object" && c[0].sql?.includes("INSERT")
       );
-      // folder + s1 + s2 = 3 секции
+      // folder + s1 + s2 = 3 sections
       expect(inserts).toHaveLength(3);
 
-      // 8. Лог содержит обе версии
+      // 8. Log contains both versions
       log = await svc.log();
       expect(log).toHaveLength(2);
     });
@@ -725,7 +725,7 @@ describe("HistoryService", () => {
 
   /* ────────────────── edge cases ────────────────── */
   describe("edge cases", () => {
-    it("коммит с drawing_blocks в ProseMirror", async () => {
+    it("commit with drawing_blocks in ProseMirror", async () => {
       const content = JSON.stringify({
         type: "doc",
         content: [
@@ -743,15 +743,15 @@ describe("HistoryService", () => {
       expect(structure[0].drawing_blocks[0].position).toBe(1);
     });
 
-    it("коммит после очистки docs/ от предыдущих файлов", async () => {
-      // Первый коммит с 3 файлами
+    it("commit after cleaning docs/ from previous files", async () => {
+      // First commit with 3 files
       await svc.commit([
         makeSection({ id: "s1", title: "A" }),
         makeSection({ id: "s2", title: "B" }),
         makeSection({ id: "s3", title: "C" }),
       ], "v1");
 
-      // Второй коммит с 1 файлом — старые файлы не должны остаться
+      // Second commit with 1 file — old files should not remain
       const oid2 = await svc.commit([makeSection({ id: "s4", title: "D" })], "v2");
       const structure = await svc.getStructureAtVersion(oid2);
 
@@ -759,17 +759,17 @@ describe("HistoryService", () => {
       expect(structure[0].id).toBe("s4");
     });
 
-    it("спецсимволы в заголовках секций", async () => {
+    it("special characters in section titles", async () => {
       const sections = [
-        makeSection({ id: "s1", title: "Файл с пробелами & символами!" }),
+        makeSection({ id: "s1", title: "File with spaces & symbols!" }),
       ];
       const oid = await svc.commit(sections, "special chars");
       const structure = await svc.getStructureAtVersion(oid);
 
-      expect(structure[0].title).toBe("Файл с пробелами & символами!");
+      expect(structure[0].title).toBe("File with spaces & symbols!");
     });
 
-    it("getDiff с drawing/kanban/idea типами", async () => {
+    it("getDiff with drawing/kanban/idea types", async () => {
       const v1 = [
         makeDrawing("d1", "Diag", "old dsl"),
         makeKanban("k1", "Board"),

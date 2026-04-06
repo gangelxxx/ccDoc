@@ -1,4 +1,5 @@
-import { useMemo } from "react";
+import { useMemo, useEffect } from "react";
+import { useAppStore } from "../../stores/app.store.js";
 import { findTreeNode } from "./editor-utils.js";
 
 // --- Folder Summary ---
@@ -10,6 +11,14 @@ export function FolderSummary({ folderId, tree, projectName, onNavigate }: {
 }) {
   const folderNode = findTreeNode(tree, folderId);
   const children = folderNode?.children || [];
+  const loadChildren = useAppStore(s => s.loadChildren);
+
+  // Trigger lazy-load when folder has children but they haven't been fetched yet
+  useEffect(() => {
+    if (folderNode && folderNode.hasChildren && folderNode.childrenLoaded === false) {
+      loadChildren(folderId);
+    }
+  }, [folderId, folderNode?.childrenLoaded]);
 
   const stats = useMemo(() => {
     const counts: Record<string, number> = {};

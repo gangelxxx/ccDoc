@@ -25,7 +25,7 @@ export const createIndexingSlice: SliceCreator<IndexingSlice> = (set, get) => ({
     const next = { ...get().indexingConfig, ...cfg };
     set({ indexingConfig: next });
     // Sequential: wait for settings to persist, then apply to worker/scheduler
-    window.api.settingsPatch({ indexing: next }).then(() => {
+    window.api.settingsPatch({ indexing: next }, "settings:indexing").then(() => {
       window.api.applyIndexingConfig().catch(() => {});
     }).catch(() => {});
   },

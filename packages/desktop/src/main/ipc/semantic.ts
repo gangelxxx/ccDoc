@@ -8,11 +8,66 @@
 import { join } from "path";
 import { ipcMain } from "electron";
 import { Worker } from "worker_threads";
-import { getProjectServices, getProjectsService, getProjectDbsMap, getSettingsService, trackBgTask } from "../services";
+import { WorkspaceService } from "@ccdoc/core";
+import { getAppDb, getProjectServices, getProjectsService, getProjectDbsMap, getSettingsService, trackBgTask } from "../services";
 import { getMainWindow } from "../window";
-import type { WorkerCommand, WorkerRequestBody, WorkerResponse, EmbeddingConfig, DocSectionInput } from "../semantic-worker";
+import { collectDocSectionsInWorker, collectDocSectionsByIdsInWorker } from "../doc-collector";
+import type { WorkerCommand, WorkerRequestBody, WorkerResponse, EmbeddingConfig, DocSectionInput, LinkedProjectSource, LinkedSnapshotSource, LinkedUpdateSource } from "../semantic-worker";
 import type { IndexingConfigData } from "../services/settings.types";
 import { SETTINGS_DEFAULTS } from "../services/settings.types";
+import { scanCodeMaxMtime, restartAllPeriodicIndexing } from "../index-scheduler";
+
+// ── Linked projects resolution ───────────────────────────────────
+
+interface LinkedProjectInfo {
+  token: string;
+  sourcePath: string;
+  name: string;
+}
+
+/**
+ * Get linked projects with loaded docs for a given main project token.
+ * Returns empty array for standalone projects (no workspace).
+ */
+export async function resolveLinkedProjects(mainToken: string): Promise<LinkedProjectInfo[]> {
+  try {
+    const ws = new WorkspaceService(getAppDb());
+    const workspace = await ws.getWorkspace(mainToken);
+    if (!workspace) return [];
+
+    const linked = await ws.listLinkedProjects(workspace.id);
+    return linked
+      .filter(lp => lp.doc_status === "loaded" && lp.project_token)
+      .map(lp => ({
+        token: lp.project_token!,
+        sourcePath: lp.source_path,
+        name: lp.alias || lp.source_path.split(/[\\/]/).pop() || "unnamed",
+      }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Collect linked project sources for full indexing (code + docs).
+ */
+async function collectLinkedSources(mainToken: string): Promise<LinkedProjectSource[]> {
+  const linked = await resolveLinkedProjects(mainToken);
+  const sources: LinkedProjectSource[] = [];
+  for (const lp of linked) {
+    try {
+      const lpDocSections = await collectDocSectionsInWorker(lp.token);
+      sources.push({
+        prefix: lp.name,
+        projectPath: lp.sourcePath,
+        docSections: lpDocSections,
+      });
+    } catch (err) {
+      console.warn(`[SemanticIPC] Failed to collect linked project ${lp.name}:`, err);
+    }
+  }
+  return sources;
+}
 
 // ── Worker lifecycle ──────────────────────────────────────────────
 
@@ -183,31 +238,7 @@ function getIndexingConfig(): IndexingConfigData {
   return SETTINGS_DEFAULTS.indexing;
 }
 
-// ── Helper: collect doc sections for indexing ─────────────────────
-
-async function collectDocSections(token: string): Promise<DocSectionInput[]> {
-  const services = await getProjectServices(token);
-  const allSections = await services.sections.listAll();
-  const docSections: DocSectionInput[] = [];
-
-  for (const sec of allSections) {
-    if (sec.type === "folder" || sec.deleted_at) continue;
-    try {
-      const content = await services.sections.getContent(sec.id, "plain");
-      if (content && typeof content === "string" && content.length > 0) {
-        docSections.push({
-          id: sec.id,
-          title: sec.title,
-          path: sec.title,
-          content,
-          type: sec.type,
-        });
-      }
-    } catch { /* skip */ }
-  }
-
-  return docSections;
-}
+// ── Helper: collect doc sections for indexing (runs in worker thread) ──
 
 // ── Public API (used by index-scheduler and services.ts) ──────────
 
@@ -227,7 +258,10 @@ export function triggerIndexing(token: string): void {
 
       const project = await getProjectsService().getByToken(token);
       const projectPath = project?.path ?? null;
-      const docSections = await collectDocSections(token);
+      const docSections = await collectDocSectionsInWorker(token);
+
+      // Collect linked project sources (code + docs)
+      const linkedSources = await collectLinkedSources(token);
 
       // Try loading from persistent cache first (instant restore, no re-embedding)
       let cachePayload: WorkerCommand | null = null;
@@ -266,8 +300,11 @@ export function triggerIndexing(token: string): void {
           if ((msg.type === "index:done" || msg.type === "index:error") && msg.token === token) {
             cleanup();
             if (msg.type === "index:done") {
-              indexedTokens.add(token);
-              saveIndexTimestamps(token, projectPath).catch(() => {});
+              // Guard: don't mark as indexed if clearSemanticCaches was called during indexing
+              if (indexingInProgress.get(token) === promise) {
+                indexedTokens.add(token);
+                saveIndexTimestamps(token, projectPath).catch(() => {});
+              }
             }
             resolve();
           }
@@ -283,7 +320,7 @@ export function triggerIndexing(token: string): void {
         if (cachePayload) {
           sendToWorker(cachePayload);
         } else {
-          sendToWorker({ type: "index", token, projectPath, docSections });
+          sendToWorker({ type: "index", token, projectPath, docSections, linkedSources: linkedSources.length > 0 ? linkedSources : undefined });
         }
       });
     } catch (err) {
@@ -303,7 +340,6 @@ async function saveIndexTimestamps(token: string, projectPath: string | null): P
   const services = await getProjectServices(token);
   await services.passport.set("semantic_last_indexed_at", new Date().toISOString());
   if (projectPath) {
-    const { scanCodeMaxMtime } = await import("../index-scheduler");
     const cfg = getIndexingConfig();
     const mtime = await scanCodeMaxMtime(projectPath, new Set(cfg.excludedDirs), new Set(cfg.codeExtensions));
     await services.passport.set("code_max_mtime", String(mtime));
@@ -332,24 +368,17 @@ export async function triggerIncrementalUpdate(token: string): Promise<void> {
     const lastIndexedMs = lastIndexedStr ? new Date(lastIndexedStr).getTime() : 0;
     const codeSinceMs = Number(await services.passport.get("code_max_mtime") || "0");
 
-    // Find changed doc sections (updated_at > lastIndexedMs)
+    // Lightweight metadata queries on main thread (no content conversion)
     const allSections = await services.sections.listAll();
     const activeSectionIds = new Set<string>();
-    const changedDocSections: DocSectionInput[] = [];
-    const changedDocIds: string[] = [];
+    const idsToConvert: string[] = [];
 
     for (const sec of allSections) {
       activeSectionIds.add(sec.id);
       if (sec.type === "folder" || sec.deleted_at) continue;
       const updatedMs = new Date(sec.updated_at).getTime();
       if (updatedMs > lastIndexedMs) {
-        try {
-          const content = await services.sections.getContent(sec.id, "plain");
-          if (content && typeof content === "string" && content.length > 0) {
-            changedDocSections.push({ id: sec.id, title: sec.title, path: sec.title, content, type: sec.type });
-            changedDocIds.push(sec.id);
-          }
-        } catch { /* skip */ }
+        idsToConvert.push(sec.id);
       }
     }
 
@@ -357,33 +386,91 @@ export async function triggerIncrementalUpdate(token: string): Promise<void> {
     const indexed = await request<{ sectionIds: string[]; filePaths: string[] }>(
       { type: "get-indexed-ids", token },
     );
-    const deletedSectionIds = indexed.sectionIds.filter(id => !activeSectionIds.has(id));
+    // Only consider main project sections for deletion (linked project IDs have "::" prefix)
+    const deletedSectionIds = indexed.sectionIds.filter(id =>
+      !id.includes("::") && !activeSectionIds.has(id)
+    );
 
     // Detect restored sections (in DB but not in index, and not already in changed list)
-    const indexedSectionSet = new Set(indexed.sectionIds);
-    const changedIdSet = new Set(changedDocIds);
+    // Only check main project sections (without "::" prefix)
+    const indexedMainSectionSet = new Set(indexed.sectionIds.filter(id => !id.includes("::")));
+    const idsToConvertSet = new Set(idsToConvert);
     for (const sec of allSections) {
       if (sec.type === "folder" || sec.deleted_at) continue;
-      if (!indexedSectionSet.has(sec.id) && !changedIdSet.has(sec.id)) {
-        try {
-          const content = await services.sections.getContent(sec.id, "plain");
-          if (content && typeof content === "string" && content.length > 0) {
-            changedDocSections.push({ id: sec.id, title: sec.title, path: sec.title, content, type: sec.type });
-            changedDocIds.push(sec.id);
-          }
-        } catch { /* skip */ }
+      if (!indexedMainSectionSet.has(sec.id) && !idsToConvertSet.has(sec.id)) {
+        idsToConvert.push(sec.id);
       }
     }
 
-    // Skip only if truly nothing to do (no doc changes AND no project path for code scan)
-    if (changedDocSections.length === 0 && deletedSectionIds.length === 0 && !projectPath) {
+    // Collect incremental changes from linked projects
+    const linked = await resolveLinkedProjects(token);
+    const linkedUpdates: LinkedUpdateSource[] = [];
+    for (const lp of linked) {
+      try {
+        const lpServices = await getProjectServices(lp.token);
+        const lpSections = await lpServices.sections.listAll();
+        const lpActiveSectionIds = new Set<string>();
+        const lpIdsToConvert: string[] = [];
+
+        for (const sec of lpSections) {
+          lpActiveSectionIds.add(sec.id);
+          if (sec.type === "folder" || sec.deleted_at) continue;
+          const updatedMs = new Date(sec.updated_at).getTime();
+          if (updatedMs > lastIndexedMs) {
+            lpIdsToConvert.push(sec.id);
+          }
+        }
+
+        // Detect deleted linked sections (prefixed IDs in index but not in linked DB)
+        const lpDeletedSectionIds = indexed.sectionIds
+          .filter(id => id.startsWith(`${lp.name}::`) && !lpActiveSectionIds.has(id.slice(lp.name.length + 2)));
+
+        // Detect new sections not yet in index
+        const lpIndexedPrefixed = new Set(indexed.sectionIds.filter(id => id.startsWith(`${lp.name}::`)));
+        for (const sec of lpSections) {
+          if (sec.type === "folder" || sec.deleted_at) continue;
+          if (!lpIndexedPrefixed.has(`${lp.name}::${sec.id}`) && !lpIdsToConvert.includes(sec.id)) {
+            lpIdsToConvert.push(sec.id);
+          }
+        }
+
+        const lpCodeSinceMs = Number(await lpServices.passport.get("code_max_mtime") || "0");
+        const lpChangedDocSections = lpIdsToConvert.length > 0
+          ? await collectDocSectionsByIdsInWorker(lp.token, lpIdsToConvert)
+          : [];
+
+        if (lpIdsToConvert.length > 0 || lpDeletedSectionIds.length > 0 || lp.sourcePath) {
+          linkedUpdates.push({
+            prefix: lp.name,
+            projectPath: lp.sourcePath,
+            codeSinceMs: lpCodeSinceMs,
+            changedDocSections: lpChangedDocSections,
+            changedDocIds: lpChangedDocSections.map(s => s.id),
+            deletedFilePaths: [],
+            deletedSectionIds: lpDeletedSectionIds.map(id => id.slice(lp.name.length + 2)),
+          });
+        }
+      } catch (err) {
+        console.warn(`[SemanticIPC] incremental update for linked project ${lp.name} failed:`, err);
+      }
+    }
+
+    // Skip only if truly nothing to do (no doc changes AND no project path for code scan AND no linked changes)
+    if (idsToConvert.length === 0 && deletedSectionIds.length === 0 && !projectPath && linkedUpdates.length === 0) {
       return;
     }
+
+    // Heavy content conversion runs in a worker thread
+    const changedDocSections = idsToConvert.length > 0
+      ? await collectDocSectionsByIdsInWorker(token, idsToConvert)
+      : [];
+    const changedDocIds = changedDocSections.map(s => s.id);
 
     // Send incremental update to worker
     await trackBgTask("Semantic update", async () => {
       await request({ type: "index-update", token, projectPath, codeSinceMs,
-        changedDocSections, changedDocIds, deletedFilePaths: [], deletedSectionIds });
+        changedDocSections, changedDocIds, deletedFilePaths: [], deletedSectionIds,
+        linkedSources: linkedUpdates.length > 0 ? linkedUpdates : undefined });
     });
 
     // Update watermarks
@@ -487,11 +574,27 @@ export function registerSemanticIpc(): void {
     const services = await getProjectServices(token);
     const tree = await services.sections.getTree();
 
+    // Collect linked project trees for snapshot
+    const linked = await resolveLinkedProjects(token);
+    const linkedSnapshots: LinkedSnapshotSource[] = [];
+    for (const lp of linked) {
+      try {
+        const lpServices = await getProjectServices(lp.token);
+        const lpTree = await lpServices.sections.getTree();
+        linkedSnapshots.push({
+          prefix: lp.name,
+          projectPath: lp.sourcePath,
+          docTree: lpTree,
+        });
+      } catch { /* skip unavailable linked project */ }
+    }
+
     return request({
       type: "snapshot",
       token,
       projectPath: project.path ?? null,
       docTree: tree,
+      linkedSources: linkedSnapshots.length > 0 ? linkedSnapshots : undefined,
     });
   });
 
@@ -523,10 +626,11 @@ export function registerSemanticIpc(): void {
 
     const project = await getProjectsService().getByToken(token);
     const projectPath = project?.path ?? null;
-    const docSections = await collectDocSections(token);
+    const docSections = await collectDocSectionsInWorker(token);
+    const linkedSources = await collectLinkedSources(token);
 
     const stats = await trackBgTask("Semantic indexing", async () => {
-      const result = await request<any>({ type: "reindex", token, projectPath, docSections });
+      const result = await request<any>({ type: "reindex", token, projectPath, docSections, linkedSources: linkedSources.length > 0 ? linkedSources : undefined });
       if (result) indexedTokens.add(token);
       return result;
     });
@@ -553,7 +657,6 @@ export function registerSemanticIpc(): void {
   ipcMain.handle("indexing:apply-config", async () => {
     updateWorkerIndexingConfig();
     // Restart scheduler with new interval for all active projects
-    const { restartAllPeriodicIndexing } = await import("../index-scheduler");
     const cfg = getIndexingConfig();
     restartAllPeriodicIndexing(cfg.stalenessIntervalMin * 60_000);
   });

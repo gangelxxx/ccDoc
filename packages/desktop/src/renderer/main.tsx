@@ -1,11 +1,12 @@
 import { createRoot } from "react-dom/client";
 import { App } from "./App.js";
 import { useAppStore } from "./stores/app.store.js";
-import type { LlmSession } from "./stores/types.js";
+import type { LlmSession, ModelTiersConfig } from "./stores/types.js";
 import type { Lang } from "./i18n.js";
 import { fromLlmConfigData } from "./stores/llm-config.js";
 import {
   INITIAL_CHAT_CONFIG, INITIAL_PASSPORT_CONFIG, INITIAL_SUMMARY_CONFIG,
+  INITIAL_MODEL_TIERS,
 } from "./stores/llm-config.js";
 import "./styles.css";
 
@@ -29,9 +30,15 @@ interface SettingsData {
   customAgents: any[];
   embedding: any;
   indexing: any;
+  spellcheck: any;
+  history: any;
   voiceModelId: string;
+  showIconProgress: boolean;
+  progressStages: any[];
   devMode: boolean;
   devTrackToolIssues: boolean;
+  devToolFeedback: boolean;
+  modelTiers: ModelTiersConfig;
   _version: number;
 }
 
@@ -54,74 +61,18 @@ function mapSettingsToState(s: SettingsData, sessions: LlmSession[]) {
     customAgents: Array.isArray(s.customAgents) ? s.customAgents : [],
     embeddingConfig: s.embedding,
     indexingConfig: s.indexing,
+    spellcheckConfig: s.spellcheck || { enabled: true, languages: ["ru", "en"], userDictionary: [] },
+    historyConfig: s.history || { historyRetainDays: 0, maxSnapshotsPerSection: 30, snapshotMaxAgeDays: 30, snapshotCoalesceIntervalSec: 30 },
     voiceModelId: s.voiceModelId || "",
+    autoVerifyPlan: s.autoVerifyPlan !== false,
+    showIconProgress: s.showIconProgress !== false,
+    progressStages: Array.isArray(s.progressStages) ? s.progressStages : [],
     devMode: !!s.devMode,
     devTrackToolIssues: !!s.devTrackToolIssues,
+    devToolFeedback: !!s.devToolFeedback,
+    modelTiers: s.modelTiers || INITIAL_MODEL_TIERS,
     llmSessions: sessions,
   };
-}
-
-// ─── Migration from localStorage ────────────────────────────
-
-function migrateFromLocalStorage(): Partial<SettingsData> {
-  const result: Record<string, any> = {};
-
-  const str = (key: string) => localStorage.getItem(key);
-  const val = (key: string) => str(key) || undefined;
-
-  // UI
-  if (val("ccdoc-theme")) result.theme = str("ccdoc-theme");
-  if (val("ccdoc-language")) result.language = str("ccdoc-language");
-  if (val("ccdoc-content-width")) result.contentWidth = str("ccdoc-content-width");
-  const sw = Number(str("ccdoc-sidebar-width"));
-  if (sw > 0) result.sidebarWidth = sw;
-  const lw = Number(str("ccdoc-llm-panel-width"));
-  if (lw > 0) result.llmPanelWidth = lw;
-
-  // LLM key
-  if (val("ccdoc-llm-key")) result.llmApiKey = str("ccdoc-llm-key")!.trim().replace(/[^\x20-\x7E]/g, "");
-
-  // LLM configs
-  const migrateConfig = (prefix: string): Record<string, any> | undefined => {
-    const model = val(`${prefix}-model`);
-    const effort = val(`${prefix}-effort`);
-    const thinking = val(`${prefix}-thinking`);
-    const inherit = val(`${prefix}-inherit`);
-    if (!model && !effort && !thinking && !inherit) return undefined;
-    const cfg: Record<string, any> = {};
-    if (model) cfg.model = model;
-    if (effort) cfg.effort = effort;
-    if (thinking) cfg.thinking = thinking === "true";
-    if (inherit !== undefined && inherit !== null) cfg.inheritFromParent = inherit === "true";
-    return cfg;
-  };
-
-  const chat = migrateConfig("ccdoc-llm");
-  if (chat) result.llmChat = chat;
-  const passport = migrateConfig("ccdoc-llm-passport");
-  if (passport) result.llmPassport = passport;
-  const summary = migrateConfig("ccdoc-llm-summary");
-  if (summary) result.llmSummary = summary;
-  // Web search
-  if (val("ccdoc-web-search-provider")) result.webSearchProvider = str("ccdoc-web-search-provider");
-  if (val("ccdoc-web-search-key")) result.webSearchApiKey = str("ccdoc-web-search-key")!.trim().replace(/[^\x20-\x7E]/g, "");
-
-  // Embedding
-  const embMode = val("ccdoc-embedding-mode");
-  const embLocal = val("ccdoc-embedding-local-id");
-  const embProvider = val("ccdoc-embedding-provider");
-  const embModel = val("ccdoc-embedding-online-model");
-  const embKey = val("ccdoc-embedding-online-key");
-  if (embMode || embLocal || embProvider || embModel || embKey) {
-    result.embedding = {};
-    if (embMode) result.embedding.mode = embMode;
-    if (embLocal) result.embedding.localModelId = embLocal;
-    if (embProvider) result.embedding.onlineProvider = embProvider;
-    if (embModel) result.embedding.onlineModel = embModel;
-    if (embKey) result.embedding.onlineApiKey = embKey;
-  }
-
-  return result as Partial<SettingsData>;
 }
 
 // ─── Boot ───────────────────────────────────────────────────
@@ -133,31 +84,7 @@ async function boot() {
     settings = await window.api.settingsGetAll();
   } catch (err) {
     console.error("[boot] failed to load settings:", err);
-    settings = { _version: 1 } as any; // fall through with defaults from store
-  }
-
-  // Migration from localStorage (one-time, when settings.json has _version 0)
-  if (!settings._version) {
-    try {
-      const migrated = migrateFromLocalStorage();
-
-      // Migrate sessions
-      let migratedSessions: LlmSession[] = [];
-      const rawSessions = localStorage.getItem("ccdoc-llm-sessions");
-      if (rawSessions) {
-        try {
-          const parsed = JSON.parse(rawSessions);
-          if (Array.isArray(parsed)) migratedSessions = parsed;
-        } catch {}
-      }
-
-      await window.api.settingsPatch({ ...migrated, _version: 1 });
-      if (migratedSessions.length) await window.api.sessionsSave(migratedSessions);
-      // localStorage NOT cleared — kept as read-only fallback for downgrade
-      settings = await window.api.settingsGetAll();
-    } catch (err) {
-      console.error("[migration] failed, will retry next launch:", err);
-    }
+    settings = {} as any; // fall through with defaults from store
   }
 
   // Load sessions

@@ -54,7 +54,7 @@ export class IndexService {
     }
   }
 
-  async reindexAll(): Promise<void> {
+  async reindexAll(onProgress?: (progress: number) => void): Promise<void> {
     const allSections = await this.sectionsRepo.list(false);
 
     // Pre-build breadcrumbs map for efficiency
@@ -80,11 +80,13 @@ export class IndexService {
         body: extractBody(s),
       });
       if ((i + 1) % CHUNK === 0) {
+        onProgress?.((i + 1) / allSections.length * 0.5); // FTS prep: 0..50%
         await yieldToEventLoop();
       }
     }
 
     await this.ftsRepo.reindexAll(items);
+    onProgress?.(0.5); // FTS done
 
     // Reindex embeddings if model available
     if (this.embeddingModel?.isAvailable()) {
@@ -105,12 +107,15 @@ export class IndexService {
             console.warn(`[index] Failed to compute embedding for ${item.id}:`, err);
           }
           if ((i + 1) % CHUNK === 0) {
+            onProgress?.(0.5 + ((i + 1) / items.length) * 0.5); // Embeddings: 50..100%
             await yieldToEventLoop();
           }
         }
         console.log("[index] Embedding reindex complete");
       }
     }
+
+    onProgress?.(1);
   }
 
   private async updateEmbedding(

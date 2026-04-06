@@ -5,6 +5,10 @@ export interface BgTasksSlice {
   startBgTask: (label: string) => string;
   finishBgTask: (id: string) => void;
   updateBgTask: (id: string, updates: Partial<Omit<BackgroundTask, "id">>) => void;
+  updateBgTaskProgress: (id: string, progress: number) => void;
+  summarizingIds: Set<string>;
+  addSummarizingId: (id: string) => void;
+  removeSummarizingId: (id: string) => void;
   semanticProgressItem: string | null;
   semanticProgressLog: string[];
   onSemanticProgress: (item: string) => void;
@@ -40,6 +44,23 @@ export const createBgTasksSlice: SliceCreator<BgTasksSlice> = (set, get) => ({
       bgTasks: s.bgTasks.map((t) => t.id === id ? { ...t, ...updates } : t),
     }));
   },
+
+  updateBgTaskProgress: (id, progress) => {
+    const clamped = Math.min(1, Math.max(0, progress));
+    set((s) => ({
+      bgTasks: s.bgTasks.map((t) =>
+        t.id === id ? { ...t, progress: clamped, lastUpdatedAt: Date.now() } : t
+      ),
+    }));
+  },
+
+  summarizingIds: new Set<string>(),
+  addSummarizingId: (id) => set((s) => ({ summarizingIds: new Set([...s.summarizingIds, id]) })),
+  removeSummarizingId: (id) => set((s) => {
+    const next = new Set(s.summarizingIds);
+    next.delete(id);
+    return { summarizingIds: next };
+  }),
 
   semanticProgressItem: null,
   semanticProgressLog: [],

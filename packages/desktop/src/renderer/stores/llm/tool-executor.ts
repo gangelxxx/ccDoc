@@ -4,10 +4,11 @@
  */
 
 import type { GetState, SetState } from "./types.js";
-import { formatCompactTree, resolveIdInTree, paginateText, buildSlugMap, DEFAULT_CONTENT_LIMIT, MAX_CONTENT_LIMIT } from "../../llm-utils.js";
+import { formatCompactTree, resolveIdInTree, paginateText, buildSlugMap, DEFAULT_CONTENT_LIMIT, MAX_CONTENT_LIMIT, TOOL_RESULT_LIMIT } from "../../llm-utils.js";
 import { truncateToolResult, compressToolResult } from "../../llm-utils.js";
 import { splitMarkdownIntoSections } from "./split-markdown.js";
 import { buildTools, TOOL_DESCRIPTIONS } from "./tool-definitions.js";
+import { callTierRaw } from "../llm-engine.js";
 
 /**
  * Strip comment-only lines and collapse consecutive blank lines from source code.
@@ -45,10 +46,22 @@ export function stripCodeNoise(code: string): string {
   return result.join("\n");
 }
 
+/** Metadata of a section created during tool execution. */
+export interface CreatedSectionMeta {
+  id: string;
+  title: string;
+  type: string;
+}
+
 /** Mutable state shared between executeTool calls within a single sendLlmMessage invocation. */
 export interface ToolExecutionState {
   mutated: boolean;
   lastCreatedId: string | null;
+  createdSections: CreatedSectionMeta[];
+  /** IDs of all sections affected by mutations (for granular UI refresh). */
+  affectedSectionIds: string[];
+  /** True if tree structure changed (create/delete/move) vs content-only changes. */
+  treeStructureChanged: boolean;
 }
 
 /**
@@ -92,15 +105,17 @@ function normalizeInput(input: any): any {
 // 2. localStorage — persists across sessions. Loaded on start, saved on each cache write.
 // Automatically invalidated when mutating tools (update/create/delete/move) are called.
 
-const PERSISTENT_CACHE_MAX_ENTRIES = 150;
+const PERSISTENT_CACHE_MAX_ENTRIES = 100;
 const PERSISTENT_CACHE_KEY_PREFIX = "toolCache:";
 /** Max age for persistent cache entries (ms). Entries older than this are discarded on load. */
 const PERSISTENT_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+/** Max serialized size per cache entry (bytes). Larger entries are not persisted. */
+const PERSISTENT_CACHE_MAX_ENTRY_SIZE = 10_000;
 
 /** Tools whose results should be persisted across sessions. */
 const PERSISTABLE_TOOLS = new Set([
-  "get_section", "get_file_with_sections", "get_sections_batch",
-  "get_tree", "get_file_outlines", "read_project_file", "find_symbols",
+  "gt", "read",
+  "get_file_outlines", "read_project_file", "find_symbols",
 ]);
 
 type CacheEntry = { v: string; t: number }; // value + timestamp
@@ -137,26 +152,27 @@ function savePersistentCache(token: string, cache: Map<string, CacheEntry>) {
       const entries: [string, CacheEntry][] = [];
       for (const [k, entry] of cache) {
         const toolName = k.split(":")[0];
-        if (PERSISTABLE_TOOLS.has(toolName)) entries.push([k, entry]);
+        if (!PERSISTABLE_TOOLS.has(toolName)) continue;
+        // Skip oversized entries to keep serialization fast
+        if (entry.v.length > PERSISTENT_CACHE_MAX_ENTRY_SIZE) continue;
+        entries.push([k, entry]);
       }
       const trimmed = entries.slice(-PERSISTENT_CACHE_MAX_ENTRIES);
       localStorage.setItem(PERSISTENT_CACHE_KEY_PREFIX + token, JSON.stringify(trimmed));
       console.log(`[ToolCache] Persisted ${trimmed.length} entries`);
     } catch { /* localStorage full or unavailable */ }
-  }, 2000);
+  }, 10_000);
 }
 
 /** Build a cache key for cacheable tools. Returns null for non-cacheable tools. */
 function buildCacheKey(name: string, input: any): string | null {
   switch (name) {
-    case "get_section":
-      return `get_section:${input.section_id}:${input.offset ?? 0}:${input.limit ?? 0}:${input.format ?? "md"}`;
-    case "get_file_with_sections":
-      return `get_file_with_sections:${input.file_id}:${input.max_depth ?? ""}:${input.include_content ?? true}:${input.format ?? "md"}`;
-    case "get_sections_batch":
-      return `get_sections_batch:${(input.section_ids || []).sort().join(",")}:${input.format ?? "md"}`;
-    case "get_tree":
-      return `get_tree:${input.parent_id ?? "root"}:${input.max_depth ?? "all"}`;
+    case "gt":
+      return `gt:${input.id ?? "root"}:d${input.depth ?? 1}:o${input.offset ?? 0}:l${input.limit ?? 50}:s${input.sort ?? "default"}`;
+    case "read": {
+      const readIds = Array.isArray(input.id) ? input.id.sort().join(",") : input.id;
+      return `read:${readIds}:d${input.depth ?? 0}:o${input.offset ?? 0}:l${input.limit ?? 0}:f${input.format ?? "md"}`;
+    }
     case "get_project_tree":
       return `get_project_tree:${input.glob ?? ""}:${input.max_depth ?? ""}`;
     case "get_file_outlines":
@@ -179,19 +195,26 @@ function invalidateCache(cache: Map<string, any>, sectionId?: string) {
     return;
   }
   for (const key of cache.keys()) {
-    // Always clear tree and batch caches (they aggregate multiple sections)
-    if (
-      key.startsWith("get_tree:") ||
-      key.startsWith("get_sections_batch:") ||
-      key.startsWith("get_file_with_sections:")
-    ) {
+    // Always clear tree caches (they aggregate multiple sections)
+    if (key.startsWith("gt:")) {
       cache.delete(key);
       continue;
     }
-    // For section-specific tools: match the ID as a distinct segment after the tool name
-    // Key format: "tool_name:id:param1:param2" — split by ":" and check segments
+    // Clear read caches: batch reads always, single reads if ID matches
+    if (key.startsWith("read:")) {
+      if (key.includes(",")) { // batch read — always clear
+        cache.delete(key);
+      } else {
+        // Single read — check if section ID matches (segment[1] may be slug or UUID)
+        const segments = key.split(":");
+        if (segments.length > 1 && (segments[1] === sectionId || key.includes(sectionId))) {
+          cache.delete(key);
+        }
+      }
+      continue;
+    }
+    // For other section-specific tools: match the ID as a distinct segment
     const segments = key.split(":");
-    // segments[0] = tool name, segments[1] = primary ID (section_id, file_id, path, etc.)
     if (segments.length > 1 && segments[1] === sectionId) {
       cache.delete(key);
     }
@@ -300,12 +323,9 @@ async function executeAgentTool(
 
       round++;
 
-      const data = await window.api.llmChat({
-        apiKey: get().llmApiKey,
+      const data = await callTierRaw("chatTier", {
         system: agentSystem,
         messages: agentMessages,
-        model: agent.model,
-        maxTokens: agent.thinking ? effortMaxTokens + 16000 : effortMaxTokens,
         tools: agentToolDefs.length ? agentToolDefs : undefined,
         ...(agent.thinking ? { thinking: { type: "enabled", budget_tokens: 16000 } } : {}),
         ...(!agent.thinking ? { temperature: 0.5 } : {}),
@@ -339,8 +359,11 @@ async function executeAgentTool(
 
         agentMessages = [...agentMessages, { role: "assistant", content: data.content }];
         const results: any[] = [];
+        // Normalize agent tool list for backward compatibility (old names → new names)
+        const AGENT_LEGACY_MAP: Record<string, string> = { "get_tree": "gt", "get_section": "read", "get_file_with_sections": "read", "get_sections_batch": "read" };
+        const normalizedAgentTools = new Set(agent.tools.map((t: string) => AGENT_LEGACY_MAP[t] ?? t));
         for (const block of blocks) {
-          if (!agent.tools.includes(block.name) && !BUFFER_TOOLS.has(block.name)) {
+          if (!normalizedAgentTools.has(block.name) && !BUFFER_TOOLS.has(block.name)) {
             results.push({ type: "tool_result", tool_use_id: block.id, content: `Error: tool '${block.name}' not allowed for agent "${agent.name}"` });
             continue;
           }
@@ -477,20 +500,33 @@ export function createToolExecutor(
   set: SetState,
   state: ToolExecutionState,
   authorName: string = "assistant",
+  targetTree?: any[],
 ) {
-  // Slug map: human-readable names → UUIDs, rebuilt on tree changes
-  let slugMap = buildSlugMap(get().tree);
-  let lastTreeRef = get().tree;
+  // Slug map: human-readable names → UUIDs, built lazily on first resolveId call
+  let slugMap: Map<string, string> | null = null;
+  let lastTreeRef: any = null;
+  let _targetTree = targetTree ?? null;
 
   const resolveId = (prefix: string): string => {
-    // Rebuild slug map if tree reference changed (after mutations)
-    const currentTree = get().tree;
-    if (currentTree !== lastTreeRef) {
+    // Use targetTree (linked project) if provided, otherwise main project tree
+    const currentTree = _targetTree ?? get().tree;
+    // Build slug map lazily or rebuild if tree reference changed (after mutations)
+    if (!slugMap || currentTree !== lastTreeRef) {
       slugMap = buildSlugMap(currentTree);
       lastTreeRef = currentTree;
     }
     return resolveIdInTree(prefix, currentTree, slugMap);
   };
+
+  /** Refresh the target tree after mutations (for linked project context) */
+  async function refreshTargetTree() {
+    if (token && _targetTree !== null) {
+      try {
+        _targetTree = await window.api.getTree(token);
+        slugMap = null; // force rebuild
+      } catch { /* ignore */ }
+    }
+  }
 
   // Two-level cache: in-memory (session) + localStorage (persistent).
   // Loaded from localStorage on start (with TTL filtering), saved on each write.
@@ -507,77 +543,208 @@ export function createToolExecutor(
     const input = normalizeInput(rawInput);
     try {
       switch (name) {
-        case "get_tree": {
-          const fullTree = await window.api.getTree(token);
-          // Rebuild slug map from latest tree (don't update lastTreeRef —
-          // let resolveId rebuild again when store catches up via silentRefreshUI)
-          slugMap = buildSlugMap(fullTree);
+        case "gt": {
+          // Resolve ID (null = root)
+          const gtId = input.id ? resolveId(input.id) : null;
+          const depth = input.depth ?? 1;
+          const gtOffset = input.offset ?? 0;
+          const gtLimit = Math.min(input.limit ?? 50, 200);
+          const sort = input.sort ?? "default";
 
-          let treeData = fullTree;
-          if (input.parent_id) {
-            const parentId = resolveId(input.parent_id);
-            const findSubtree = (nodes: any[]): any[] | null => {
-              for (const n of nodes) {
-                if (n.id === parentId) return n.children || [];
-                const found = findSubtree(n.children || []);
-                if (found) return found;
+          // depth=0 + specific id: single node info
+          if (depth === 0 && gtId) {
+            const node = await window.api.getNodeInfo(token, gtId);
+            if (!node) return `Error: section "${input.id}" not found.`;
+            return JSON.stringify(node);
+          }
+
+          // Fetch children with rich metadata + pagination
+          const gtResult = await window.api.getNodesRich(token, gtId, { offset: gtOffset, limit: gtLimit, sort });
+
+          // For depth > 1: recursively fetch children (with global node cap)
+          const GT_MAX_NODES = 500;
+          let gtNodeCount = gtResult.rows.length;
+          const enrichWithChildren = async (nodes: any[], currentDepth: number, maxDepth: number): Promise<any[]> => {
+            if (currentDepth >= maxDepth) return nodes;
+            const enriched = [];
+            for (const node of nodes) {
+              if (node.children_count > 0 && gtNodeCount < GT_MAX_NODES) {
+                const childResult = await window.api.getNodesRich(token, node.id, { offset: 0, limit: Math.min(50, GT_MAX_NODES - gtNodeCount), sort });
+                gtNodeCount += childResult.rows.length;
+                const markedChildren = childResult.rows.map((c: any) =>
+                  c.content_length === 0 && !c.summary && c.type !== "folder" ? { ...c, summary: "(empty)" } : c
+                );
+                const children = await enrichWithChildren(markedChildren, currentDepth + 1, maxDepth);
+                enriched.push({ ...node, children, children_total: childResult.total });
+              } else {
+                enriched.push(node);
               }
-              return null;
-            };
-            const subtree = findSubtree(fullTree);
-            if (!subtree) return `Error: section "${input.parent_id}" not found in tree.`;
-            treeData = subtree;
+            }
+            return enriched;
+          };
+
+          // Mark empty sections so the model doesn't waste a round reading them
+          const markEmpty = (rows: any[]) => rows.map((n: any) => {
+            if (n.content_length === 0 && !n.summary && n.type !== "folder") {
+              return { ...n, summary: "(empty)" };
+            }
+            return n;
+          });
+
+          let nodes = markEmpty(gtResult.rows);
+          if (depth > 1) {
+            nodes = await enrichWithChildren(nodes, 1, depth);
+            // markEmpty is applied inside enrichWithChildren via the rows
           }
 
-          return formatCompactTree(treeData, 0, true, input.max_depth, slugMap);
+          // Rebuild slugMap from fetched nodes (+ full tree if root call)
+          if (!gtId) {
+            const fullTree = await window.api.getTree(token);
+            slugMap = buildSlugMap(fullTree);
+          }
+
+          const out: any = { total: gtResult.total, returned: gtResult.rows.length, offset: gtOffset, nodes };
+
+          // Tree stats for root call
+          if (!gtId) {
+            out.tree = await window.api.getTreeStats(token);
+          }
+
+          // Pagination hint
+          if (gtOffset + gtResult.rows.length < gtResult.total) {
+            out.next_offset = gtOffset + gtResult.rows.length;
+          }
+
+          if (gtNodeCount >= GT_MAX_NODES) {
+            out.warning = `Stopped after ${GT_MAX_NODES} nodes. Use smaller depth or paginate with offset.`;
+          }
+
+          return JSON.stringify(out);
         }
-        case "get_section": {
+        case "read": {
+          const ids: string[] = Array.isArray(input.id) ? input.id.slice(0, 20) : [input.id];
+          const readDepth = input.depth ?? 0;
           const format = (input.format === "plain") ? "plain" : "markdown";
-          const sectionId = resolveId(input.section_id);
-          const sectionMeta = await window.api.getSection(token, sectionId);
-          let raw = await window.api.getSectionContent(token, sectionId, format);
-          let text = (typeof raw === "string" && raw) ? raw : "";
+          const requestedLimit = Math.min(input.limit ?? DEFAULT_CONTENT_LIMIT, MAX_CONTENT_LIMIT);
 
-          // File-type sections store content in children — auto-collect
-          if (sectionMeta?.type === "file" && !text.trim()) {
-            try {
-              const fileData = await window.api.getFileWithSections(token, sectionId);
-              const parts: string[] = [];
-              const collectContent = async (nodes: any[]) => {
-                for (const node of nodes) {
-                  const nodeContent = await window.api.getSectionContent(token, node.id, format);
-                  if (nodeContent && typeof nodeContent === "string" && nodeContent.trim()) {
-                    parts.push(`## ${node.title}\n${nodeContent}`);
+          // Adaptive limit: fit batch results into TOOL_RESULT_LIMIT
+          const effectiveLimit = ids.length > 1
+            ? Math.min(requestedLimit, Math.floor((TOOL_RESULT_LIMIT - 200) / ids.length))
+            : requestedLimit;
+
+          const readOffset = input.offset ?? 0;
+
+          // Helper: read content for a single section
+          const readOne = async (rawId: string): Promise<any> => {
+            const id = resolveId(rawId);
+            const sectionMeta = await window.api.getSection(token, id);
+            if (!sectionMeta) {
+              if (ids.length === 1) return `Error: Section "${rawId}" not found.`;
+              return { id: rawId, error: `Section "${rawId}" not found.` };
+            }
+
+            let text = "";
+            const raw = await window.api.getSectionContent(token, id, format);
+            text = (typeof raw === "string" && raw) ? raw : "";
+
+            // File-type sections: auto-collect children content
+            if (sectionMeta.type === "file" && !text.trim()) {
+              try {
+                const fileData = await window.api.getFileWithSections(token, id);
+                const parts: string[] = [];
+                const collectContent = async (nodes: any[]) => {
+                  for (const node of nodes) {
+                    const nodeContent = await window.api.getSectionContent(token, node.id, format);
+                    if (nodeContent && typeof nodeContent === "string" && nodeContent.trim()) {
+                      parts.push(`## ${node.title}\n${nodeContent}`);
+                    }
+                    if (node.children?.length) await collectContent(node.children);
                   }
-                  if (node.children?.length) await collectContent(node.children);
-                }
-              };
-              await collectContent(fileData.sections || []);
-              text = parts.join("\n\n");
-            } catch { /* fallback to empty */ }
+                };
+                await collectContent(fileData.sections || []);
+                text = parts.join("\n\n");
+              } catch { /* fallback to empty */ }
+            }
+
+            // depth > 0: append children content
+            if (readDepth > 0 && sectionMeta.type !== "file") {
+              try {
+                const fileData = window.api.getSectionChildren
+                  ? await window.api.getSectionChildren(token, id)
+                  : [];
+                const parts: string[] = text ? [text] : [];
+                const collectChildren = async (nodes: any[], level: number) => {
+                  for (const node of nodes) {
+                    const nodeContent = await window.api.getSectionContent(token, node.id, format);
+                    if (nodeContent && typeof nodeContent === "string" && nodeContent.trim()) {
+                      const heading = "#".repeat(Math.min(level + 1, 6));
+                      parts.push(`${heading} ${node.title}\n${nodeContent}`);
+                    }
+                    if (level < readDepth && node.children?.length) {
+                      await collectChildren(node.children, level + 1);
+                    }
+                  }
+                };
+                await collectChildren(fileData, 1);
+                text = parts.join("\n\n");
+              } catch { /* fallback */ }
+            }
+
+            if (!text) {
+              if (ids.length === 1) return "(empty section)";
+              return { id: rawId, title: sectionMeta.title, type: sectionMeta.type, content: "(empty section)" };
+            }
+
+            // For batch reads, always start from 0 (offset only applies to single reads)
+            const sectionOffset = ids.length === 1 ? readOffset : 0;
+            const p = paginateText(text, sectionOffset, effectiveLimit);
+
+            if (ids.length === 1) {
+              // Single section: return plain text with pagination hints (same as old get_section)
+              if (p.offset > 0 || p.hasMore) {
+                const meta = `[chars ${p.offset}–${p.end} of ${p.totalLen}]`;
+                const formatHint = format !== "markdown" ? `, format: "${format}"` : "";
+                const hint = p.hasMore
+                  ? `\n\n[Use read(id: "${rawId}", offset: ${p.end}${formatHint}) to read next ${Math.min(effectiveLimit, p.totalLen - p.end)} chars]`
+                  : "";
+                return `${meta}\n${p.slice}${hint}`;
+              }
+              return p.slice;
+            }
+
+            // Batch: return structured object
+            const entry: any = { id: rawId, title: sectionMeta.title, type: sectionMeta.type, content: p.slice };
+            if (p.hasMore) {
+              entry.truncated = true;
+              entry.total_length = p.totalLen;
+              entry.hint = `Use read(id: "${rawId}", offset: ${p.end}) for remaining content.`;
+            }
+            return entry;
+          };
+
+          // Single section: return directly
+          if (ids.length === 1) {
+            try {
+              return await readOne(ids[0]);
+            } catch (e: any) {
+              return `Error: ${e.message}`;
+            }
           }
 
-          if (!text) return "(empty section)";
-
-          const offset = input.offset ?? 0;
-          const limit = Math.min(input.limit ?? DEFAULT_CONTENT_LIMIT, MAX_CONTENT_LIMIT);
-
-          if (offset >= text.length) {
-            return `No more content. Section is ${text.length} chars total, requested offset: ${offset}.`;
+          // Batch: collect results
+          const sections = [];
+          for (const rawId of ids) {
+            try {
+              sections.push(await readOne(rawId));
+            } catch (e: any) {
+              sections.push({ id: rawId, error: e.message });
+            }
           }
-
-          const p = paginateText(text, offset, limit);
-
-          if (p.offset > 0 || p.hasMore) {
-            const meta = `[chars ${p.offset}–${p.end} of ${p.totalLen}]`;
-            const formatHint = format !== "markdown" ? `, format: "${format}"` : "";
-            const hint = p.hasMore
-              ? `\n\n[Use offset: ${p.end}${formatHint} to read next ${Math.min(limit, p.totalLen - p.end)} chars]`
-              : "";
-            return `${meta}\n${p.slice}${hint}`;
+          const batchOut: any = { sections };
+          if (Array.isArray(input.id) && input.id.length > 20) {
+            batchOut.warning = `Showing first 20 of ${input.id.length}. Call again with remaining IDs.`;
           }
-
-          return p.slice;
+          return JSON.stringify(batchOut);
         }
         case "search": {
           const results = await window.api.search(token, input.query);
@@ -624,7 +791,11 @@ export function createToolExecutor(
               await window.api.moveSection(token, file.id, parentId, afterId);
             }
             state.mutated = true;
+            state.treeStructureChanged = true;
             state.lastCreatedId = file.id;
+            state.affectedSectionIds.push(file.id);
+            if (parentId) state.affectedSectionIds.push(parentId);
+            state.createdSections.push({ id: file.id, title: file.title, type: file.type });
             return JSON.stringify({ id: file.id, title: file.title, type: file.type, sections_created: totalCreated, link: `[${file.title}](ccdoc:${file.id})` });
           }
 
@@ -634,8 +805,12 @@ export function createToolExecutor(
             await window.api.moveSection(token, section.id, parentId, afterId);
           }
           state.mutated = true;
+          state.treeStructureChanged = true;
           state.lastCreatedId = section.id;
-          return JSON.stringify({ id: section.id, title: section.title, type: section.type, link: `[${section.title}](ccdoc:${section.id})` });
+          state.affectedSectionIds.push(section.id);
+          if (parentId) state.affectedSectionIds.push(parentId);
+          state.createdSections.push({ id: section.id, title: section.title, type: section.type });
+          return JSON.stringify({ id: section.id, title: section.title, type: section.type, chars_written: content?.length || 0, status: "created_successfully", link: `[${section.title}](ccdoc:${section.id})` });
         }
         case "bulk_create_sections": {
           const createdIds: string[] = [];
@@ -669,11 +844,13 @@ export function createToolExecutor(
                 }
                 createdIds.push(file.id);
                 state.lastCreatedId = file.id;
+                state.createdSections.push({ id: file.id, title: s.title, type: s.type });
                 results.push({ index: i, id: file.id, title: s.title, type: s.type, sections_created: totalCreated, link: `[${s.title}](ccdoc:${file.id})` });
               } else {
                 const section = await window.api.createSection(token, parentId, s.title, s.type, s.icon || null, s.content);
                 createdIds.push(section.id);
                 state.lastCreatedId = section.id;
+                state.createdSections.push({ id: section.id, title: section.title, type: section.type });
                 results.push({ index: i, id: section.id, title: section.title, type: section.type, link: `[${section.title}](ccdoc:${section.id})` });
               }
             } catch (e: any) {
@@ -682,6 +859,8 @@ export function createToolExecutor(
             }
           }
           state.mutated = true;
+          state.treeStructureChanged = true;
+          for (const r of results) { if (r.id) state.affectedSectionIds.push(r.id); }
           return JSON.stringify({ created: results });
         }
         case "update_section": {
@@ -696,8 +875,9 @@ export function createToolExecutor(
             return typeof c === "string" ? c : "";
           })();
 
-          await window.api.updateSectionMarkdown(token, sid, finalTitle, finalContent);
+          await window.api.updateSectionMarkdown(token, sid, finalTitle, finalContent, "assistant");
           state.mutated = true;
+          state.affectedSectionIds.push(sid);
           return `Section "${finalTitle}" updated (${finalContent.length} chars sent, ${finalContent.length} chars written).`;
         }
         case "bulk_update_sections": {
@@ -712,13 +892,14 @@ export function createToolExecutor(
                 const c = await window.api.getSectionContent(token, sid, "markdown");
                 return typeof c === "string" ? c : "";
               })();
-              await window.api.updateSectionMarkdown(token, sid, finalTitle, finalContent);
+              await window.api.updateSectionMarkdown(token, sid, finalTitle, finalContent, "assistant");
               results.push({ id: sid, title: finalTitle, chars: finalContent.length });
             } catch (e: any) {
               results.push({ id: sid, error: e.message });
             }
           }
           state.mutated = true;
+          for (const r of results) { if (r.id) state.affectedSectionIds.push(r.id); }
           return JSON.stringify({ updated: results });
         }
         case "patch_section": {
@@ -730,12 +911,22 @@ export function createToolExecutor(
           if (typeof markdown !== "string") return "Error: could not read section content.";
           const current = await window.api.getSection(token, sid);
 
+          // Check for children upfront — headings may have been auto-split into child sections
+          const childrenInfo = await window.api.getNodesRich(token, sid, { offset: 0, limit: 10 });
+          const hasChildren = childrenInfo.total > 0;
+
           for (const patch of patches) {
             switch (patch.action) {
               case "replace_heading": {
                 if (!patch.heading || !patch.content) return "Error: replace_heading requires heading and content.";
                 const result = replaceHeadingContent(markdown, patch.heading, patch.content);
-                if (!result.found) return `Error: heading "${patch.heading}" not found in section.`;
+                if (!result.found) {
+                  if (hasChildren) {
+                    const childTitles = childrenInfo.rows.map((c: any) => c.title).join(", ");
+                    return `Error: heading "${patch.heading}" not found in section body. This section has ${childrenInfo.total} children (${childTitles}). The heading may be a child section — use gt("${input.section_id}") to check, then update_section on the child directly.`;
+                  }
+                  return `Error: heading "${patch.heading}" not found in section.`;
+                }
                 markdown = result.markdown;
                 break;
               }
@@ -748,14 +939,26 @@ export function createToolExecutor(
               case "insert_after": {
                 if (!patch.heading) return "Error: insert_after requires heading.";
                 const result = insertAfterHeading(markdown, patch.heading, patch.content || "");
-                if (!result.found) return `Error: heading "${patch.heading}" not found.`;
+                if (!result.found) {
+                  if (hasChildren) {
+                    const childTitles = childrenInfo.rows.map((c: any) => c.title).join(", ");
+                    return `Error: heading "${patch.heading}" not found. This section has ${childrenInfo.total} children (${childTitles}) — use gt("${input.section_id}") to find the right child.`;
+                  }
+                  return `Error: heading "${patch.heading}" not found.`;
+                }
                 markdown = result.markdown;
                 break;
               }
               case "delete_heading": {
                 if (!patch.heading) return "Error: delete_heading requires heading.";
                 const result = deleteHeadingContent(markdown, patch.heading);
-                if (!result.found) return `Error: heading "${patch.heading}" not found.`;
+                if (!result.found) {
+                  if (hasChildren) {
+                    const childTitles = childrenInfo.rows.map((c: any) => c.title).join(", ");
+                    return `Error: heading "${patch.heading}" not found. This section has ${childrenInfo.total} children (${childTitles}) — the heading may be a child section.`;
+                  }
+                  return `Error: heading "${patch.heading}" not found.`;
+                }
                 markdown = result.markdown;
                 break;
               }
@@ -764,15 +967,20 @@ export function createToolExecutor(
             }
           }
 
-          await window.api.updateSectionMarkdown(token, sid, current.title, markdown);
+          await window.api.updateSectionMarkdown(token, sid, current.title, markdown, "assistant");
           state.mutated = true;
+          state.affectedSectionIds.push(sid);
           return `Section "${current.title}" patched (${patches.length} patch${patches.length > 1 ? "es" : ""} applied, ${markdown.length} chars).`;
         }
         case "move_section": {
           const newParentId = (input.new_parent_id && input.new_parent_id !== "null") ? resolveId(input.new_parent_id) : null;
           const afterId = (input.after_id && input.after_id !== "null") ? resolveId(input.after_id) : null;
-          await window.api.moveSection(token, resolveId(input.section_id), newParentId, afterId);
+          const moveId = resolveId(input.section_id);
+          await window.api.moveSection(token, moveId, newParentId, afterId);
           state.mutated = true;
+          state.treeStructureChanged = true;
+          state.affectedSectionIds.push(moveId);
+          if (newParentId) state.affectedSectionIds.push(newParentId);
           return "Section moved successfully.";
         }
         case "reorder_children": {
@@ -785,154 +993,55 @@ export function createToolExecutor(
             await window.api.moveSection(token, orderedIds[i], parentId, afterId);
           }
           state.mutated = true;
+          state.treeStructureChanged = true;
+          if (parentId) state.affectedSectionIds.push(parentId);
+          state.affectedSectionIds.push(...orderedIds);
           return `Reordered ${orderedIds.length} children successfully.`;
         }
         case "delete_section": {
-          await window.api.deleteSection(token, resolveId(input.section_id));
+          const delId = resolveId(input.section_id);
+          await window.api.deleteSection(token, delId);
           state.mutated = true;
+          state.treeStructureChanged = true;
+          state.affectedSectionIds.push(delId);
           return "Section deleted.";
         }
-        case "duplicate_section": {
-          const result = await window.api.duplicateSection(token, resolveId(input.section_id));
+        case "delete_sections": {
+          const MAX_BATCH_DELETE = 50;
+          const ids = (input.section_ids || []).slice(0, MAX_BATCH_DELETE);
+          if (ids.length === 0) return "Error: section_ids must be a non-empty array.";
+          for (const rawId of ids) {
+            const resolved = resolveId(rawId);
+            await window.api.deleteSection(token, resolved);
+            state.affectedSectionIds.push(resolved);
+          }
           state.mutated = true;
-          state.lastCreatedId = result.id;
-          return JSON.stringify({ id: result.id, title: result.title, type: result.type });
+          state.treeStructureChanged = true;
+          return `Deleted ${ids.length} sections.`;
+        }
+        case "duplicate_section": {
+          const dupResult = await window.api.duplicateSection(token, resolveId(input.section_id));
+          state.mutated = true;
+          state.treeStructureChanged = true;
+          state.lastCreatedId = dupResult.id;
+          state.affectedSectionIds.push(dupResult.id);
+          return JSON.stringify({ id: dupResult.id, title: dupResult.title, type: dupResult.type });
         }
         case "restore_section": {
-          await window.api.restoreSection(token, resolveId(input.section_id));
+          const restoreId = resolveId(input.section_id);
+          await window.api.restoreSection(token, restoreId);
           state.mutated = true;
+          state.treeStructureChanged = true;
+          state.affectedSectionIds.push(restoreId);
           return "Section restored successfully.";
         }
         case "update_icon": {
           const icon = (input.icon && input.icon !== "null") ? input.icon : null;
-          await window.api.updateIcon(token, resolveId(input.section_id), icon);
+          const iconId = resolveId(input.section_id);
+          await window.api.updateIcon(token, iconId, icon);
           state.mutated = true;
+          state.affectedSectionIds.push(iconId);
           return "Icon updated successfully.";
-        }
-        case "get_file_with_sections": {
-          const result = await window.api.getFileWithSections(token, resolveId(input.file_id));
-          const includeContent = input.include_content !== false;
-          const maxDepth = input.max_depth;
-          const format = (input.format === "plain") ? "plain" : "markdown";
-
-          const MAX_NODES = 100;
-          let nodeCount = 0;
-          let truncatedByLimit = false;
-
-          // depth starts at 1: direct children of file = level 1.
-          // max_depth: 1 → depth < 1 = false → only direct children without recursion.
-          const formatNode = async (node: any, depth: number): Promise<any> => {
-            nodeCount++;
-            if (nodeCount > MAX_NODES) {
-              truncatedByLimit = true;
-              return { id: node.id, title: node.title, type: node.type, skipped: true };
-            }
-
-            const base: any = { id: node.id, title: node.title, type: node.type };
-
-            if (includeContent) {
-              const raw = await window.api.getSectionContent(token, node.id, format);
-              const full = (typeof raw === "string" && raw) ? raw : "";
-              if (full.length > DEFAULT_CONTENT_LIMIT) {
-                base.content = full.slice(0, DEFAULT_CONTENT_LIMIT);
-                base.truncated = true;
-                base.totalLen = full.length;
-              } else {
-                base.content = full;
-              }
-            }
-
-            const children = node.children || [];
-            if (maxDepth === undefined || depth < maxDepth) {
-              const formatted = [];
-              for (const c of children) {
-                formatted.push(await formatNode(c, depth + 1));
-              }
-              base.children = formatted;
-            } else if (children.length > 0) {
-              base.children_count = children.length;
-            }
-
-            return base;
-          };
-
-          const fileBase: any = { id: result.file.id, title: result.file.title, type: result.file.type };
-          if (includeContent) {
-            const raw = await window.api.getSectionContent(token, result.file.id, format);
-            const full = (typeof raw === "string" && raw) ? raw : "";
-            if (full.length > DEFAULT_CONTENT_LIMIT) {
-              fileBase.content = full.slice(0, DEFAULT_CONTENT_LIMIT);
-              fileBase.truncated = true;
-              fileBase.totalLen = full.length;
-            } else {
-              fileBase.content = full;
-            }
-          }
-
-          const sections = [];
-          for (const s of result.sections) {
-            sections.push(await formatNode(s, 1));
-          }
-
-          const out: any = { file: fileBase, sections };
-          if (truncatedByLimit) {
-            out.warning = `Stopped after ${MAX_NODES} nodes. Use max_depth or get_section for remaining content.`;
-          }
-
-          return JSON.stringify(out);
-        }
-        case "get_sections_batch": {
-          const MAX_BATCH = 20;
-          const ids = input.section_ids.slice(0, MAX_BATCH);
-          const format = (input.format === "plain") ? "plain" : "markdown";
-          const results = [];
-
-          for (const rawId of ids) {
-            const id = resolveId(rawId);
-            try {
-              const section = await window.api.getSection(token, id);
-              let raw = await window.api.getSectionContent(token, id, format);
-              let content = (typeof raw === "string" && raw) ? raw : "";
-
-              // File-type sections store content in children, not in the file node itself.
-              // Auto-collect children content so the model doesn't waste a round discovering this.
-              if (section?.type === "file" && !content.trim()) {
-                try {
-                  const fileData = await window.api.getFileWithSections(token, id);
-                  const parts: string[] = [];
-                  const collectContent = async (nodes: any[]) => {
-                    for (const node of nodes) {
-                      const nodeContent = await window.api.getSectionContent(token, node.id, format);
-                      if (nodeContent && typeof nodeContent === "string" && nodeContent.trim()) {
-                        parts.push(`## ${node.title}\n${nodeContent}`);
-                      }
-                      if (node.children?.length) await collectContent(node.children);
-                    }
-                  };
-                  await collectContent(fileData.sections || []);
-                  content = parts.join("\n\n");
-                } catch { /* fallback to empty */ }
-              }
-
-              if (content.length > DEFAULT_CONTENT_LIMIT) {
-                results.push({
-                  id, title: section?.title, type: section?.type,
-                  content: content.slice(0, DEFAULT_CONTENT_LIMIT),
-                  truncated: true, totalLen: content.length,
-                });
-              } else {
-                results.push({ id, title: section?.title, type: section?.type, content });
-              }
-            } catch (e: any) {
-              results.push({ id, error: e.message });
-            }
-          }
-
-          const out: any = { sections: results };
-          if (input.section_ids.length > MAX_BATCH) {
-            out.warning = `Showing first ${MAX_BATCH} of ${input.section_ids.length}. Call again with remaining IDs.`;
-          }
-          return JSON.stringify(out);
         }
         case "commit_version": {
           const oid = await window.api.commitVersion(token, input.message);
@@ -946,6 +1055,8 @@ export function createToolExecutor(
           const autoSaveOid = await window.api.commitVersion(token, `Auto-save before restore to ${input.commit_id}`);
           await window.api.restoreVersion(token, input.commit_id);
           state.mutated = true;
+          state.treeStructureChanged = true;
+          // restore_version affects everything — full tree reload needed
           return autoSaveOid
             ? "Version restored successfully. Current state was auto-committed before restore."
             : "Version restored successfully.";
@@ -1037,7 +1148,16 @@ export function createToolExecutor(
           return `Found ${response.results.length} results for "${response.query}" (${response.duration}ms):\n\n${formatted}`;
         }
         case "create_plan": {
-          const steps = (input.steps || []).map((s: string) => ({
+          const rawSteps: string[] = input.steps || [];
+          if (get().autoVerifyPlan) {
+            const hasVerification = rawSteps.some((s: string) =>
+              /verification|verify|check.*result/i.test(s)
+            );
+            if (!hasVerification) {
+              rawSteps.push("✅ Verification: check all steps for completeness and correctness (2-3 passes), fix any discrepancies found");
+            }
+          }
+          const steps = rawSteps.map((s: string) => ({
             text: String(s),
             status: "pending" as const,
           }));
@@ -1164,10 +1284,10 @@ export function createToolExecutor(
     return out;
   }
 
-  /** Find "Быстрые идеи" / "Quick Ideas" folder in tree. */
+  /** Find "Quick Ideas" folder in tree. */
   function findQuickIdeasFolder(tree: any[]): string | null {
     for (const node of tree) {
-      if (node.title === "Быстрые идеи" || node.title === "Quick Ideas") return node.id;
+      if (node.title === "Quick Ideas" || node.title === "Быстрые идеи") return node.id;
       if (node.children?.length) {
         const found = findQuickIdeasFolder(node.children);
         if (found) return found;
@@ -1211,7 +1331,7 @@ export function createToolExecutor(
 
     // Invalidate cache on mutating operations
     const isMutating = ["create_section", "bulk_create_sections", "update_section", "bulk_update_sections",
-      "patch_section", "delete_section", "move_section", "reorder_children", "duplicate_section", "restore_section",
+      "patch_section", "delete_section", "delete_sections", "move_section", "reorder_children", "duplicate_section", "restore_section",
       "update_icon", "restore_version"].includes(name);
     if (isMutating) {
       const broadMutation = name === "restore_version" || name === "bulk_create_sections" || name === "bulk_update_sections" || name === "reorder_children";
@@ -1228,6 +1348,8 @@ export function createToolExecutor(
         }
         localStorage.setItem(PERSISTENT_CACHE_KEY_PREFIX + token, JSON.stringify(entries.slice(-PERSISTENT_CACHE_MAX_ENTRIES)));
       } catch { /* ignore */ }
+      // Refresh linked project tree after mutations (keeps resolveId slug map in sync)
+      await refreshTargetTree();
     }
 
     // Save to cache for read-only tools

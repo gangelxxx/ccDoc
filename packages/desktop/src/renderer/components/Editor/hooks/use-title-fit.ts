@@ -1,8 +1,8 @@
 import { useRef, useEffect, useCallback, type RefObject } from "react";
 
 /**
- * Hook для автоматического уменьшения шрифта заголовка,
- * чтобы текст помещался в input без горизонтального скролла.
+ * Hook for automatically shrinking the title font size
+ * so that the text fits in the input without horizontal scrolling.
  */
 export function useTitleFit(currentSectionId: string | undefined, currentSectionTitle: string | undefined) {
   const titleRef = useRef<HTMLInputElement>(null);

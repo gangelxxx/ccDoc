@@ -1,5 +1,5 @@
 import git from "isomorphic-git";
-import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, statSync } from "fs";
 import { join } from "path";
 import { execFileSync } from "child_process";
 import { projectHistoryPath } from "../constants.js";
@@ -12,12 +12,19 @@ import type { HistoryCommit, Section, StructureJson, StructureSection, ProseMirr
 import type { SectionsService } from "./sections.service.js";
 import * as fs from "fs";
 
+export interface HistoryStats {
+  commitCount: number;
+  oldestCommitDate: string | null;
+  newestCommitDate: string | null;
+  sizeBytes: number;
+}
+
 export class HistoryService {
   private dir: string;
   private hiddenFile: string;
 
-  constructor(private token: string) {
-    this.dir = projectHistoryPath(token);
+  constructor(private token: string, customDir?: string) {
+    this.dir = customDir ?? projectHistoryPath(token);
     this.hiddenFile = join(this.dir, "..", "hidden-commits.json");
   }
 
@@ -570,6 +577,93 @@ export class HistoryService {
     } catch (err) {
       console.warn("[history] Failed to clear FTS index:", err);
     }
+  }
+
+  // ── Stats & cleanup ─────────────────────────────────────────
+
+  async getStats(): Promise<HistoryStats> {
+    await this.init();
+    let commitCount = 0;
+    let oldestCommitDate: string | null = null;
+    let newestCommitDate: string | null = null;
+
+    try {
+      const hidden = this.getHiddenOids();
+      const commits = await git.log({ fs, dir: this.dir });
+      const visible = commits.filter(c => !hidden.has(c.oid));
+      commitCount = visible.length;
+      if (visible.length > 0) {
+        newestCommitDate = new Date(visible[0].commit.author.timestamp * 1000).toISOString();
+        oldestCommitDate = new Date(visible[visible.length - 1].commit.author.timestamp * 1000).toISOString();
+      }
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code !== "NotFoundError") {
+        console.warn("[history] getStats log failed:", err);
+      }
+    }
+
+    const sizeBytes = this.getDirSizeBytes(this.dir);
+    return { commitCount, oldestCommitDate, newestCommitDate, sizeBytes };
+  }
+
+  /**
+   * Hide commits older than retainDays.
+   * retainDays > 0: hide commits older than N days
+   * retainDays === 0: no-op (0 = keep all)
+   * retainDays === -1: full reset — delete everything and re-init empty repo
+   */
+  async cleanupOlderThan(retainDays: number): Promise<{ deletedCommits: number }> {
+    await this.init();
+
+    if (retainDays === -1) {
+      // Full reset: delete everything and re-init
+      rmSync(this.dir, { recursive: true, force: true });
+      if (existsSync(this.hiddenFile)) rmSync(this.hiddenFile);
+      await this.init();
+      return { deletedCommits: 0 };
+    }
+
+    if (retainDays === 0) {
+      return { deletedCommits: 0 }; // 0 = keep all, nothing to do
+    }
+
+    const cutoff = Date.now() / 1000 - retainDays * 86400;
+    const hidden = this.getHiddenOids();
+    let deletedCommits = 0;
+
+    try {
+      const commits = await git.log({ fs, dir: this.dir });
+      for (const c of commits) {
+        if (hidden.has(c.oid)) continue;
+        if (c.commit.author.timestamp < cutoff) {
+          hidden.add(c.oid);
+          deletedCommits++;
+        }
+      }
+      this.saveHiddenOids(hidden);
+    } catch (err) {
+      console.warn("[history] cleanupOlderThan failed:", err);
+    }
+
+    return { deletedCommits };
+  }
+
+  private getDirSizeBytes(dirPath: string): number {
+    if (!existsSync(dirPath)) return 0;
+    let total = 0;
+    try {
+      const entries = readdirSync(dirPath, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = join(dirPath, entry.name);
+        if (entry.isDirectory()) {
+          total += this.getDirSizeBytes(fullPath);
+        } else {
+          try { total += statSync(fullPath).size; } catch { /* skip */ }
+        }
+      }
+    } catch { /* skip */ }
+    return total;
   }
 }
 

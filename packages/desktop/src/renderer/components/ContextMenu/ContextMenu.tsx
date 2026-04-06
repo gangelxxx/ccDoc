@@ -6,6 +6,7 @@ interface MenuItem {
   icon?: string;
   shortcut?: string;
   danger?: boolean;
+  disabled?: boolean;
   onClick: () => void;
 }
 
@@ -50,7 +51,8 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
         ) : (
           <button
             key={i}
-            className={`context-menu-item${item.danger ? " danger" : ""}`}
+            className={`context-menu-item${item.danger ? " danger" : ""}${item.disabled ? " disabled" : ""}`}
+            disabled={item.disabled}
             onClick={() => {
               item.onClick();
               onClose();

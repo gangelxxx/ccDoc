@@ -16,6 +16,8 @@ export interface AppearanceTabProps {
   onFontSizeChange: (v: FontSize) => void;
   colorSchemeDraft: ColorScheme;
   onColorSchemeChange: (v: ColorScheme) => void;
+  showIconProgress: boolean;
+  onShowIconProgressChange: (v: boolean) => void;
 }
 
 const COLOR_SCHEMES: { key: ColorScheme; light: string; dark: string }[] = [
@@ -134,6 +136,18 @@ export function AppearanceTab(props: AppearanceTabProps) {
             <span>{t("langRussian")}</span>
           </button>
         </div>
+      </div>
+
+      {/* Icon progress */}
+      <div>
+        <label className="settings-toggle-row" style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={props.showIconProgress}
+            onChange={(e) => props.onShowIconProgressChange(e.target.checked)}
+          />
+          <span>{t("showIconProgress")}</span>
+        </label>
       </div>
     </div>
   );

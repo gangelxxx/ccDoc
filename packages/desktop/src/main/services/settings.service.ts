@@ -1,7 +1,7 @@
 import { app, safeStorage } from "electron";
 import { join } from "path";
-import { readFileSync, writeFileSync, renameSync, existsSync, openSync, fsyncSync, closeSync } from "fs";
-import writeFileAtomic from "write-file-atomic";
+import { readFileSync, unlinkSync, existsSync } from "fs";
+import type { Vault, RevisionInfo } from "@ccdoc/core";
 import { type Settings, SETTINGS_DEFAULTS, validateSettings } from "./settings.types";
 
 // ─── Encryption helpers ─────────────────────────────────────
@@ -12,36 +12,67 @@ function encryptField(value: string): string {
 }
 
 function decryptField(value: string): string {
-  if (!value || !value.startsWith("enc:")) return value; // plain text (legacy/migration)
+  if (!value || !value.startsWith("enc:")) return value;
   if (!safeStorage.isEncryptionAvailable()) return "";
   try {
     return safeStorage.decryptString(Buffer.from(value.slice(4), "base64"));
   } catch {
-    return ""; // corrupted cipher
+    return "";
   }
 }
 
-/** Deep clone sensitive branches and encrypt fields. Does NOT mutate input. */
-function encryptSensitive(data: Settings): Settings {
-  const clone: Settings = { ...data, embedding: { ...data.embedding } };
-  clone.llmApiKey = encryptField(clone.llmApiKey);
-  clone.webSearchApiKey = encryptField(clone.webSearchApiKey);
-  clone.embedding.onlineApiKey = encryptField(clone.embedding.onlineApiKey);
-  return clone;
+const SENSITIVE_KEYS = ["llmApiKey", "webSearchApiKey"] as const;
+
+const MODEL_TIER_KEYS = ["strong", "medium", "weak"] as const;
+
+/** Encrypt sensitive top-level fields. Handles nested embedding.onlineApiKey and modelTiers.*.apiKey. */
+function encryptSensitiveEntries(entries: Record<string, any>): Record<string, any> {
+  const result = { ...entries };
+  for (const key of SENSITIVE_KEYS) {
+    if (key in result && typeof result[key] === "string") {
+      result[key] = encryptField(result[key]);
+    }
+  }
+  if (result.embedding && typeof result.embedding === "object" && result.embedding.onlineApiKey) {
+    result.embedding = { ...result.embedding, onlineApiKey: encryptField(result.embedding.onlineApiKey) };
+  }
+  // Model tiers API keys
+  if (result.modelTiers && typeof result.modelTiers === "object") {
+    result.modelTiers = { ...result.modelTiers };
+    for (const tier of MODEL_TIER_KEYS) {
+      if (result.modelTiers[tier] && typeof result.modelTiers[tier].apiKey === "string" && result.modelTiers[tier].apiKey) {
+        result.modelTiers[tier] = { ...result.modelTiers[tier], apiKey: encryptField(result.modelTiers[tier].apiKey) };
+      }
+    }
+  }
+  return result;
 }
 
-/** Deep clone sensitive branches and decrypt fields. Does NOT mutate input. */
-function decryptSensitive(data: any): any {
-  const clone = { ...data, embedding: data.embedding ? { ...data.embedding } : undefined };
-  if (clone.llmApiKey) clone.llmApiKey = decryptField(clone.llmApiKey);
-  if (clone.webSearchApiKey) clone.webSearchApiKey = decryptField(clone.webSearchApiKey);
-  if (clone.embedding?.onlineApiKey) clone.embedding.onlineApiKey = decryptField(clone.embedding.onlineApiKey);
-  return clone;
+/** Decrypt sensitive top-level fields. Handles nested embedding.onlineApiKey and modelTiers.*.apiKey. */
+function decryptSensitiveEntries(entries: Record<string, any>): Record<string, any> {
+  const result = { ...entries };
+  for (const key of SENSITIVE_KEYS) {
+    if (key in result && typeof result[key] === "string") {
+      result[key] = decryptField(result[key]);
+    }
+  }
+  if (result.embedding && typeof result.embedding === "object" && result.embedding.onlineApiKey) {
+    result.embedding = { ...result.embedding, onlineApiKey: decryptField(result.embedding.onlineApiKey) };
+  }
+  // Model tiers API keys
+  if (result.modelTiers && typeof result.modelTiers === "object") {
+    result.modelTiers = { ...result.modelTiers };
+    for (const tier of MODEL_TIER_KEYS) {
+      if (result.modelTiers[tier] && typeof result.modelTiers[tier].apiKey === "string" && result.modelTiers[tier].apiKey) {
+        result.modelTiers[tier] = { ...result.modelTiers[tier], apiKey: decryptField(result.modelTiers[tier].apiKey) };
+      }
+    }
+  }
+  return result;
 }
 
 // ─── Deep patch (max 2 levels) ──────────────────────────────
 
-/** INVARIANT: Settings is max 2 levels deep. This merge handles exactly that. */
 function deepPatch(target: Settings, source: Partial<Settings>): Settings {
   const result: any = { ...target };
   for (const key of Object.keys(source)) {
@@ -56,107 +87,147 @@ function deepPatch(target: Settings, source: Partial<Settings>): Settings {
   return result;
 }
 
+// ─── Migration from settings.json ──────────────────────────
+
+export async function migrateSettingsToVault(vault: Vault): Promise<void> {
+  const allVault = await vault.getAll();
+  if (Object.keys(allVault).length > 0) return;
+
+  const userDataDir = app.getPath("userData");
+  const settingsPath = join(userDataDir, "settings.json");
+
+  if (existsSync(settingsPath)) {
+    try {
+      const raw = JSON.parse(readFileSync(settingsPath, "utf-8"));
+      // Decrypt old encrypted values, then re-encrypt through vault flow
+      const decrypted = decryptSensitiveEntries(raw);
+      const encrypted = encryptSensitiveEntries(decrypted);
+      await vault.set(encrypted, "boot:migration-from-json");
+      try { unlinkSync(settingsPath); } catch {}
+      console.log("[settings] migrated settings.json → vault, old file removed");
+    } catch (err) {
+      console.error("[settings] failed to migrate settings.json:", err);
+    }
+  }
+
+  // Migrate sessions
+  const sessionsPath = join(userDataDir, "llm-sessions.json");
+  if (existsSync(sessionsPath)) {
+    try {
+      const sessions = JSON.parse(readFileSync(sessionsPath, "utf-8"));
+      if (Array.isArray(sessions) && sessions.length > 0) {
+        await vault.set({ llmSessions: sessions }, "boot:migration-sessions");
+      }
+      try { unlinkSync(sessionsPath); } catch {}
+      console.log("[settings] migrated llm-sessions.json → vault");
+    } catch (err) {
+      console.error("[settings] failed to migrate sessions:", err);
+    }
+  }
+}
+
 // ─── Service ────────────────────────────────────────────────
 
 export interface SettingsService {
   getAll(): Settings;
-  patch(partial: Partial<Settings>): void;
+  patch(partial: Partial<Settings>, source?: string): void;
   getSessions(): any[];
-  saveSessions(sessions: any[]): void;
+  saveSessions(sessions: any[], source?: string): void;
   flushSync(): void;
+  // Vault history
+  getVaultHistory(limit?: number): Promise<RevisionInfo[]>;
+  getVaultSnapshot(revision: number): Promise<Record<string, any>>;
+  rollbackVault(revision: number): Promise<number>;
 }
 
-export function createSettingsService(): SettingsService {
-  const userDataDir = app.getPath("userData");
-  const settingsPath = join(userDataDir, "settings.json");
-  const sessionsPath = join(userDataDir, "llm-sessions.json");
-
+export function createSettingsService(vault: Vault): SettingsService {
   let cache: Settings;
-  let dirtySettings = false;
-  let dirtySessions = false;
   let sessionsCache: any[] = [];
+
+  // Dirty tracking: accumulate changed keys and sources for debounced flush
+  const dirtyEntries = new Map<string, any>();
+  const dirtySources = new Set<string>();
   let settingsTimer: ReturnType<typeof setTimeout> | null = null;
+
+  let dirtySessions = false;
   let sessionsTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // ── Load from disk ──
+  // ── Load from vault (sync wrapper for boot) ──
 
-  function loadSettings(): Settings {
-    if (!existsSync(settingsPath)) return { ...SETTINGS_DEFAULTS };
-    try {
-      const raw = JSON.parse(readFileSync(settingsPath, "utf-8"));
-      const decrypted = decryptSensitive(raw);
-      return validateSettings({ ...SETTINGS_DEFAULTS, ...decrypted });
-    } catch (err) {
-      console.error("[settings] corrupted settings.json, backing up:", err);
-      try { renameSync(settingsPath, settingsPath + ".bak"); } catch {}
-      return { ...SETTINGS_DEFAULTS };
-    }
+  function loadSettingsSync(): Settings {
+    // At this point vault should already have data (migrated or existing)
+    // We use a blocking approach: read vault in constructor, cache result
+    return { ...SETTINGS_DEFAULTS };
   }
 
-  function loadSessions(): any[] {
-    if (!existsSync(sessionsPath)) return [];
-    try {
-      const parsed = JSON.parse(readFileSync(sessionsPath, "utf-8"));
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      console.error("[settings] corrupted llm-sessions.json, resetting");
-      return [];
-    }
-  }
+  // ── Async init ──
 
-  // ── Flush to disk ──
+  async function initFromVault(): Promise<void> {
+    const raw = await vault.getAll();
+    const decrypted = decryptSensitiveEntries(raw);
+    cache = validateSettings({ ...SETTINGS_DEFAULTS, ...decrypted });
 
-  function flushSettings() {
-    if (!dirtySettings) return;
-    dirtySettings = false;
-    const encrypted = encryptSensitive(cache);
-    const json = JSON.stringify(encrypted, null, 2);
-    writeFileAtomic(settingsPath, json, (err) => {
-      if (err) {
-        console.error("[settings] flush error:", err);
-        dirtySettings = true; // restore flag so next flush retries
+    // Migrate: if modelTiers has no API keys but llmApiKey exists, populate tiers
+    if (cache.llmApiKey && !cache.modelTiers.strong.apiKey) {
+      const isOAuth = cache.llmApiKey.startsWith("sk-ant-oat");
+      const scriptRef = isOAuth
+        ? { type: "builtin" as const, builtinId: "anthropic-oauth" }
+        : { type: "builtin" as const, builtinId: "anthropic-apikey" };
+
+      for (const tier of MODEL_TIER_KEYS) {
+        cache.modelTiers[tier] = {
+          ...cache.modelTiers[tier],
+          providerScript: scriptRef,
+          apiKey: cache.llmApiKey,
+        };
       }
-    });
+      // Persist migration
+      dirtyEntries.set("modelTiers", cache.modelTiers);
+      dirtySources.add("boot:migrate-tiers");
+      console.log(`[settings] migrated llmApiKey → modelTiers (${isOAuth ? "oauth" : "apikey"})`);
+    }
+
+    // Load sessions from vault
+    const sessions = await vault.get<any[]>("llmSessions");
+    sessionsCache = Array.isArray(sessions) ? sessions : [];
+
+    console.log(`[settings] loaded from vault, keys: ${Object.keys(raw).length}`);
   }
 
-  function flushSessions() {
+  // ── Flush to vault ──
+
+  async function flushSettings(): Promise<void> {
+    if (dirtyEntries.size === 0) return;
+
+    const entries: Record<string, any> = {};
+    for (const [key, value] of dirtyEntries) {
+      entries[key] = value;
+    }
+    const encrypted = encryptSensitiveEntries(entries);
+    const source = dirtySources.size > 0 ? [...dirtySources].join(",") : "renderer:unknown";
+
+    dirtyEntries.clear();
+    dirtySources.clear();
+
+    try {
+      await vault.set(encrypted, source);
+    } catch (err) {
+      console.error("[settings] vault flush error:", err);
+      // Re-add entries for next flush attempt
+      for (const [key, value] of Object.entries(entries)) {
+        dirtyEntries.set(key, value);
+      }
+    }
+  }
+
+  async function flushSessions(): Promise<void> {
     if (!dirtySessions) return;
     dirtySessions = false;
-    const json = JSON.stringify(sessionsCache);
-    writeFileAtomic(sessionsPath, json, (err) => {
-      if (err) {
-        console.error("[settings] sessions flush error:", err);
-        dirtySessions = true;
-      }
-    });
-  }
-
-  function flushSettingsSync() {
-    if (!dirtySettings) return;
     try {
-      const encrypted = encryptSensitive(cache);
-      const json = JSON.stringify(encrypted, null, 2);
-      writeFileSync(settingsPath, json, "utf-8");
-      const fd = openSync(settingsPath, "r+");
-      fsyncSync(fd);
-      closeSync(fd);
-      dirtySettings = false;
+      await vault.set({ llmSessions: sessionsCache }, "sessions:save");
     } catch (err) {
-      console.error("[settings] sync flush error:", err);
-    }
-  }
-
-  function flushSessionsSync() {
-    if (!dirtySessions) return;
-    try {
-      const json = JSON.stringify(sessionsCache);
-      writeFileSync(sessionsPath, json, "utf-8");
-      const fd = openSync(sessionsPath, "r+");
-      fsyncSync(fd);
-      closeSync(fd);
-      dirtySessions = false;
-    } catch (err) {
-      console.error("[settings] sessions sync flush error:", err);
+      console.error("[settings] sessions vault flush error:", err);
+      dirtySessions = true;
     }
   }
 
@@ -176,23 +247,35 @@ export function createSettingsService(): SettingsService {
     }, 2000);
   }
 
+  function flushAllSync(): void {
+    if (settingsTimer) { clearTimeout(settingsTimer); settingsTimer = null; }
+    if (sessionsTimer) { clearTimeout(sessionsTimer); sessionsTimer = null; }
+    // Vault uses libsql in file mode — promises resolve synchronously on microtask queue.
+    // We fire-and-forget here; the data is already in the in-memory WAL by the time we return.
+    if (dirtyEntries.size > 0) flushSettings();
+    if (dirtySessions) flushSessions();
+  }
+
   // ── Init ──
 
-  cache = loadSettings();
-  sessionsCache = loadSessions();
-  console.log(`[settings] loaded from ${settingsPath}, _version=${cache._version}`);
+  cache = loadSettingsSync();
 
   // ── Public API ──
 
-  return {
-    /** Returns current settings (plaintext). Safe via IPC structured clone. */
+  const service: SettingsService = {
     getAll(): Settings {
       return cache;
     },
 
-    patch(partial: Partial<Settings>): void {
+    patch(partial: Partial<Settings>, source?: string): void {
       cache = validateSettings(deepPatch(cache, partial));
-      dirtySettings = true;
+
+      // Track which top-level keys changed
+      for (const key of Object.keys(partial)) {
+        dirtyEntries.set(key, (cache as any)[key]);
+      }
+      if (source) dirtySources.add(source);
+
       scheduleSettingsFlush();
     },
 
@@ -200,17 +283,39 @@ export function createSettingsService(): SettingsService {
       return sessionsCache;
     },
 
-    saveSessions(sessions: any[]): void {
+    saveSessions(sessions: any[], source?: string): void {
       sessionsCache = sessions;
       dirtySessions = true;
       scheduleSessionsFlush();
     },
 
     flushSync(): void {
-      if (settingsTimer) { clearTimeout(settingsTimer); settingsTimer = null; }
-      if (sessionsTimer) { clearTimeout(sessionsTimer); sessionsTimer = null; }
-      flushSettingsSync();
-      flushSessionsSync();
+      flushAllSync();
+    },
+
+    async getVaultHistory(limit = 50): Promise<RevisionInfo[]> {
+      return vault.history(limit);
+    },
+
+    async getVaultSnapshot(revision: number): Promise<Record<string, any>> {
+      const raw = await vault.snapshot(revision);
+      return decryptSensitiveEntries(raw);
+    },
+
+    async rollbackVault(revision: number): Promise<number> {
+      const rev = await vault.rollback(revision, "user:rollback");
+      // Reload cache from vault
+      await initFromVault();
+      return rev;
     },
   };
+
+  // Kick off async vault load — cache will be populated before first IPC call
+  // because initServices awaits before registering IPC handlers
+  const initPromise = initFromVault();
+
+  // Expose init promise for boot sequence
+  (service as any)._initPromise = initPromise;
+
+  return service;
 }

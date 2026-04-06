@@ -8,11 +8,10 @@ import type { CustomAgent } from "../../../stores/llm/types.js";
 import type { LlmEffort } from "../../../stores/types.js";
 
 const TOOL_LABEL_KEYS: Record<string, string> = {
-  get_tree: "tool_get_tree", get_section: "tool_get_section",
-  get_file_with_sections: "tool_get_file_with_sections", get_sections_batch: "tool_get_sections_batch",
+  gt: "tool_gt", read: "tool_read",
   search: "tool_search", create_section: "tool_create_section",
   bulk_create_sections: "tool_bulk_create_sections", update_section: "tool_update_section",
-  delete_section: "tool_delete_section", move_section: "tool_move_section",
+  delete_section: "tool_delete_section", delete_sections: "tool_delete_sections", move_section: "tool_move_section",
   duplicate_section: "tool_duplicate_section", restore_section: "tool_restore_section",
   update_icon: "tool_update_icon", commit_version: "tool_commit_version",
   get_history: "tool_get_history", restore_version: "tool_restore_version",
@@ -24,15 +23,14 @@ const TOOL_LABEL_KEYS: Record<string, string> = {
 
 /** All tools that agents can use (excluding run_agent to prevent recursion, and ask_user). */
 export const AVAILABLE_TOOLS = [
-  "get_tree",
-  "get_section",
-  "get_file_with_sections",
-  "get_sections_batch",
+  "gt",
+  "read",
   "search",
   "create_section",
   "bulk_create_sections",
   "update_section",
   "delete_section",
+  "delete_sections",
   "move_section",
   "duplicate_section",
   "restore_section",
@@ -88,14 +86,11 @@ export function AgentEditor({ agent, onSave, onCancel }: AgentEditorProps) {
   const [regenLoading, setRegenLoading] = useState(false);
 
   const handleRegenerate = async () => {
-    const { llmApiKey, llmChatConfig } = useAppStore.getState();
-    if (!llmApiKey) return;
+    if (!useAppStore.getState().hasLlmAccess()) return;
     setRegenLoading(true);
     try {
       const config = await generateAgentConfig({
         description: regenText || draft.description,
-        apiKey: llmApiKey,
-        model: llmChatConfig.model,
       });
       setDraft(d => ({ ...d, ...config }));
       setRegenOpen(false);

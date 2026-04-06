@@ -1,6 +1,7 @@
 import { ipcMain, dialog } from "electron";
 import { InstallService } from "@ccdoc/core";
-import { getProjectsService, getBackupService, getProjectDbsMap, unwatchProjectDb } from "../services";
+import { getProjectsService, getBackupService, getProjectDbsMap, unwatchProjectDb, switchActiveProject, clearActiveToken } from "../services";
+import { clearSemanticCaches } from "./semantic";
 import { getMainWindow } from "../window";
 
 export function registerProjectsIpc(): void {
@@ -42,11 +43,14 @@ export function registerProjectsIpc(): void {
       try { cached.db.close(); } catch (e) { console.warn("Failed to close project db:", e); }
       projectDbs.delete(token);
     }
+    clearActiveToken(token);
+    clearSemanticCaches(token);
     getBackupService().unregisterDb(token);
     await getProjectsService().removeProject(token);
   });
 
   ipcMain.handle("projects:touch", async (_e, token: string) => {
+    await switchActiveProject(token);
     await getProjectsService().touchProject(token);
   });
 }

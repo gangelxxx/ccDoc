@@ -1,11 +1,21 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { ChevronRight, Zap, RotateCcw, Loader2, Check, Copy, Send, Trash2, ArrowDown, CircleCheck, FileText, Pencil, Paperclip, X, Search, ChevronUp, ChevronDown, Sparkles, Type, Wand2, Layers, FolderOpen } from "lucide-react";
+import { ChevronRight, Zap, RotateCcw, Loader2, Check, Copy, Send, Trash2, ArrowDown, ArrowDownUp, CircleCheck, FileText, Pencil, Paperclip, X, Search, ChevronUp, ChevronDown, Sparkles, Type, Wand2, Layers, FolderOpen, Undo2, XCircle } from "lucide-react";
 import { useAppStore } from "../../stores/app.store.js";
 import { useT } from "../../i18n.js";
 import { findTreeNode, renderMarkdown } from "./editor-utils.js";
 import { VoiceButton } from "../VoiceButton/VoiceButton.js";
 import { IdeaProcessingPreview } from "./IdeaProcessingPreview.js";
 import type { IdeaProcessingMode, IdeaProcessingResult } from "@ccdoc/core";
+import { IdeaProgressButton } from "./IdeaProgressButton.js";
+import type { ProgressStage } from "./IdeaProgressSlider.js";
+
+const DEFAULT_PROGRESS_STAGES: ProgressStage[] = [
+  { id: 'new',     name: 'New',            percent: 0,   color: '#94a3b8' },
+  { id: 'dev',     name: 'In Development', percent: 25,  color: '#3b82f6' },
+  { id: 'test',    name: 'Testing',        percent: 50,  color: '#f59e0b' },
+  { id: 'prod',    name: 'In Production',  percent: 75,  color: '#22c55e' },
+  { id: 'done',    name: 'Done',           percent: 100, color: '#10b981' },
+];
 
 interface IdeaImage {
   id: string;
@@ -22,6 +32,7 @@ type Msg = {
   completed?: boolean;
   editedAt?: number;
   images?: IdeaImage[];
+  progress?: number;
 };
 
 // --- helpers ---
@@ -79,23 +90,58 @@ const processImageFile = async (file: File): Promise<IdeaImage> => {
   return { id: crypto.randomUUID(), name: file.name, mediaType, data };
 };
 
+import { sourceGetSection as ideaGetSection, sourceSaveSection as ideaSaveSection } from "./source-api.js";
+
 // --- Idea Plan Card (collapsible plan preview under a message) ---
 export function IdeaPlanCard({ planId, onNavigate }: { planId: string; onNavigate: (id: string) => void }) {
   const t = useT();
   const [markdown, setMarkdown] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(true);
+  const [phasesExpanded, setPhasesExpanded] = useState(false);
+  const [copiedPhaseId, setCopiedPhaseId] = useState<string | null>(null);
   const currentProject = useAppStore(s => s.currentProject);
+  const activeSectionToken = useAppStore(s => s.activeSectionToken);
+  const sectionSource = useAppStore(s => s.sectionSource);
   const tree = useAppStore(s => s.tree);
+  const userTree = useAppStore(s => s.userTree);
+  const isUser = sectionSource === "user";
 
   useEffect(() => {
-    if (currentProject?.token) {
-      window.api.getSectionContent(currentProject.token, planId, "markdown")
+    if (isUser) {
+      window.api.user.getContent(planId, "markdown")
+        .then((content: string) => setMarkdown(content || null))
+        .catch(() => setMarkdown(null));
+    } else if (currentProject?.token) {
+      const token = activeSectionToken || currentProject.token;
+      window.api.getSectionContent(token, planId, "markdown")
         .then((content: string) => setMarkdown(content || null))
         .catch(() => setMarkdown(null));
     }
-  }, [planId, currentProject?.token]);
+  }, [planId, currentProject?.token, activeSectionToken, isUser]);
 
-  const planNode = findTreeNode(tree, planId);
+  const activeTree = isUser ? userTree : tree;
+  const planNode = findTreeNode(activeTree, planId);
+  const phases = planNode?.children?.filter((c: any) => c.type === "section") || [];
+
+  const handleCopyPhase = async (e: React.MouseEvent, phaseId: string) => {
+    e.stopPropagation();
+    try {
+      let content: string;
+      if (isUser) {
+        content = await window.api.user.getContent(phaseId, "markdown");
+      } else {
+        if (!currentProject?.token) return;
+        const phaseToken = activeSectionToken || currentProject.token;
+        content = await window.api.getSectionContent(phaseToken, phaseId, "markdown");
+      }
+      if (content) {
+        await navigator.clipboard.writeText(content);
+        setCopiedPhaseId(phaseId);
+        setTimeout(() => setCopiedPhaseId(null), 1500);
+      }
+    } catch { /* ignore */ }
+  };
+
   if (!markdown) return null;
 
   return (
@@ -104,6 +150,11 @@ export function IdeaPlanCard({ planId, onNavigate }: { planId: string; onNavigat
         <div className="idea-chat-plan-label">
           <FileText size={13} />
           <span>{planNode?.title || "Plan"}</span>
+          {phases.length > 0 && (
+            <span className="idea-chat-plan-phase-count">
+              {phases.length} {t("planPhases")}
+            </span>
+          )}
         </div>
         <div className="idea-chat-plan-actions">
           <button
@@ -119,10 +170,45 @@ export function IdeaPlanCard({ planId, onNavigate }: { planId: string; onNavigat
         </div>
       </div>
       {!collapsed && (
-        <div
-          className="idea-chat-plan-content"
-          dangerouslySetInnerHTML={{ __html: renderMarkdown(markdown) }}
-        />
+        <>
+          {phases.length > 0 && (
+            <div className="idea-chat-plan-phases">
+              <div
+                className="idea-chat-plan-phases-toggle"
+                onClick={() => setPhasesExpanded(!phasesExpanded)}
+              >
+                <Layers size={12} />
+                <span>{t("planShowPhases")}</span>
+                {phasesExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+              </div>
+              {phasesExpanded && (
+                <div className="idea-chat-plan-phases-list">
+                  {phases.map((phase: any) => (
+                    <div key={phase.id} className="idea-chat-plan-phase-item">
+                      <span
+                        className="idea-chat-plan-phase-title"
+                        onClick={() => onNavigate(phase.id)}
+                      >
+                        {phase.title}
+                      </span>
+                      <button
+                        className="idea-chat-plan-phase-copy"
+                        onClick={(e) => handleCopyPhase(e, phase.id)}
+                        title={t("planCopyPhase")}
+                      >
+                        {copiedPhaseId === phase.id ? <Check size={12} /> : <Copy size={12} />}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          <div
+            className="idea-chat-plan-content"
+            dangerouslySetInnerHTML={{ __html: renderMarkdown(markdown) }}
+          />
+        </>
       )}
     </div>
   );
@@ -139,11 +225,15 @@ export function IdeaChat({ section, tree, onNavigate }: {
   const processIdeaWithLLM = useAppStore((s) => s.processIdeaWithLLM);
   const addIdeaMessage = useAppStore((s) => s.addIdeaMessage);
   const deleteIdeaMessage = useAppStore((s) => s.deleteIdeaMessage);
+  const permanentDeleteIdeaMessage = useAppStore((s) => s.permanentDeleteIdeaMessage);
+  const restoreIdeaMessage = useAppStore((s) => s.restoreIdeaMessage);
+  const emptyIdeaTrash = useAppStore((s) => s.emptyIdeaTrash);
+  const addToast = useAppStore((s) => s.addToast);
   const getIdeaMessages = useAppStore((s) => s.getIdeaMessages);
   const deleteSection = useAppStore((s) => s.deleteSection);
   const loadTree = useAppStore((s) => s.loadTree);
   const renameSection = useAppStore((s) => s.renameSection);
-  const llmApiKey = useAppStore((s) => s.llmApiKey);
+  const hasLlmAccess = useAppStore((s) => s.hasLlmAccess)();
   const llmLoading = useAppStore((s) => s.llmLoading);
   const currentProject = useAppStore((s) => s.currentProject);
   const scrollToPlanId = useAppStore((s) => s.scrollToPlanId);
@@ -151,6 +241,7 @@ export function IdeaChat({ section, tree, onNavigate }: {
   const highlightQuery = useAppStore((s) => s.highlightQuery);
   const setHighlightQuery = useAppStore((s) => s.setHighlightQuery);
   const ideaSearchTrigger = useAppStore((s) => s.ideaSearchTrigger);
+  const progressStages = useAppStore((s) => s.progressStages);
 
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
@@ -183,7 +274,23 @@ export function IdeaChat({ section, tree, onNavigate }: {
   const [showProcessingPreview, setShowProcessingPreview] = useState(false);
   const [processingDropdown, setProcessingDropdown] = useState(false);
   const processingDropdownRef = useRef<HTMLDivElement>(null);
-  const [showGrouped, setShowGrouped] = useState(true);
+  const [sortDropdown, setSortDropdown] = useState(false);
+  const sortDropdownRef = useRef<HTMLDivElement>(null);
+  const showGrouped = useAppStore((s) => {
+    const prefs = s._sectionPrefs[section.id];
+    return prefs && "grouping" in prefs ? (prefs["grouping"] as boolean) : true;
+  });
+  // ideaSort format: "field:dir" e.g. "progress:desc", "completed:desc", "plan:desc"
+  const ideaSort = useAppStore((s) => {
+    const prefs = s._sectionPrefs[section.id];
+    return (prefs?.["ideaSort"] as string | undefined) ?? undefined;
+  });
+  const setSectionPref = useAppStore((s) => s.setSectionPref);
+
+  // Detect if this idea is the trash bin (by known titles in any language, or by message metadata)
+  const TRASH_IDEA_TITLES = ["Deleted ideas", "\u0423\u0434\u0430\u043b\u0451\u043d\u043d\u044b\u0435 \u0438\u0434\u0435\u0438"];
+  const isTrash = TRASH_IDEA_TITLES.includes(section.title) ||
+    (messages.length > 0 && typeof (messages[0] as any).deletedAt === "number");
 
   // Auto-show preview when processing completes for this section
   useEffect(() => {
@@ -228,6 +335,7 @@ export function IdeaChat({ section, tree, onNavigate }: {
     setPendingImages([]);
     setEditPendingImages([]);
     setEditDragOver(false);
+    if (progressDebounceRef.current) clearTimeout(progressDebounceRef.current);
   }, [section.id]);
 
   // Load messages & auto-link unlinked plan children
@@ -250,16 +358,38 @@ export function IdeaChat({ section, tree, onNavigate }: {
         }
       }
 
+      // Auto-link orphaned children (created by LLM in chat mode, not via expandIdeaToPlan)
+      const linkedIds = new Set(msgs.filter((m: any) => m.planId).map((m: any) => m.planId));
+      const orphans = children.filter((c: any) => c.type === "section" && !linkedIds.has(c.id));
+      if (orphans.length > 0) {
+        // Attach each orphan to the last message, or create a synthetic message
+        const lastMsg = msgs[msgs.length - 1];
+        if (lastMsg) {
+          // If last message already has a planId, create a new message for each orphan
+          for (const orphan of orphans) {
+            if (!lastMsg.planId) {
+              lastMsg.planId = orphan.id;
+            } else {
+              msgs.push({ id: `auto-${orphan.id}`, text: "", createdAt: Date.now(), planId: orphan.id });
+            }
+          }
+        } else {
+          for (const orphan of orphans) {
+            msgs.push({ id: `auto-${orphan.id}`, text: "", createdAt: Date.now(), planId: orphan.id });
+          }
+        }
+        changed = true;
+      }
+
       if (changed) {
-        const proj = useAppStore.getState().currentProject;
-        if (proj?.token) {
-          try {
-            const sec = await window.api.getSection(proj.token, section.id);
+        try {
+          const sec = await ideaGetSection(section.id);
+          if (sec) {
             const data = JSON.parse(sec.content);
             data.messages = msgs;
-            await window.api.updateSection(proj.token, section.id, sec.title, JSON.stringify(data));
-          } catch { /* ignore */ }
-        }
+            await ideaSaveSection(section.id, sec.title, JSON.stringify(data));
+          }
+        } catch { /* ignore */ }
       }
 
       setMessages(msgs);
@@ -578,19 +708,18 @@ export function IdeaChat({ section, tree, onNavigate }: {
       return { images: updated, index: Math.min(prev.index, updated.length - 1) };
     });
     // Persist to DB
-    const proj = useAppStore.getState().currentProject;
-    if (proj?.token) {
-      try {
-        const sec = await window.api.getSection(proj.token, section.id);
+    try {
+      const sec = await ideaGetSection(section.id);
+      if (sec) {
         const data = JSON.parse(sec.content);
         const target = data.messages.find((m: any) => m.id === msgId);
         if (target && target.images) {
           target.images = target.images.filter((i: any) => i.id !== imageId);
           if (target.images.length === 0) delete target.images;
-          await window.api.updateSection(proj.token, section.id, sec.title, JSON.stringify(data));
+          await ideaSaveSection(section.id, sec.title, JSON.stringify(data));
         }
-      } catch { /* ignore */ }
-    }
+      }
+    } catch { /* ignore */ }
   }, [imageMenu, messages, section.id, deleteIdeaMessage]);
 
   // Close image menu on click outside or Escape
@@ -623,9 +752,15 @@ export function IdeaChat({ section, tree, onNavigate }: {
     setInput("");
     const imagesToSend = pendingImages.length > 0 ? [...pendingImages] : undefined;
     setPendingImages([]);
-    shouldScrollRef.current = true;
+    const hasGroups = showGrouped && messages.some((m: any) => m.group);
     // Optimistic: show immediately
     const tempMsg: Msg = { id: crypto.randomUUID(), text, createdAt: Date.now(), images: imagesToSend };
+    if (hasGroups) {
+      // When grouped, scroll to the new message in its group instead of to the bottom
+      setScrollToMessageId(tempMsg.id);
+    } else {
+      shouldScrollRef.current = true;
+    }
     setMessages(prev => [...prev, tempMsg]);
     // Save to DB, then reload to get real IDs
     sendingRef.current = true;
@@ -637,6 +772,24 @@ export function IdeaChat({ section, tree, onNavigate }: {
       sendingRef.current = false;
     }
   };
+
+  const progressDebounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const handleMsgProgressChange = useCallback((msgId: string, val: number) => {
+    setMessages(prev => prev.map(m => m.id === msgId ? { ...m, progress: val } : m));
+    if (progressDebounceRef.current) clearTimeout(progressDebounceRef.current);
+    progressDebounceRef.current = setTimeout(async () => {
+      try {
+        const sec = await ideaGetSection(section.id);
+        if (!sec) return;
+        const data = JSON.parse(sec.content);
+        const target = data.messages?.find((m: any) => m.id === msgId);
+        if (target) {
+          target.progress = val;
+          await ideaSaveSection(section.id, sec.title, JSON.stringify(data));
+        }
+      } catch { /* ignore */ }
+    }, 300);
+  }, [section.id]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -666,22 +819,43 @@ export function IdeaChat({ section, tree, onNavigate }: {
     setMessages(prev => prev.filter(m => m.id !== msgId));
   };
 
+  const handlePermanentDelete = async (msgId: string) => {
+    await permanentDeleteIdeaMessage(msgId);
+    setMessages(prev => prev.filter(m => m.id !== msgId));
+  };
+
+  const handleRestore = async (msgId: string) => {
+    const result = await restoreIdeaMessage(msgId);
+    if (result.success) {
+      setMessages(prev => prev.filter(m => m.id !== msgId));
+    } else if (result.error === "original_deleted") {
+      addToast("warning", t("trashOriginalDeleted"));
+    } else {
+      addToast("error", t("trashRestoreFailed"));
+    }
+  };
+
+  const handleEmptyTrash = async () => {
+    if (!confirm(t("trashEmptyConfirm"))) return;
+    await emptyIdeaTrash();
+    setMessages([]);
+  };
+
   const handleDeletePlan = async (msg: { id: string; planId?: string }) => {
     if (!msg.planId) return;
     await deleteSection(msg.planId);
     // Unlink planId from message
-    const proj = useAppStore.getState().currentProject;
-    if (proj?.token) {
-      try {
-        const sec = await window.api.getSection(proj.token, section.id);
+    try {
+      const sec = await ideaGetSection(section.id);
+      if (sec) {
         const data = JSON.parse(sec.content);
         const target = data.messages.find((m: any) => m.id === msg.id);
         if (target) {
           delete target.planId;
-          await window.api.updateSection(proj.token, section.id, sec.title, JSON.stringify(data));
+          await ideaSaveSection(section.id, sec.title, JSON.stringify(data));
         }
-      } catch { /* ignore */ }
-    }
+      }
+    } catch { /* ignore */ }
     setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, planId: undefined } : m));
     await loadTree();
   };
@@ -726,10 +900,9 @@ export function IdeaChat({ section, tree, onNavigate }: {
     setEditMinWidth(null);
     setEditPendingImages([]);
     setEditDragOver(false);
-    const proj = useAppStore.getState().currentProject;
-    if (proj?.token) {
-      try {
-        const sec = await window.api.getSection(proj.token, section.id);
+    try {
+      const sec = await ideaGetSection(section.id);
+      if (sec) {
         const data = JSON.parse(sec.content);
         const target = data.messages.find((m: any) => m.id === editId);
         if (target) {
@@ -738,30 +911,32 @@ export function IdeaChat({ section, tree, onNavigate }: {
           if (newImages.length > 0) {
             target.images = [...(target.images || []), ...newImages];
           }
-          await window.api.updateSection(proj.token, section.id, sec.title, JSON.stringify(data));
+          await ideaSaveSection(section.id, sec.title, JSON.stringify(data));
 
           // Sync edit to linked kanban card
           if (data.kanbanId) {
             try {
-              const kanbanSection = await window.api.getSection(proj.token, data.kanbanId);
-              const kanbanData = JSON.parse(kanbanSection.content);
-              for (const col of kanbanData.columns ?? []) {
-                const card = col.cards.find((c: any) => c.sourceMessageId === editId);
-                if (card) {
-                  const lines = trimmed.split("\n");
-                  card.title = lines[0] || trimmed;
-                  card.description = lines.slice(1).join("\n").trim();
-                  card.updatedAt = new Date().toISOString();
-                  await window.api.updateSection(proj.token, data.kanbanId, kanbanSection.title, JSON.stringify(kanbanData));
-                  break;
+              const kanbanSection = await ideaGetSection(data.kanbanId);
+              if (kanbanSection) {
+                const kanbanData = JSON.parse(kanbanSection.content);
+                for (const col of kanbanData.columns ?? []) {
+                  const card = col.cards.find((c: any) => c.sourceMessageId === editId);
+                  if (card) {
+                    const lines = trimmed.split("\n");
+                    card.title = lines[0] || trimmed;
+                    card.description = lines.slice(1).join("\n").trim();
+                    card.updatedAt = new Date().toISOString();
+                    await ideaSaveSection(data.kanbanId, kanbanSection.title, JSON.stringify(kanbanData));
+                    break;
+                  }
                 }
               }
             } catch { /* kanban may be deleted */ }
           }
         }
-      } catch (e) {
-        console.error('Failed to edit idea message:', e);
       }
+    } catch (e) {
+      console.error('Failed to edit idea message:', e);
     }
   };
 
@@ -789,46 +964,47 @@ export function IdeaChat({ section, tree, onNavigate }: {
     if (!msg) return;
     const newCompleted = !msg.completed;
     setMessages(prev => prev.map(m => m.id === msgId ? { ...m, completed: newCompleted } : m));
-    const proj = useAppStore.getState().currentProject;
-    if (proj?.token) {
-      try {
-        const sec = await window.api.getSection(proj.token, section.id);
+    try {
+      const sec = await ideaGetSection(section.id);
+      if (sec) {
         const data = JSON.parse(sec.content);
         const target = data.messages.find((m: any) => m.id === msgId);
         if (target) {
           target.completed = newCompleted;
-          await window.api.updateSection(proj.token, section.id, sec.title, JSON.stringify(data));
+          await ideaSaveSection(section.id, sec.title, JSON.stringify(data));
 
           // Sync completed to linked kanban: move card to/from isDone column
           if (data.kanbanId) {
             try {
-              const kanbanSection = await window.api.getSection(proj.token, data.kanbanId);
-              const kanbanData = JSON.parse(kanbanSection.content);
-              const cols = kanbanData.columns ?? [];
-              const doneCol = cols.find((c: any) => c.isDone);
-              const firstCol = cols[0];
-              if (doneCol && firstCol && cols.length >= 2) {
-                for (const col of cols) {
-                  const cardIdx = col.cards.findIndex((c: any) => c.sourceMessageId === msgId);
-                  if (cardIdx !== -1) {
-                    const card = col.cards[cardIdx];
-                    if (newCompleted && !col.isDone) {
-                      col.cards.splice(cardIdx, 1);
-                      doneCol.cards.push(card);
-                    } else if (!newCompleted && col.isDone) {
-                      col.cards.splice(cardIdx, 1);
-                      firstCol.cards.push(card);
+              const kanbanSection = await ideaGetSection(data.kanbanId);
+              if (kanbanSection) {
+                const kanbanData = JSON.parse(kanbanSection.content);
+                const cols = kanbanData.columns ?? [];
+                const doneCol = cols.find((c: any) => c.isDone);
+                const firstCol = cols[0];
+                if (doneCol && firstCol && cols.length >= 2) {
+                  for (const col of cols) {
+                    const cardIdx = col.cards.findIndex((c: any) => c.sourceMessageId === msgId);
+                    if (cardIdx !== -1) {
+                      const card = col.cards[cardIdx];
+                      if (newCompleted && !col.isDone) {
+                        col.cards.splice(cardIdx, 1);
+                        doneCol.cards.push(card);
+                      } else if (!newCompleted && col.isDone) {
+                        col.cards.splice(cardIdx, 1);
+                        firstCol.cards.push(card);
+                      }
+                      await ideaSaveSection(data.kanbanId, kanbanSection.title, JSON.stringify(kanbanData));
+                      break;
                     }
-                    await window.api.updateSection(proj.token, data.kanbanId, kanbanSection.title, JSON.stringify(kanbanData));
-                    break;
                   }
                 }
               }
             } catch { /* kanban may be deleted */ }
           }
         }
-      } catch { /* ignore */ }
-    }
+      }
+    } catch { /* ignore */ }
   };
 
   // --- Message context menu (right-click) ---
@@ -853,10 +1029,9 @@ export function IdeaChat({ section, tree, onNavigate }: {
 
   const moveIdeaMessage = async (msgId: string, position: "top" | "bottom") => {
     setMsgContextMenu(null);
-    const proj = useAppStore.getState().currentProject;
-    if (!proj?.token) return;
     try {
-      const sec = await window.api.getSection(proj.token, section.id);
+      const sec = await ideaGetSection(section.id);
+      if (!sec) return;
       const data = JSON.parse(sec.content);
       const msgs = data.messages;
       if (!msgs) return;
@@ -865,12 +1040,13 @@ export function IdeaChat({ section, tree, onNavigate }: {
       const [msg] = msgs.splice(idx, 1);
       if (position === "top") msgs.unshift(msg);
       else msgs.push(msg);
-      await window.api.updateSection(proj.token, section.id, sec.title, JSON.stringify(data));
+      await ideaSaveSection(section.id, sec.title, JSON.stringify(data));
 
       // Sync to linked kanban
       if (data.kanbanId) {
         try {
-          const kanbanSection = await window.api.getSection(proj.token, data.kanbanId);
+          const kanbanSection = await ideaGetSection(data.kanbanId);
+          if (!kanbanSection) throw new Error("kanban not found");
           const kanbanData = JSON.parse(kanbanSection.content);
           for (const col of kanbanData.columns ?? []) {
             const cardIdx = col.cards.findIndex((c: any) => c.sourceMessageId === msgId);
@@ -878,7 +1054,7 @@ export function IdeaChat({ section, tree, onNavigate }: {
               const [card] = col.cards.splice(cardIdx, 1);
               if (position === "top") col.cards.unshift(card);
               else col.cards.push(card);
-              await window.api.updateSection(proj.token, data.kanbanId, kanbanSection.title, JSON.stringify(kanbanData));
+              await ideaSaveSection(data.kanbanId, kanbanSection.title, JSON.stringify(kanbanData));
               break;
             }
           }
@@ -921,6 +1097,18 @@ export function IdeaChat({ section, tree, onNavigate }: {
     return () => window.removeEventListener("click", close);
   }, [processingDropdown]);
 
+  // Close sort dropdown on click outside
+  useEffect(() => {
+    if (!sortDropdown) return;
+    const close = (e: MouseEvent) => {
+      if (sortDropdownRef.current && !sortDropdownRef.current.contains(e.target as Node)) {
+        setSortDropdown(false);
+      }
+    };
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [sortDropdown]);
+
   const canSend = input.trim() || pendingImages.length > 0;
 
   return (
@@ -933,7 +1121,7 @@ export function IdeaChat({ section, tree, onNavigate }: {
         >
           <Search size={16} />
         </button>
-        {llmApiKey && messages.length > 1 && (
+        {hasLlmAccess && messages.length > 1 && (
           <div className="idea-processing-dropdown-wrapper" ref={processingDropdownRef}>
             <button
               className="idea-chat-search-btn"
@@ -958,7 +1146,7 @@ export function IdeaChat({ section, tree, onNavigate }: {
         {showGrouped && messages.some((m: any) => m.group) && (
           <button
             className="idea-chat-search-btn idea-chat-ungroup-btn"
-            onClick={() => setShowGrouped(false)}
+            onClick={() => setSectionPref(section.id, "grouping", false)}
             title={t("ideaProcessUngroupBtn")}
           >
             <Layers size={14} />
@@ -968,11 +1156,52 @@ export function IdeaChat({ section, tree, onNavigate }: {
         {!showGrouped && messages.some((m: any) => m.group) && (
           <button
             className="idea-chat-search-btn"
-            onClick={() => setShowGrouped(true)}
+            onClick={() => setSectionPref(section.id, "grouping", true)}
             title={t("ideaProcessGroup")}
           >
             <Layers size={14} />
           </button>
+        )}
+        {!isTrash && messages.length > 1 && (
+          <div className="idea-sort-dropdown-wrapper" ref={sortDropdownRef}>
+            <button
+              className={`idea-chat-search-btn${ideaSort ? " idea-chat-sort-active" : ""}`}
+              onClick={(e) => { e.stopPropagation(); setSortDropdown(!sortDropdown); }}
+              title={ideaSort ? t("ideaSortActive", ideaSort) : t("ideaSortLabel")}
+            >
+              <ArrowDownUp size={14} />
+            </button>
+            {sortDropdown && (
+              <div className="idea-sort-dropdown">
+                <button
+                  className={!ideaSort ? "active" : ""}
+                  onClick={() => { setSortDropdown(false); setSectionPref(section.id, "ideaSort", null); }}
+                >
+                  {t("ideaSortNone")}
+                </button>
+                <div className="idea-sort-dropdown-divider" />
+                {([
+                  ["progress:desc", t("ideaSortProgressDesc")],
+                  ["progress:asc",  t("ideaSortProgressAsc")],
+                  ["completed:desc", t("ideaSortCompletedFirst")],
+                  ["completed:asc", t("ideaSortIncompleteFirst")],
+                  ["plan:desc",     t("ideaSortWithPlanFirst")],
+                  ["plan:asc",      t("ideaSortWithoutPlanFirst")],
+                ] as [string, string][]).map(([key, label]) => (
+                  <button
+                    key={key}
+                    className={ideaSort === key ? "active" : ""}
+                    onClick={() => {
+                      setSortDropdown(false);
+                      setSectionPref(section.id, "ideaSort", key);
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         )}
         <input
           className="idea-chat-title"
@@ -1031,15 +1260,24 @@ export function IdeaChat({ section, tree, onNavigate }: {
       <div className="idea-chat-messages" ref={messagesContainerRef} onScroll={checkScrollPosition}>
         {messages.length === 0 && (
           <div className="idea-chat-empty">
-            <Zap size={24} />
-            <span>{t("ideaEmptyHint")}</span>
+            {isTrash ? (
+              <>
+                <Trash2 size={24} />
+                <span>{t("trashEmptyHint")}</span>
+              </>
+            ) : (
+              <>
+                <Zap size={24} />
+                <span>{t("ideaEmptyHint")}</span>
+              </>
+            )}
           </div>
         )}
         {(() => {
           // Group messages for rendering
           const hasGroups = showGrouped && messages.some((m: any) => m.group);
           let lastGroup: string | null = null;
-          const sortedMessages = hasGroups
+          let sortedMessages = hasGroups
             ? [...messages].sort((a: any, b: any) => {
                 const ga = (a as any).group || "";
                 const gb = (b as any).group || "";
@@ -1047,6 +1285,20 @@ export function IdeaChat({ section, tree, onNavigate }: {
                 return a.createdAt - b.createdAt;
               })
             : messages;
+          if (ideaSort) {
+            const [field, dir] = ideaSort.split(":");
+            sortedMessages = [...sortedMessages].sort((a, b) => {
+              let va: number, vb: number;
+              if (field === "progress") {
+                va = a.progress ?? 0; vb = b.progress ?? 0;
+              } else if (field === "completed") {
+                va = a.completed ? 1 : 0; vb = b.completed ? 1 : 0;
+              } else {
+                va = a.planId ? 1 : 0; vb = b.planId ? 1 : 0;
+              }
+              return dir === "desc" ? vb - va : va - vb;
+            });
+          }
 
           return sortedMessages.map((msg) => {
             const msgGroup = (msg as any).group as string | undefined;
@@ -1151,14 +1403,58 @@ export function IdeaChat({ section, tree, onNavigate }: {
                 {msg.editedAt && (
                   <span className="idea-chat-msg-edited">{t("edited")}</span>
                 )}
+                {isTrash && (msg as any).deletedAt && (
+                  <span className="idea-chat-msg-trash-meta">
+                    {t("trashDeletedFrom", (msg as any).fromSectionTitle || "?", (msg as any).fromProjectName || "?")}
+                    {" \u2022 "}
+                    {new Date((msg as any).deletedAt).toLocaleDateString()}
+                  </span>
+                )}
               </div>
             </div>
+            <div className="idea-chat-msg-footer-row">
+            {!isTrash && (
+              <IdeaProgressButton
+                progress={msg.progress ?? 0}
+                stages={progressStages.length > 0 ? progressStages : DEFAULT_PROGRESS_STAGES}
+                onProgressChange={(val) => handleMsgProgressChange(msg.id, val)}
+              />
+            )}
+            {isTrash ? (
+              <div className="idea-chat-msg-actions idea-chat-msg-actions--visible">
+                <button
+                  className="idea-chat-msg-action-btn"
+                  onClick={() => handleRestore(msg.id)}
+                  title={t("trashRestore")}
+                >
+                  <Undo2 size={12} />
+                </button>
+                <button
+                  className="idea-chat-msg-action-btn"
+                  onClick={() => {
+                    navigator.clipboard.writeText(msg.text);
+                    setCopiedId(msg.id);
+                    setTimeout(() => setCopiedId(null), 1500);
+                  }}
+                  title={t("copy")}
+                >
+                  {copiedId === msg.id ? <Check size={12} /> : <Copy size={12} />}
+                </button>
+                <button
+                  className="idea-chat-msg-action-btn idea-chat-msg-action-btn--danger"
+                  onClick={() => handlePermanentDelete(msg.id)}
+                  title={t("trashPermanentDelete")}
+                >
+                  <XCircle size={12} />
+                </button>
+              </div>
+            ) : (
             <div className={`idea-chat-msg-actions${generatingFor === msg.id ? " idea-chat-msg-actions--visible" : ""}`}>
               {generatingFor === msg.id ? (
                 <div className="idea-chat-msg-action-btn" style={{ cursor: "default" }}>
                   <Loader2 size={12} className="spin" style={{ color: "var(--text-secondary)" }} />
                 </div>
-              ) : llmApiKey && (
+              ) : hasLlmAccess && (
                 <button
                   className="idea-chat-msg-action-btn"
                   onClick={() => handleExpandToPlan(msg)}
@@ -1201,6 +1497,8 @@ export function IdeaChat({ section, tree, onNavigate }: {
                 <Trash2 size={12} />
               </button>
             </div>
+            )}
+            </div>
             {msg.planId && (
               <div className="idea-chat-plan-row">
                 <IdeaPlanCard planId={msg.planId} onNavigate={onNavigate} />
@@ -1222,13 +1520,17 @@ export function IdeaChat({ section, tree, onNavigate }: {
                   <button
                     className="idea-chat-msg-action-btn"
                     onClick={async () => {
-                      if (currentProject?.token) {
-                        try {
-                          await window.api.copySectionAsMarkdown(currentProject.token, msg.planId!);
-                          setCopiedPlanId(msg.planId!);
-                          setTimeout(() => setCopiedPlanId(null), 1500);
-                        } catch { /* ignore */ }
-                      }
+                      try {
+                        const st = useAppStore.getState();
+                        if (st.sectionSource === "user") {
+                          await window.api.user.copySectionAsMarkdown(msg.planId!);
+                        } else if (currentProject?.token) {
+                          const copyToken = st.activeSectionToken || currentProject.token;
+                          await window.api.copySectionAsMarkdown(copyToken, msg.planId!);
+                        } else { return; }
+                        setCopiedPlanId(msg.planId!);
+                        setTimeout(() => setCopiedPlanId(null), 1500);
+                      } catch { /* ignore */ }
                     }}
                     title={t("copyAsMarkdown")}
                   >
@@ -1252,6 +1554,22 @@ export function IdeaChat({ section, tree, onNavigate }: {
       )}
       </div>
 
+      {isTrash ? (
+        messages.length > 0 && (
+          <div className="idea-chat-input-area">
+            <div className="idea-chat-input-row" style={{ justifyContent: "center" }}>
+              <button
+                className="idea-chat-msg-action-btn idea-chat-msg-action-btn--danger"
+                onClick={handleEmptyTrash}
+                style={{ padding: "6px 16px", fontSize: 13, gap: 6, display: "flex", alignItems: "center" }}
+              >
+                <Trash2 size={14} />
+                {t("trashEmptyTrash")}
+              </button>
+            </div>
+          </div>
+        )
+      ) : (
       <div
         className={`idea-chat-input-area${dragOver ? " idea-chat-input-area--dragover" : ""}`}
         onDrop={handleDrop}
@@ -1306,6 +1624,7 @@ export function IdeaChat({ section, tree, onNavigate }: {
           </button>
         </div>
       </div>
+      )}
 
       {imageMenu && (
         <div

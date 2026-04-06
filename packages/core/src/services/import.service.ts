@@ -55,6 +55,40 @@ export class ImportService {
     return file.id;
   }
 
+  /** Import markdown into an existing file, splitting by headings into sections. */
+  async importMarkdownIntoFile(fileId: string, markdown: string): Promise<void> {
+    const { fileContent, sections } = splitMarkdownByHeadings(markdown);
+
+    console.log(`[import] into file ${fileId} — fileContent: ${fileContent.length} chars, sections: ${sections.length}`);
+
+    // If there's preamble content (before first heading), create a section for it
+    if (fileContent.trim()) {
+      await this.sections.create({
+        parentId: fileId,
+        title: "Untitled",
+        content: fileContent,
+        type: "section",
+      });
+    }
+
+    for (const s of sections) {
+      const sec = await this.sections.create({
+        parentId: fileId,
+        title: s.title,
+        content: s.content || undefined,
+        type: "section",
+      });
+      for (const child of s.children) {
+        await this.sections.create({
+          parentId: sec.id,
+          title: child.title,
+          content: child.content || undefined,
+          type: "section",
+        });
+      }
+    }
+  }
+
   async importPdfContent(
     folderId: string,
     fileName: string,
@@ -196,11 +230,11 @@ export class ImportService {
         const batch = contentPages.slice(i, i + BATCH_SIZE);
         const first = batch[0].pageNum;
         const last = batch[batch.length - 1].pageNum;
-        const title = first === last ? `Страница ${first}` : `Страницы ${first}–${last}`;
+        const title = first === last ? `Page ${first}` : `Pages ${first}–${last}`;
 
         const batchParts: string[] = [];
         for (const page of batch) {
-          batchParts.push(`## Страница ${page.pageNum}\n`);
+          batchParts.push(`## Page ${page.pageNum}\n`);
           if (page.text.trim()) batchParts.push(page.text);
           for (const img of page.images) {
             batchParts.push(`![](${img.dataUri})`);
@@ -224,7 +258,7 @@ export class ImportService {
 
         await this.sections.create({
           parentId: fileId,
-          title: `Страница ${page.pageNum}`,
+          title: `Page ${page.pageNum}`,
           content: parts.join("\n\n"),
           type: "section",
         });

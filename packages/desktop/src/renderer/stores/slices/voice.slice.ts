@@ -30,7 +30,7 @@ export const createVoiceSlice: SliceCreator<VoiceSlice> = (set, get) => ({
 
   setVoiceModelId: (id) => {
     set({ voiceModelId: id });
-    window.api.settingsPatch({ voiceModelId: id });
+    window.api.settingsPatch({ voiceModelId: id }, "voice:modelId");
   },
 
   fetchVoiceStatuses: async () => {
@@ -107,7 +107,7 @@ export const createVoiceSlice: SliceCreator<VoiceSlice> = (set, get) => ({
       voiceModelId: s.voiceModelId === modelId ? "" : s.voiceModelId,
     });
     if (s.voiceModelId === modelId) {
-      window.api.settingsPatch({ voiceModelId: "" });
+      window.api.settingsPatch({ voiceModelId: "" }, "voice:deleteModel");
     }
   },
 

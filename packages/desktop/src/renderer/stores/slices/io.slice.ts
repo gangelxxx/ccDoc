@@ -49,7 +49,7 @@ export const createIoSlice: SliceCreator<IoSlice> = (set, get) => ({
       await get().selectSection(fileIds[fileIds.length - 1]);
       get().addToast("success", "Markdown imported", `${fileIds.length} file(s)`);
       // Auto-generate summaries in background (best-effort, no await)
-      if (get().llmApiKey) {
+      if (get().hasLlmAccess()) {
         for (const id of fileIds) {
           get().generateSectionSummary(id).catch(() => {});
         }
@@ -118,7 +118,7 @@ export const createIoSlice: SliceCreator<IoSlice> = (set, get) => ({
           await get().loadTree();
           await get().selectSection(fileIds[fileIds.length - 1]);
           get().addToast("success", `Imported ${fileIds.length} file(s)`);
-          if (get().llmApiKey) {
+          if (get().hasLlmAccess()) {
             for (const id of fileIds) {
               get().generateSectionSummary(id).catch(() => {});
             }

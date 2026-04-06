@@ -29,6 +29,7 @@ import {
   PLAN_RESEARCH_MAX_ROUNDS,
   CHAT_SOFT_BUDGET,
   CHAT_HARD_BUDGET,
+  estimateMessagesChars,
 } from "../llm-utils.js";
 
 import { ToolDedupTracker, type DedupResult } from "./llm/tool-dedup.js";
@@ -45,14 +46,28 @@ export { splitMarkdownIntoSections } from "./llm/split-markdown.js";
 type SetState = (partial: Partial<AppState> | ((s: AppState) => Partial<AppState>)) => void;
 type GetState = () => AppState;
 
+/** Internal passport keys that should not be sent to the LLM */
+const _INTERNAL_KEYS = new Set([
+  "auto_commit_enabled", "fts_index_version", "fts_last_indexed_at",
+  "semantic_last_indexed_at", "code_max_mtime", "indexing_auto_configured",
+]);
+
+function filterPassport(p: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(p)) {
+    if (!_INTERNAL_KEYS.has(k) && v?.trim()) out[k] = v;
+  }
+  return out;
+}
+
 /** Check if a message is too simple/short to warrant semantic pre-fetch. */
 function isSimpleMessage(msg: string): boolean {
   const lower = msg.trim().toLowerCase();
-  if (lower.length < 15 && !lower.includes("?") && !lower.includes("как") &&
-      !lower.includes("что") && !lower.includes("где") && !lower.includes("почему")) {
+  if (lower.length < 15 && !lower.includes("?") && !lower.includes("how") &&
+      !lower.includes("what") && !lower.includes("where") && !lower.includes("why")) {
     return true;
   }
-  const greetings = ["привет", "здравствуй", "спасибо", "пока", "hi", "hello", "thanks", "ok", "ок", "норм", "да", "нет"];
+  const greetings = ["hi", "hello", "thanks", "ok", "bye", "yes", "no", "sure", "cool", "nice", "great", "fine"];
   return greetings.some(g => lower === g || lower.startsWith(g + " "));
 }
 
@@ -69,26 +84,44 @@ export async function sendLlmMessageImpl(
   displayText?: string,
   planMode?: boolean,
 ): Promise<string | null> {
-  const { llmApiKey, llmChatConfig, llmMessages, currentSection, currentProject, theme, language, editorSelectedText, webSearchProvider, webSearchApiKey, llmSessionMode, customAgents } = get();
-  const { model, maxTokens, temperature, thinking, thinkingBudget } = llmChatConfig;
+  const { modelTiers, llmMessages, currentSection, currentProject, theme, language, editorSelectedText, webSearchProvider, webSearchApiKey, llmSessionContext, customAgents, devToolFeedback, llmTargetProjectToken } = get();
+  const chatTierConfig = modelTiers[modelTiers.chatTier];
+  const { modelId: model, maxTokens, temperature, thinking, thinkingBudget } = chatTierConfig;
 
-  if (!llmApiKey || (!text.trim() && (!attachments || attachments.length === 0))) return null;
+  if (!get().hasLlmAccess() || (!text.trim() && (!attachments || attachments.length === 0))) return null;
 
-  const token = currentProject?.token;
+  // Use linked project token if set (for linked doc gen sessions), otherwise current project
+  const token = llmTargetProjectToken || currentProject?.token;
+  const mainProjectToken = currentProject?.token; // always the sidebar project
 
   const webSearchEnabled = webSearchProvider !== "none" && !!webSearchApiKey;
 
   // --- Build system prompt ---
+  const workspace = get().workspace;
+  const linkedProjects = get().linkedProjects;
+
   const systemParts = buildSystemPrompt({
     planMode: !!planMode,
+    language: language || "en",
     includeContext,
     includeSourceCode: !!includeSourceCode,
     webSearchEnabled,
-    docUpdateMode: llmSessionMode === "doc-update",
+    docUpdateMode: llmSessionContext?.mode === "doc-update",
+    devToolFeedback,
+    autoVerifyPlan: get().autoVerifyPlan,
     currentSection,
     currentProject,
     theme,
     customAgents,
+    passport: filterPassport(get().passport),
+    workspace: workspace ? {
+      name: workspace.name,
+      linkedProjects: linkedProjects.map(lp => ({
+        name: lp.alias || lp.source_path.split(/[\\/]/).pop() || "unnamed",
+        link_type: lp.link_type,
+        doc_status: lp.doc_status,
+      })),
+    } : null,
   });
 
   // --- Build tools ---
@@ -100,8 +133,11 @@ export async function sendLlmMessageImpl(
   });
 
   // --- Mutable state for tool execution ---
-  const toolState = { mutated: false, lastCreatedId: null as string | null };
+  const toolState = { mutated: false, lastCreatedId: null as string | null, createdSections: [] as Array<{ id: string; title: string; type: string }>, affectedSectionIds: [] as string[], treeStructureChanged: false };
   const dedupTracker = new ToolDedupTracker();
+  const toolFeedbackLog: Array<{ round: number; raw: string }> = [];
+  let sessionSummary = "";
+  const startTime = Date.now();
   let llmTaskTokens = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
   let softBudgetWarned = false;
   let hardBudgetWarned = false;
@@ -109,27 +145,66 @@ export async function sendLlmMessageImpl(
   /** Check if this engine instance is still the active one (not superseded by stop → new message). */
   const isStale = () => get().llmAborted || myGeneration !== engineGeneration;
 
-  /** Silently refresh tree & current section after LLM mutations (no navigation, no spinner, no banner) */
-  async function silentRefreshUI() {
+  /**
+   * Granular UI refresh after LLM tool mutations.
+   * - Reloads tree only if structure changed (create/delete/move)
+   * - Updates currentSection only if it was affected by tools AND not dirty in editor
+   * - Increments fileSectionsVersion only if relevant sections were affected
+   */
+  async function refreshAfterToolExecution() {
     if (!toolState.mutated) return;
-    try {
-      const tree = await window.api.getTree(token!);
-      set({ tree });
-    } catch { /* ignore */ }
-    const cur = get().currentSection;
-    if (cur) {
-      try {
-        const updated = await window.api.getSection(token!, cur.id);
-        set({ currentSection: updated });
-      } catch {
-        set({ currentSection: null });
+    const affected = new Set(toolState.affectedSectionIds);
+    const structureChanged = toolState.treeStructureChanged;
+
+    // Reset per-round tracking (keep cumulative: mutated, lastCreatedId, createdSections)
+    toolState.affectedSectionIds = [];
+    toolState.treeStructureChanged = false;
+
+    // 1. Reload tree if structural changes happened (create/delete/move)
+    if (structureChanged) {
+      const refreshToken = mainProjectToken;
+      if (refreshToken) {
+        try {
+          const { workspace: ws, linkedProjects: lps } = get();
+          const tree = (ws && lps.length > 0)
+            ? await window.api.getUnifiedTree(refreshToken, true)
+            : await window.api.getTree(refreshToken);
+          set({ tree });
+        } catch { /* ignore */ }
       }
     }
-    // Signal FileView to reload child sections after LLM mutations
-    set(s => ({ fileSectionsVersion: s.fileSectionsVersion + 1 }));
-  }
 
-  const executeTool = createToolExecutor(token!, get, set, toolState, "assistant");
+    // 2. Update currentSection only if it was affected AND editor is not dirty
+    const cur = get().currentSection;
+    if (cur && mainProjectToken && affected.has(cur.id)) {
+      const dirtyEditors = get().dirtyEditors;
+      if (!dirtyEditors || !dirtyEditors.has(cur.id)) {
+        try {
+          const sectionRefreshToken = get().activeSectionToken || mainProjectToken;
+          const updated = await window.api.getSection(sectionRefreshToken!, cur.id);
+          set({ currentSection: updated });
+        } catch {
+          set({ currentSection: null });
+        }
+      } else {
+        console.debug(`[LLM] Skipping DB refresh for dirty editor: ${cur.id}`);
+      }
+    }
+
+    // 3. Increment fileSectionsVersion only if the current file's children were affected
+    if (cur && affected.size > 0) {
+      const fileId = cur.type === "file" ? cur.id : cur.parent_id;
+      // Check if any affected section could be a child of the current file view,
+      // or if structural changes happened (conservative — covers create/delete inside files)
+      const fileChildrenAffected = fileId && (
+        affected.has(fileId) ||
+        structureChanged
+      );
+      if (fileChildrenAffected) {
+        set(s => ({ fileSectionsVersion: s.fileSectionsVersion + 1 }));
+      }
+    }
+  }
 
   // --- Build API messages ---
   const toApiMessages = (msgs: LlmMessage[]) =>
@@ -151,8 +226,26 @@ export async function sendLlmMessageImpl(
     ...llmMessages,
     { role: "user", content: userContent, ...(displayText ? { displayContent: displayText } : {}), attachments },
   ];
+  // Show user message + loading spinner BEFORE heavy sync work (buildSlugMap)
   set({ llmMessages: newMessages, llmLoading: true, llmAborted: false });
-  const llmTaskId = get().startBgTask(get().language === "ru" ? "LLM чат" : "LLM chat");
+
+  // Bump active session to top of history list
+  const { llmCurrentSessionId, bumpSession } = get();
+  if (llmCurrentSessionId) {
+    bumpSession(llmCurrentSessionId);
+  }
+
+  const llmTaskId = get().startBgTask("LLM chat");
+
+  // If targeting a linked project, pre-fetch its tree for resolveId
+  let targetTree: any[] | undefined;
+  if (llmTargetProjectToken && llmTargetProjectToken !== mainProjectToken) {
+    try {
+      targetTree = await window.api.getTree(llmTargetProjectToken);
+    } catch { /* ignore — executor will work without slug map */ }
+  }
+
+  const executeTool = createToolExecutor(token!, get, set, toolState, "assistant", targetTree);
 
   try {
     let apiMessages = toApiMessages(newMessages);
@@ -163,7 +256,7 @@ export async function sendLlmMessageImpl(
       if (last.role === "user") {
         let ctx = `[Currently viewing: "${currentSection.title}" (id: ${currentSection.id}, type: ${currentSection.type})]`;
 
-        // Inline section content so LLM doesn't waste rounds on get_section
+        // Inline section content so LLM doesn't waste rounds on read()
         if (token) {
           try {
             const raw = await window.api.getSectionContent(token, currentSection.id, "markdown");
@@ -172,7 +265,7 @@ export async function sendLlmMessageImpl(
               if (raw.length <= MAX_INLINE) {
                 ctx += `\n\n--- Section content (${raw.length} chars) ---\n${raw}\n--- End of section ---`;
               } else {
-                ctx += `\n\n--- Section content (first ${MAX_INLINE} of ${raw.length} chars) ---\n${raw.slice(0, MAX_INLINE)}\n--- End of section (truncated, use get_section with offset=${MAX_INLINE} for rest) ---`;
+                ctx += `\n\n--- Section content (first ${MAX_INLINE} of ${raw.length} chars) ---\n${raw.slice(0, MAX_INLINE)}\n--- End of section (truncated, use read(id: "${currentSection.id}", offset: ${MAX_INLINE}) for rest) ---`;
               }
             }
           } catch { /* folder or empty section — skip */ }
@@ -193,10 +286,10 @@ export async function sendLlmMessageImpl(
     const hardLimit = CONTEXT_LIMIT * HARD_STOP_AT;
 
     const compactMessages = createCompactMessages({
-      get, set, llmApiKey: llmApiKey!, model, llmTaskId, llmTaskTokens,
+      get, set, llmTaskId, llmTaskTokens,
     });
 
-    // --- Pre-fetch: project snapshot + semantic context (Шаги 3-4) ---
+    // --- Pre-fetch: project snapshot + semantic context ---
     let prefetchedContext = "";
     if (token && includeSourceCode) {
       try {
@@ -246,7 +339,7 @@ export async function sendLlmMessageImpl(
     console.group("[LLM] New chat request");
     console.log("[LLM] System prompt:\n", systemPrompt);
     console.log("[LLM] Tools:", finalTools.map(t => t.name));
-    console.log("[LLM] Messages:", JSON.stringify(apiMessages, null, 2));
+    console.log("[LLM] Messages:", apiMessages.length, "messages, ~" + Math.round(estimateMessagesChars(apiMessages) / 1024) + "KB");
     console.log("[LLM] Model:", model, "| maxTokens:", maxTokens, "| thinking:", thinking);
     console.groupEnd();
 
@@ -254,6 +347,9 @@ export async function sendLlmMessageImpl(
     let lastInputTokens = 0;
     let freePlanRounds = 0;
     let roundWarningIssued = false;
+    let lastToolCallSig = "";
+    let repeatCount = 0;
+    const MAX_REPEAT_TOOL_CALLS = 3;
 
     while (round < ABSOLUTE_MAX_ROUNDS) {
       // Check if user cancelled or a new engine superseded this one
@@ -273,7 +369,7 @@ export async function sendLlmMessageImpl(
 
       // Pre-send context estimation — compress before sending if needed
       const estimatedTokens = Math.ceil(
-        (JSON.stringify(apiMessages).length + systemPrompt.length) / 4
+        (estimateMessagesChars(apiMessages) + systemPrompt.length) / 4
       );
 
       if (estimatedTokens > hardLimit) {
@@ -281,22 +377,22 @@ export async function sendLlmMessageImpl(
         set(s => ({
           llmMessages: [...s.llmMessages, {
             role: "assistant" as const,
-            content: "🔄 Сжимаю контекст перед продолжением...",
+            content: "🔄 Compressing context before continuing...",
           }],
         }));
         apiMessages = shrinkToolResults(apiMessages, 500);
         apiMessages = await compactMessages(apiMessages);
 
-        const reEstimate = Math.ceil(JSON.stringify(apiMessages).length / 4);
+        const reEstimate = Math.ceil(estimateMessagesChars(apiMessages) / 4);
         if (reEstimate > hardLimit) {
           // Still too large after compaction — aggressive shrink
           apiMessages = shrinkToolResults(apiMessages, 200);
-          const finalEstimate = Math.ceil(JSON.stringify(apiMessages).length / 4);
+          const finalEstimate = Math.ceil(estimateMessagesChars(apiMessages) / 4);
           if (finalEstimate > hardLimit) {
             console.error(`[LLM] Context still ${finalEstimate} tokens after aggressive compaction, stopping`);
             const pct = Math.round((finalEstimate / CONTEXT_LIMIT) * 100);
             set(s => ({
-              llmMessages: [...s.llmMessages, { role: "assistant" as const, content: `⚠️ Контекст исчерпан (${pct}%), останавливаюсь.` }],
+              llmMessages: [...s.llmMessages, { role: "assistant" as const, content: `⚠️ Context exhausted (${pct}%), stopping.` }],
               llmLoading: false,
             }));
             get().saveLlmSession();
@@ -323,16 +419,39 @@ export async function sendLlmMessageImpl(
       const estInputChat = estimateInputTokens(systemPrompt, apiMessages);
       get().updateBgTask(llmTaskId, { tokens: { input: llmTaskTokens.input + estInputChat, output: llmTaskTokens.output } });
 
-      const data = await window.api.llmChat({
-        apiKey: llmApiKey,
-        system: systemPrompt,
-        messages: apiMessages,
-        model,
-        maxTokens: thinking ? maxTokens + thinkingBudget : maxTokens,
-        tools: roundTools,
-        ...(thinking ? { thinking: { type: "enabled", budget_tokens: thinkingBudget } } : {}),
-        ...(!thinking ? { temperature } : {}),
-      });
+      const RETRY_DELAYS = [10_000, 20_000, 30_000]; // ms — backoff for transient errors
+      let data: any;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          data = await callTierRaw("chatTier", {
+            system: systemPrompt,
+            messages: apiMessages,
+            tools: roundTools,
+            ...(thinking ? { thinking: { type: "enabled", budget_tokens: thinkingBudget } } : {}),
+            ...(!thinking ? { temperature } : {}),
+          });
+          break; // success
+        } catch (err: any) {
+          const status = err?.status || err?.statusCode || (typeof err?.message === "string" && err.message.match(/\[(\d{3})\]/)?.[1]);
+          const isRetryable = status == 403 || status == 429 || status == 529 || status == 500 || status == 503;
+          if (!isRetryable || attempt >= RETRY_DELAYS.length) throw err; // non-retryable or max retries
+          if (isStale()) throw err; // user cancelled
+
+          const delay = RETRY_DELAYS[attempt];
+          console.warn(`[LLM] Retryable error (${status}), attempt ${attempt + 1}/${RETRY_DELAYS.length}, waiting ${delay / 1000}s...`, err.message);
+          set((s) => ({
+            llmMessages: [...s.llmMessages, {
+              role: "assistant" as const,
+              content: `🔄 API error (${status}), retrying in ${delay / 1000}s...`,
+            }],
+          }));
+          await new Promise(resolve => setTimeout(resolve, delay));
+          if (isStale()) throw err; // check abort after delay
+        }
+      }
+
+      // Normalize OpenAI/Ollama response to Anthropic format
+      data = normalizeToAnthropicFormat(data);
 
       // Check abort immediately after API call returns (main latency point)
       if (isStale()) {
@@ -372,6 +491,27 @@ export async function sendLlmMessageImpl(
 
         const toolBlocks = contentBlocks.filter((b: any) => b.type === "tool_use");
 
+        // Loop detection: if model keeps making the same tool call, force stop
+        if (toolBlocks.length > 0) {
+          const sig = toolBlocks.map((b: any) => b.name + ":" + JSON.stringify(b.input)).join("|");
+          if (sig === lastToolCallSig) {
+            repeatCount++;
+            if (repeatCount >= MAX_REPEAT_TOOL_CALLS) {
+              console.error("[LLM] Loop detected: same tool call repeated " + repeatCount + " times, force stopping");
+              set(s => ({
+                llmMessages: [...s.llmMessages, {
+                  role: "assistant" as const,
+                  content: "⚠️ Обнаружено зацикливание: модель повторяет один и тот же вызов инструмента. Сессия остановлена.",
+                }],
+              }));
+              break;
+            }
+          } else {
+            lastToolCallSig = sig;
+            repeatCount = 1;
+          }
+        }
+
         // Guard: stop_reason=tool_use but no actual tool_use blocks (e.g. only thinking)
         if (toolBlocks.length === 0) {
           console.warn("[LLM] stop_reason=tool_use but no tool_use blocks — treating as end_turn");
@@ -381,16 +521,22 @@ export async function sendLlmMessageImpl(
             .join("\n")
             .trim();
           if (thinkingText) {
-            const reply = applyPlanMarkers(thinkingText, get, set);
+            const thinkingFb = extractToolFeedback(thinkingText, round, toolFeedbackLog);
+            if (thinkingFb.sessionSummary) sessionSummary = thinkingFb.sessionSummary;
+            const reply = applyPlanMarkers(thinkingFb.text, get, set);
+            const thinkingMsg: LlmMessage = { role: "assistant", content: reply };
+            if (toolState.createdSections.length > 0) {
+              thinkingMsg.createdSections = [...toolState.createdSections];
+            }
             set((s) => ({
               llmMessages: [
                 ...s.llmMessages.filter((m) => typeof m.content !== "string" || (!m.content.startsWith("🔧") && !m.content.startsWith("🔄"))),
-                { role: "assistant", content: reply },
+                thinkingMsg,
               ],
               llmLoading: false,
             }));
           }
-          await silentRefreshUI();
+          await refreshAfterToolExecution();
           get().saveLlmSession();
           get().finishBgTask(llmTaskId);
           console.groupEnd();
@@ -459,10 +605,11 @@ export async function sendLlmMessageImpl(
         }
 
         // Extract any intermediate text the model wrote alongside tool calls
-        const intermediateText = applyPlanMarkers(
-          contentBlocks.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n").trim(),
-          get, set,
-        );
+        let intermediateRaw = contentBlocks.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n").trim();
+        // Extract tool feedback (dev mode)
+        const intermediateFb = extractToolFeedback(intermediateRaw, round, toolFeedbackLog);
+        if (intermediateFb.sessionSummary) sessionSummary = intermediateFb.sessionSummary;
+        const intermediateText = applyPlanMarkers(intermediateFb.text, get, set);
 
         // Show tool calls in UI (with preceding text if any)
         const descCounts = new Map<string, number>();
@@ -621,14 +768,14 @@ export async function sendLlmMessageImpl(
         // Check abort after tool execution
         if (isStale()) {
           console.log("[LLM] Aborted after tool execution");
-          await silentRefreshUI();
+          await refreshAfterToolExecution();
           get().finishBgTask(llmTaskId);
           console.groupEnd();
           return toolState.lastCreatedId;
         }
 
         // Silently refresh UI after mutating tool calls (no navigation, no spinner)
-        await silentRefreshUI();
+        await refreshAfterToolExecution();
 
         console.groupEnd();
 
@@ -636,7 +783,7 @@ export async function sendLlmMessageImpl(
         if (lastInputTokens > hardLimit) {
           console.warn(`[LLM] Context at ${pct}% — hard limit reached, stopping`);
           set((s) => ({
-            llmMessages: [...s.llmMessages, { role: "assistant", content: `⚠️ Контекст исчерпан (${pct}%), останавливаюсь.` }],
+            llmMessages: [...s.llmMessages, { role: "assistant", content: `⚠️ Context exhausted (${pct}%), stopping.` }],
             llmLoading: false,
           }));
           get().saveLlmSession();
@@ -649,7 +796,7 @@ export async function sendLlmMessageImpl(
           set((s) => ({
             llmMessages: [...s.llmMessages, {
               role: "assistant",
-              content: "🔄 Сжимаю контекст для продолжения работы...",
+              content: "🔄 Compressing context to continue...",
             }],
           }));
           apiMessages = await compactMessages(apiMessages);
@@ -668,8 +815,8 @@ export async function sendLlmMessageImpl(
         if (stopReason === "max_tokens") {
           const hadToolCalls = contentBlocks.some((b: any) => b.type === "tool_use");
           const warning = hadToolCalls
-            ? "⚠️ Ответ обрезан лимитом токенов — незавершённые вызовы инструментов пропущены. Увеличьте maxTokens (effort: high) или разбейте задачу на части."
-            : "⚠️ Ответ обрезан лимитом токенов. Увеличьте maxTokens в настройках LLM или разбейте задачу на части.";
+            ? "⚠️ Response truncated by token limit — incomplete tool calls skipped. Increase maxTokens (effort: high) or break the task into parts."
+            : "⚠️ Response truncated by token limit. Increase maxTokens in LLM settings or break the task into parts.";
           set((s) => ({
             llmMessages: [
               ...s.llmMessages.filter((m) => typeof m.content !== "string" || (!m.content.startsWith("🔧") && !m.content.startsWith("🔄") && !m.content.startsWith("\uD83E\uDD16"))),
@@ -683,20 +830,43 @@ export async function sendLlmMessageImpl(
           return toolState.lastCreatedId;
         }
 
-        // Final text response — extract text blocks and apply plan markers
+        // Final text response — extract text blocks, strip feedback, apply plan markers
         const rawReply = contentBlocks.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n") || "";
-        const reply = applyPlanMarkers(rawReply, get, set);
+        const finalFb = extractToolFeedback(rawReply, round, toolFeedbackLog);
+        if (finalFb.sessionSummary) sessionSummary = finalFb.sessionSummary;
+        const reply = applyPlanMarkers(finalFb.text, get, set);
         console.log("[LLM] Final reply:", reply.slice(0, 300));
         console.groupEnd();
 
         // Silently refresh UI after mutations (no navigation, no spinner)
-        await silentRefreshUI();
+        await refreshAfterToolExecution();
+
+        // Save tool feedback log (dev mode)
+        if (toolFeedbackLog.length > 0 || sessionSummary) {
+          try {
+            const feedbackData = JSON.stringify({
+              session: new Date().toISOString(),
+              task: text.slice(0, 200),
+              rounds: round,
+              tokens: { ...llmTaskTokens },
+              duration_sec: Math.round((Date.now() - startTime) / 1000),
+              tool_feedback: toolFeedbackLog,
+              session_summary: sessionSummary,
+            }, null, 2);
+            window.api.saveFeedbackLog?.(feedbackData);
+            console.log(`[LLM] Tool feedback: ${toolFeedbackLog.length} entries saved`);
+          } catch { /* non-fatal */ }
+        }
 
         // Remove tool-status messages and add final reply
+        const finalMsg: LlmMessage = { role: "assistant", content: reply };
+        if (toolState.createdSections.length > 0) {
+          finalMsg.createdSections = [...toolState.createdSections];
+        }
         set((s) => ({
           llmMessages: [
             ...s.llmMessages.filter((m) => typeof m.content !== "string" || (!m.content.startsWith("🔧") && !m.content.startsWith("🔄") && !m.content.startsWith("\uD83E\uDD16"))),
-            { role: "assistant", content: reply },
+            finalMsg,
           ],
           llmLoading: false,
         }));
@@ -717,6 +887,10 @@ export async function sendLlmMessageImpl(
     get().finishBgTask(llmTaskId);
     return toolState.lastCreatedId;
   } catch (e: any) {
+    // If tools had already mutated data before the error, refresh to show created sections
+    if (toolState.mutated) {
+      try { await refreshAfterToolExecution(); } catch { /* ignore */ }
+    }
     if (!isStale()) {
       const errMsg = localizeApiError(get().language, e?.message || String(e));
       set((s) => ({
@@ -734,29 +908,165 @@ export async function sendLlmMessageImpl(
 }
 
 /**
- * Single-shot LLM call (no tool-use loop, no streaming UI).
+ * Single-shot LLM call using a ModelTierConfig (multi-provider).
  * Returns the raw text response from the model.
  */
-export async function callLlmOnce(
+export async function callLlmOnceTier(
   prompt: string,
-  apiKey: string,
-  model: string,
-  maxTokens: number = 8192,
+  tierConfig: import("./types.js").ModelTierConfig,
+  system: string = "You are a helpful assistant. Respond only with the requested JSON.",
 ): Promise<string> {
-  const data = await window.api.llmChat({
-    apiKey,
-    system: "You are a helpful assistant. Respond only with the requested JSON.",
+  const data = await window.api.llmTierChat({
+    tierConfig,
+    system,
     messages: [{ role: "user", content: prompt }],
-    model,
-    maxTokens,
     skipMessageCache: true,
   });
 
-  const contentBlocks = data.content || [];
-  const textParts = contentBlocks
-    .filter((b: any) => b.type === "text")
-    .map((b: any) => b.text);
-  return textParts.join("\n");
+  return extractResponseText(data) || "";
+}
+
+/**
+ * Get the ModelTierConfig for a given tier assignment key.
+ * Usage: getTierConfig("passportTier") → the full config for the tier assigned to passport.
+ */
+export function getTierConfig(
+  assignment: "chatTier" | "passportTier" | "summaryTier",
+): import("./types.js").ModelTierConfig {
+  const { modelTiers } = (await_store as any)();
+  const tierName = modelTiers[assignment]; // "strong" | "medium" | "weak"
+  return modelTiers[tierName];
+}
+
+// Lazy store getter to avoid circular imports
+let await_store: () => any;
+export function _setStoreGetter(fn: () => any) { await_store = fn; }
+
+/**
+ * Single-shot LLM call via tier — returns full API response (data object).
+ * Extracts text from both Anthropic and OpenAI response formats.
+ */
+export async function callTierRaw(
+  assignment: "chatTier" | "passportTier" | "summaryTier",
+  params: {
+    system: string;
+    messages: any[];
+    tools?: any[];
+    thinking?: { type: string; budget_tokens: number };
+    temperature?: number;
+    skipMessageCache?: boolean;
+    toolChoice?: { type: string };
+  },
+): Promise<any> {
+  const store = await_store();
+  const tierName = store.modelTiers[assignment];
+  const tierConfig = store.modelTiers[tierName];
+  const data = await window.api.llmTierChat({ tierConfig, ...params });
+  return normalizeToAnthropicFormat(data);
+}
+
+/**
+ * Normalize OpenAI/Ollama response to Anthropic format so the chat engine
+ * can process it uniformly (stop_reason, content blocks, usage).
+ */
+export function normalizeToAnthropicFormat(data: any): any {
+  // Already Anthropic format
+  if (data.stop_reason !== undefined || (Array.isArray(data.content) && data.content[0]?.type)) {
+    return data;
+  }
+
+  // OpenAI format: { choices: [{ message, finish_reason }], usage }
+  if (Array.isArray(data.choices) && data.choices.length > 0) {
+    const choice = data.choices[0];
+    const msg = choice.message || {};
+    const content: any[] = [];
+
+    // Text
+    if (msg.content) {
+      content.push({ type: "text", text: msg.content });
+    }
+
+    // Tool calls → Anthropic tool_use blocks
+    if (Array.isArray(msg.tool_calls)) {
+      for (const tc of msg.tool_calls) {
+        if (tc.function) {
+          let args: any = {};
+          try { args = JSON.parse(tc.function.arguments || "{}"); } catch {}
+          content.push({
+            type: "tool_use",
+            id: tc.id || `call_${Math.random().toString(36).slice(2, 10)}`,
+            name: tc.function.name,
+            input: args,
+          });
+        }
+      }
+    }
+
+    // Handle empty response (content: null, no tool_calls) — model refused or returned nothing
+    if (content.length === 0 && choice.finish_reason === "stop") {
+      content.push({ type: "text", text: "[Model returned empty response]" });
+    }
+
+    // Map finish_reason
+    const finishMap: Record<string, string> = {
+      stop: "end_turn",
+      tool_calls: "tool_use",
+      length: "max_tokens",
+      content_filter: "end_turn",
+    };
+
+    // Map usage (preserve cache fields from both Anthropic and OpenAI/OpenRouter formats)
+    const rawUsage = data.usage;
+    const cachedTokens = rawUsage?.prompt_tokens_details?.cached_tokens || 0;
+    const cacheWriteTokens = rawUsage?.prompt_tokens_details?.cache_write_tokens || 0;
+    const usage = rawUsage ? {
+      input_tokens: rawUsage.prompt_tokens || 0,
+      output_tokens: rawUsage.completion_tokens || 0,
+      cache_read_input_tokens: rawUsage.cache_read_input_tokens || cachedTokens,
+      cache_creation_input_tokens: rawUsage.cache_creation_input_tokens || cacheWriteTokens,
+    } : undefined;
+
+    return {
+      ...data,
+      stop_reason: finishMap[choice.finish_reason] || "end_turn",
+      content,
+      model: data.model,
+      usage,
+    };
+  }
+
+  // Ollama format: { message: { role, content }, done }
+  if (data.message?.content !== undefined) {
+    return {
+      ...data,
+      stop_reason: "end_turn",
+      content: [{ type: "text", text: data.message.content }],
+      usage: data.eval_count ? {
+        input_tokens: data.prompt_eval_count || 0,
+        output_tokens: data.eval_count || 0,
+      } : undefined,
+    };
+  }
+
+  return data;
+}
+
+/**
+ * Extract text from either Anthropic or OpenAI response format.
+ */
+export function extractResponseText(data: any): string | null {
+  // Anthropic: { content: [{ type: "text", text: "..." }] }
+  if (Array.isArray(data.content)) {
+    const block = data.content.find((b: any) => b.type === "text");
+    if (block?.text) return block.text;
+  }
+  // OpenAI: { choices: [{ message: { content: "..." } }] }
+  if (Array.isArray(data.choices) && data.choices[0]?.message?.content) {
+    return data.choices[0].message.content;
+  }
+  // Ollama: { message: { content: "..." } }
+  if (data.message?.content) return data.message.content;
+  return null;
 }
 
 // -- Dedup helpers ----------------------------------------------------------
@@ -846,4 +1156,26 @@ function applyPlanMarkers(text: string, get: () => any, set: (fn: any) => void):
   }
 
   return text.replace(PLAN_MARKER_RE, "").trim();
+}
+
+/** Extract and strip <tool_feedback> and <session_summary> tags from model text. */
+function extractToolFeedback(
+  text: string,
+  round: number,
+  feedbackLog: Array<{ round: number; raw: string }>,
+): { text: string; sessionSummary: string } {
+  let sessionSummary = "";
+  const feedbackRegex = /<tool_feedback>([\s\S]*?)<\/tool_feedback>/g;
+  let match;
+  while ((match = feedbackRegex.exec(text)) !== null) {
+    feedbackLog.push({ round, raw: match[1].trim() });
+  }
+  const summaryMatch = text.match(/<session_summary>([\s\S]*?)<\/session_summary>/);
+  if (summaryMatch) sessionSummary = summaryMatch[1].trim();
+
+  const cleaned = text
+    .replace(/<tool_feedback>[\s\S]*?<\/tool_feedback>/g, "")
+    .replace(/<session_summary>[\s\S]*?<\/session_summary>/g, "")
+    .trim();
+  return { text: cleaned, sessionSummary };
 }

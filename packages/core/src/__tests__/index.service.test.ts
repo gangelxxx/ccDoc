@@ -19,7 +19,7 @@ beforeEach(async () => {
 });
 
 describe("IndexService.reindexAll", () => {
-  it("после reindexAll FTS индекс содержит все секции", async () => {
+  it("after reindexAll the FTS index contains all sections", async () => {
     await insertSection(db, "id-1", "Kanban board", '{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"workflow cards"}]}]}');
     await insertSection(db, "id-2", "API documentation");
 
@@ -28,7 +28,7 @@ describe("IndexService.reindexAll", () => {
     expect(await ftsRepo.count()).toBe(2);
   });
 
-  it("после reindexAll поиск по заголовку работает", async () => {
+  it("after reindexAll search by title works", async () => {
     await insertSection(db, "id-1", "Authentication service");
     await indexService.reindexAll();
 
@@ -37,7 +37,7 @@ describe("IndexService.reindexAll", () => {
     expect(results[0].id).toBe("id-1");
   });
 
-  it("reindexAll не включает удалённые секции", async () => {
+  it("reindexAll does not include deleted sections", async () => {
     await insertSection(db, "id-active", "Active section");
     await insertSection(db, "id-deleted", "Deleted section");
     await db.execute({
@@ -52,14 +52,14 @@ describe("IndexService.reindexAll", () => {
     expect(results).toHaveLength(0);
   });
 
-  it("reindexAll на пустой базе не падает", async () => {
+  it("reindexAll on an empty database does not crash", async () => {
     await expect(indexService.reindexAll()).resolves.not.toThrow();
     expect(await ftsRepo.count()).toBe(0);
   });
 });
 
 describe("IndexService.indexSection", () => {
-  it("индексирует секцию — она находится через FTS", async () => {
+  it("indexes a section — it is found via FTS", async () => {
     await insertSection(db, "id-1", "Sprint planning");
 
     const section = {
@@ -82,7 +82,7 @@ describe("IndexService.indexSection", () => {
     expect(results[0].id).toBe("id-1");
   });
 
-  it("повторный indexSection обновляет запись (upsert)", async () => {
+  it("repeated indexSection updates the entry (upsert)", async () => {
     await insertSection(db, "id-1", "Old title");
 
     const section = {
@@ -100,7 +100,7 @@ describe("IndexService.indexSection", () => {
     };
     await indexService.indexSection(section);
 
-    // Обновляем заголовок в sections
+    // Update the title in sections
     await db.execute({
       sql: "UPDATE sections SET title = ? WHERE id = ?",
       args: ["New title", "id-1"],
@@ -108,14 +108,14 @@ describe("IndexService.indexSection", () => {
     section.title = "New title";
     await indexService.indexSection(section);
 
-    expect(await ftsRepo.count()).toBe(1); // не задублировалось
+    expect(await ftsRepo.count()).toBe(1); // not duplicated
     const results = await ftsRepo.search("New");
     expect(results).toHaveLength(1);
   });
 });
 
 describe("IndexService.removeSection", () => {
-  it("после removeSection секция не находится", async () => {
+  it("after removeSection the section is not found", async () => {
     await insertSection(db, "id-1", "Roadmap");
     const section = {
       id: "id-1",
@@ -140,7 +140,7 @@ describe("IndexService.removeSection", () => {
 });
 
 describe("IndexService — breadcrumbs", () => {
-  it("дочерняя секция индексируется с breadcrumbs родителя", async () => {
+  it("child section is indexed with parent breadcrumbs", async () => {
     await insertSection(db, "parent-id", "Backend");
     await db.execute({
       sql: "INSERT INTO sections (id, parent_id, title, content, type, sort_key) VALUES (?, ?, ?, ?, 'file', 'a0')",
@@ -162,14 +162,14 @@ describe("IndexService — breadcrumbs", () => {
     };
     await indexService.indexSection(section);
 
-    // Поиск по имени родителя должен находить дочернюю секцию через breadcrumbs
+    // Searching by parent name should find the child section via breadcrumbs
     const results = await ftsRepo.search("Backend");
     expect(results.some((r) => r.id === "child-id")).toBe(true);
   });
 });
 
 /* ------------------------------------------------------------------ */
-/* Тесты для IndexService с embedding                                 */
+/* Tests for IndexService with embedding                               */
 /* ------------------------------------------------------------------ */
 
 function makeMockEmbeddingModel(): IEmbeddingProvider {
@@ -201,8 +201,8 @@ function makeSection(id: string, title: string) {
   };
 }
 
-describe("IndexService — embedding через indexSection", () => {
-  it("indexSection() с embeddingModel вычисляет embedding", async () => {
+describe("IndexService — embedding via indexSection", () => {
+  it("indexSection() with embeddingModel computes embedding", async () => {
     const mockModel = makeMockEmbeddingModel();
     const embDb = await createTestDb();
     const embFtsRepo = new FtsRepo(embDb);
@@ -216,7 +216,7 @@ describe("IndexService — embedding через indexSection", () => {
     expect(await embEmbeddingRepo.count()).toBe(1);
   });
 
-  it("updateEmbedding пропускает если textHash не изменился", async () => {
+  it("updateEmbedding skips if textHash has not changed", async () => {
     const mockModel = makeMockEmbeddingModel();
     const embDb = await createTestDb();
     const embFtsRepo = new FtsRepo(embDb);
@@ -226,18 +226,18 @@ describe("IndexService — embedding через indexSection", () => {
     await insertSection(embDb, "s1", "Stable section");
     const section = makeSection("s1", "Stable section");
 
-    // Первый вызов — encode вызывается
+    // First call — encode is called
     await embIndexService.indexSection(section);
     expect(mockModel.encode).toHaveBeenCalledTimes(1);
 
-    // Второй вызов с тем же контентом — encode НЕ вызывается повторно
+    // Second call with the same content — encode is NOT called again
     await embIndexService.indexSection(section);
     expect(mockModel.encode).toHaveBeenCalledTimes(1);
   });
 });
 
-describe("IndexService — embedding через reindexAll", () => {
-  it("reindexAll() с embeddingModel заполняет section_embeddings", async () => {
+describe("IndexService — embedding via reindexAll", () => {
+  it("reindexAll() with embeddingModel populates section_embeddings", async () => {
     const mockModel = makeMockEmbeddingModel();
     const embDb = await createTestDb();
     const embFtsRepo = new FtsRepo(embDb);
@@ -254,8 +254,8 @@ describe("IndexService — embedding через reindexAll", () => {
   });
 });
 
-describe("IndexService — removeSection с embedding", () => {
-  it("removeSection() удаляет embedding", async () => {
+describe("IndexService — removeSection with embedding", () => {
+  it("removeSection() deletes the embedding", async () => {
     const mockModel = makeMockEmbeddingModel();
     const embDb = await createTestDb();
     const embFtsRepo = new FtsRepo(embDb);

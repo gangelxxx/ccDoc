@@ -43,7 +43,7 @@ export function registerWriteTools(server: McpServer): void {
             }
           } else {
             // No headings found — create single child section with all content
-            await sections.create({ parentId: file.id, title: "Содержание", type: "section", content });
+            await sections.create({ parentId: file.id, title: "Contents", type: "section", content });
             totalCreated = 1;
           }
           await index.reindexAll();
@@ -85,11 +85,11 @@ export function registerWriteTools(server: McpServer): void {
 
         if (content !== undefined) {
           // Content provided — go through format conversion (markdown → internal)
-          await sections.update(section_id, finalTitle, content);
+          await sections.update(section_id, finalTitle, content, "mcp");
         } else if (titleChanged) {
           // Title-only update — use raw content to avoid lossy markdown round-trip
           // (kanban, idea, drawing store JSON that would be corrupted by markdown conversion)
-          await sections.updateRaw(section_id, finalTitle, current.content);
+          await sections.updateRaw(section_id, finalTitle, current.content, "mcp");
         }
         const updated = await sections.getById(section_id);
         if (updated) {
@@ -260,7 +260,7 @@ export function registerWriteTools(server: McpServer): void {
                 }
               }
             } else {
-              await sections.create({ parentId: file.id, title: "Содержание", type: "section", content: def.content });
+              await sections.create({ parentId: file.id, title: "Contents", type: "section", content: def.content });
             }
             createdIds.push(file.id);
           } else {
@@ -322,6 +322,40 @@ export function registerWriteTools(server: McpServer): void {
         const oid = await history.commit(allSections, message);
         return {
           content: [{ type: "text", text: JSON.stringify({ commit_oid: oid, message }) }],
+        };
+      } catch (e: unknown) {
+        return errorResult(e);
+      }
+    }
+  );
+
+  server.tool(
+    "set_idea_progress",
+    "Set progress percentage (0-100) for an idea message. Each message in an idea section has its own progress.",
+    {
+      project_token: z.string().uuid().describe("Project UUID token"),
+      section_id: z.string().uuid().describe("Idea section UUID"),
+      message_id: z.string().describe("Message ID within the idea"),
+      progress: z.number().min(0).max(100).describe("Progress percentage (0-100)"),
+    },
+    async ({ project_token, section_id, message_id, progress }) => {
+      try {
+        const { sections } = await getProjectServices(project_token);
+        const section = await sections.getById(section_id);
+        if (!section) return errorResult(new Error(`Section ${section_id} not found`));
+        if (section.type !== "idea") return errorResult(new Error(`Section ${section_id} is not an idea (type: ${section.type})`));
+        let data: { messages: any[]; kanbanId?: string };
+        try {
+          data = JSON.parse(section.content || '{"messages":[]}');
+        } catch {
+          data = { messages: [] };
+        }
+        const msg = data.messages.find((m: any) => m.id === message_id);
+        if (!msg) return errorResult(new Error(`Message ${message_id} not found in idea ${section_id}`));
+        msg.progress = Math.max(0, Math.min(100, Math.round(progress)));
+        await sections.updateRaw(section_id, section.title, JSON.stringify(data));
+        return {
+          content: [{ type: "text", text: JSON.stringify({ section_id, message_id, progress: msg.progress }) }],
         };
       } catch (e: unknown) {
         return errorResult(e);

@@ -1,3 +1,4 @@
+import type { ProgressStage } from "@ccdoc/core";
 import type { StateCreator } from "zustand";
 import type { Lang } from "../i18n.js";
 import type { CustomAgent, LlmPlan, SessionBuffer, SessionBufferEntry } from "./llm/types.js";
@@ -22,6 +23,16 @@ export interface TreeNode {
   summary?: string | null;
   updated_at: string;
   children: TreeNode[];
+  hasChildren?: boolean;
+  childrenLoaded?: boolean;
+  linkedProjectMeta?: {
+    linked_project_id: string;
+    project_token: string | null;
+    has_ccdoc: boolean;
+    doc_status: string;
+    link_type: string;
+    source_path: string;
+  };
 }
 
 export interface Section {
@@ -42,6 +53,64 @@ export interface HistoryCommit {
   message: string;
   author: string;
   timestamp: number;
+}
+
+// ─── Multi-provider model tiers ─────────────────────────────
+
+export type ModelTier = "strong" | "medium" | "weak";
+
+export interface ProviderScriptRef {
+  type: "builtin" | "custom";
+  builtinId?: string;
+  customPath?: string;
+  customCode?: string;
+}
+
+export interface ModelTierConfig {
+  providerScript: ProviderScriptRef;
+  modelId: string;
+  baseUrl: string;
+  apiKey: string;
+  effort: "low" | "medium" | "high";
+  thinking: boolean;
+  thinkingBudget: number;
+  maxTokens: number;
+  temperature: number;
+}
+
+export interface ModelTiersConfig {
+  strong: ModelTierConfig;
+  medium: ModelTierConfig;
+  weak: ModelTierConfig;
+  chatTier: ModelTier;
+  passportTier: ModelTier;
+  summaryTier: ModelTier;
+}
+
+export type TestDifficulty = "light" | "medium" | "heavy";
+
+export type TestStageName =
+  // Base (always run)
+  | "connection" | "tool_selection" | "tool_params" | "param_types" | "error_recovery" | "multi_turn" | "structured_output" | "instruction_following"
+  // Light
+  | "light_basic_tool" | "light_short_answer" | "light_thinking"
+  // Medium
+  | "medium_multi_tool" | "medium_long_output" | "medium_param_sensitivity"
+  // Heavy
+  | "heavy_doc_generation" | "heavy_doc_restructure" | "heavy_completeness" | "heavy_architecture";
+
+export interface ModelTestResult {
+  stage: TestStageName;
+  success: boolean;
+  latencyMs: number;
+  error?: string;
+  details?: string;
+}
+
+export interface ProviderScriptMeta {
+  id: string;
+  name: string;
+  description: string;
 }
 
 // ─── LLM types ──────────────────────────────────────────────
@@ -89,6 +158,15 @@ export interface LlmMessage {
   isQuestion?: boolean; // true for ask_user questions
   plan?: LlmPlan; // work plan with checkable steps
   agentCard?: AgentCard; // live agent activity card
+  /** Sections created by the assistant in this message (clickable links) */
+  createdSections?: Array<{ id: string; title: string; type: string }>;
+}
+
+export interface LlmSessionContext {
+  mode: "chat" | "plan" | "doc-update";
+  ideaId?: string;
+  messageId?: string;
+  projectToken?: string;
 }
 
 export interface LlmSession {
@@ -97,6 +175,7 @@ export interface LlmSession {
   messages: LlmMessage[];
   tokensUsed: { input: number; output: number; cacheRead: number; cacheCreation: number };
   buffer?: SessionBuffer; // shared buffer between assistant and agents
+  context?: LlmSessionContext;
   createdAt: number;
   updatedAt: number;
 }
@@ -118,6 +197,8 @@ export interface BackgroundTask {
   startedAt: number;
   tokens?: { input: number; output: number; cacheRead?: number; cacheCreation?: number };
   finishedAt?: number;
+  progress?: number; // 0..1, undefined = indeterminate
+  lastUpdatedAt?: number;
 }
 
 export interface IdeaProcessingTask {
@@ -155,6 +236,49 @@ export interface IndexingConfig {
   stalenessIntervalMin: number;
 }
 
+// ─── Spellcheck types ──────────────────────────────────────
+
+export interface SpellcheckConfig {
+  enabled: boolean;
+  languages: string[];
+  userDictionary: string[];
+}
+
+// ─── Workspace types ────────────────────────────────────────
+
+export interface Workspace {
+  id: string;
+  name: string;
+  icon: string | null;
+  root_project_token: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type DocStatus = "none" | "loaded" | "generating" | "error";
+export type LinkType = "dependency" | "reference" | "monorepo_part";
+
+export interface LinkedProject {
+  id: string;
+  workspace_id: string;
+  project_token: string | null;
+  source_path: string;
+  alias: string | null;
+  icon: string | null;
+  has_ccdoc: boolean;
+  doc_status: DocStatus;
+  link_type: LinkType;
+  added_at: string;
+  sort_order: number;
+}
+
+export interface SuggestedLink {
+  source_path: string;
+  name: string;
+  link_type: LinkType;
+  config_source: string;
+}
+
 // ─── AppState (composite of all slices) ─────────────────────
 
 export interface AppState {
@@ -188,7 +312,7 @@ export interface AppState {
   toggleHistoryExpanded: () => void;
 
   // Navigation history
-  navHistory: string[];
+  navHistory: { id: string; source: "project" | "user" }[];
   navIndex: number;
   canGoBack: boolean;
   canGoForward: boolean;
@@ -206,11 +330,15 @@ export interface AppState {
   // Tree & Sections
   tree: TreeNode[];
   currentSection: Section | null;
+  activeSectionToken: string | null;
   editorSelectedText: string;
   _editorView: any;
   setEditorView: (view: any) => void;
   setEditorSelectedText: (text: string) => void;
   loadTree: () => Promise<void>;
+  loadRootTree: () => Promise<void>;
+  loadChildren: (parentId: string) => Promise<void>;
+  expandToSection: (id: string) => Promise<void>;
   selectSection: (id: string) => Promise<void>;
   createSection: (parentId: string | null, title: string, type: string, icon?: string | null) => Promise<void>;
   updateSection: (id: string, title: string, content: string) => Promise<void>;
@@ -232,6 +360,10 @@ export interface AppState {
   ideaSearchTrigger: number;
   /** Counter that increments to toggle editor search bar */
   editorSearchTrigger: number;
+  /** Set of section IDs with unsaved editor changes — guards against DB overwrites. */
+  dirtyEditors: Set<string>;
+  markEditorDirty: (sectionId: string) => void;
+  markEditorClean: (sectionId: string) => void;
 
   // History
   history: HistoryCommit[];
@@ -300,7 +432,11 @@ export interface AppState {
 
   // Loading states
   sectionLoading: boolean;
+  loadingSectionId: string | null;
   treeLoading: boolean;
+
+  /** In-memory cache of fetched sections (id → Section). */
+  _sectionCache: Map<string, Section>;
 
   // LLM panel
   llmPanelOpen: boolean;
@@ -319,10 +455,23 @@ export interface AppState {
 
   llmApiKey: string;
   setLlmApiKey: (key: string) => void;
+  /** True if any tier has an API key configured (or uses a keyless provider like ollama) */
+  hasLlmAccess: () => boolean;
   llmModels: { id: string; display_name: string }[];
   llmModelsLoading: boolean;
   llmModelsError: string | null;
   fetchLlmModels: (apiKey?: string) => Promise<void>;
+
+  // Model tiers
+  modelTiers: ModelTiersConfig;
+  setModelTier: (tier: ModelTier, config: Partial<ModelTierConfig>) => void;
+  setTierAssignment: (key: "chatTier" | "passportTier" | "summaryTier", tier: ModelTier) => void;
+  testModelTier: (tier: ModelTier) => Promise<ModelTestResult[]>;
+  modelTestResults: Record<ModelTier, ModelTestResult[] | null>;
+  modelTestLoading: Record<ModelTier, boolean>;
+  fetchTierModels: (tier: ModelTier) => Promise<{ id: string; name: string }[]>;
+  builtinScripts: ProviderScriptMeta[];
+  loadBuiltinScripts: () => Promise<void>;
   llmChatConfig: LlmConfig;
   setLlmChatConfig: (cfg: Partial<LlmConfig>) => void;
   llmPassportConfig: LlmConfig;
@@ -351,8 +500,10 @@ export interface AppState {
   // Developer mode
   devMode: boolean;
   devTrackToolIssues: boolean;
+  devToolFeedback: boolean;
   setDevMode: (v: boolean) => void;
   setDevTrackToolIssues: (v: boolean) => void;
+  setDevToolFeedback: (v: boolean) => void;
 
   llmCurrentPlan: LlmPlan | null;
   llmMessages: LlmMessage[];
@@ -373,13 +524,17 @@ export interface AppState {
   stopLlmChat: () => void;
   retryLlmMessage: (userMsgIndex?: number) => void;
   clearLlmMessages: () => void;
-  llmSessionMode: "chat" | "doc-update";
+  llmSessionContext: LlmSessionContext | null;
+  llmTargetProjectToken: string | null;
   startDocUpdateSession: () => void;
+  startLinkedDocGenSession: (linkedProjectId: string, mode?: "generate" | "update") => void;
+  startDocUpdateQueue: (projects: Array<{ type: "main" } | { type: "linked"; linkedProjectId: string; mode: "generate" | "update" }>) => Promise<void>;
   llmSessions: LlmSession[];
   llmCurrentSessionId: string | null;
   saveLlmSession: () => void;
   loadLlmSession: (id: string) => void;
   deleteLlmSession: (id: string) => void;
+  bumpSession: (sessionId: string) => void;
 
   // Passport
   passport: Record<string, string>;
@@ -403,10 +558,28 @@ export interface AppState {
   startBgTask: (label: string) => string;
   finishBgTask: (id: string) => void;
   updateBgTask: (id: string, updates: Partial<Omit<BackgroundTask, "id">>) => void;
+  updateBgTaskProgress: (id: string, progress: number) => void;
+
+  // Summary generation tracking (section IDs currently being summarized)
+  summarizingIds: Set<string>;
+  addSummarizingId: (id: string) => void;
+  removeSummarizingId: (id: string) => void;
   semanticProgressItem: string | null;
   semanticProgressLog: string[];
   onSemanticProgress: (item: string) => void;
   clearSemanticProgress: () => void;
+
+  // Auto-verify plans
+  autoVerifyPlan: boolean;
+  setAutoVerifyPlan: (v: boolean) => void;
+
+  // Icon progress
+  showIconProgress: boolean;
+  setShowIconProgress: (v: boolean) => void;
+
+  // Progress stages
+  progressStages: ProgressStage[];
+  setProgressStages: (stages: ProgressStage[]) => void;
 
   // Voice STT
   voiceModelId: string;
@@ -442,11 +615,69 @@ export interface AppState {
   indexingConfig: IndexingConfig;
   setIndexingConfig: (cfg: Partial<IndexingConfig>) => void;
 
+  // Spellcheck
+  spellcheckConfig: SpellcheckConfig;
+  setSpellcheckConfig: (cfg: Partial<SpellcheckConfig>) => void;
+
+  // History settings
+  historyConfig: { historyRetainDays: number; maxSnapshotsPerSection: number; snapshotMaxAgeDays: number; snapshotCoalesceIntervalSec: number };
+  setHistoryConfig: (cfg: Partial<{ historyRetainDays: number; maxSnapshotsPerSection: number; snapshotMaxAgeDays: number; snapshotCoalesceIntervalSec: number }>) => void;
+
   // Tree expand/collapse state
   expandedNodes: Set<string>;
+  loadingNodes: Set<string>;
   toggleExpanded: (id: string) => void;
   expandNode: (id: string) => void;
   collapseAll: () => void;
+  setNodeLoading: (id: string, loading: boolean) => void;
+
+  // Workspace
+  workspace: Workspace | null;
+  linkedProjects: LinkedProject[];
+  workspaceLoading: boolean;
+  loadWorkspace: (projectToken: string) => Promise<void>;
+  ensureWorkspace: (projectToken: string, projectName: string) => Promise<Workspace>;
+  linkProject: (sourcePath: string, linkType: LinkType, alias?: string) => Promise<LinkedProject | null>;
+  unlinkProject: (linkedId: string) => Promise<void>;
+  updateLinkedProject: (linkedId: string, fields: { alias?: string; sort_order?: number }) => Promise<void>;
+  clearWorkspace: () => void;
+  suggestedLinks: SuggestedLink[];
+  scanning: boolean;
+  scanDependencies: (projectPath: string) => Promise<void>;
+  loadLinkedChildren: (linkedProjectToken: string, parentId?: string) => Promise<TreeNode[]>;
+
+  // Cross-project search
+  crossSearchResults: Array<{
+    id: string;
+    title: string;
+    titleHighlighted: string;
+    snippet: string;
+    score: number;
+    breadcrumbs?: string;
+    project_token: string;
+    project_name: string;
+    is_linked: boolean;
+  }>;
+  crossSearchLoading: boolean;
+  crossProjectSearch: (query: string, scope?: string) => Promise<void>;
+
+  // User folder
+  userTree: TreeNode[];
+  userTreeLoading: boolean;
+  userFolderExpanded: boolean;
+  sectionSource: "project" | "user";
+  loadUserTree: () => Promise<void>;
+  createUserSection: (parentId: string | null, title: string, type: string, icon?: string | null) => Promise<void>;
+  updateUserSection: (id: string, title: string, content: string) => Promise<void>;
+  updateUserSectionMarkdown: (id: string, title: string, markdown: string) => Promise<void>;
+  updateUserIcon: (id: string, icon: string | null) => Promise<void>;
+  moveUserSection: (id: string, newParentId: string | null, afterId: string | null) => Promise<void>;
+  duplicateUserSection: (id: string) => Promise<void>;
+  deleteUserSection: (id: string) => Promise<void>;
+  restoreUserSection: (id: string) => Promise<void>;
+  selectUserSection: (id: string) => Promise<void>;
+  toggleUserFolder: () => void;
+  setSectionSource: (source: "project" | "user") => void;
 
   // External changes (quiet mode)
   externalChangePending: boolean;
@@ -456,6 +687,36 @@ export interface AppState {
   refreshCurrentSection: () => Promise<void>;
   dismissExternalChange: () => void;
   clearExternalChange: (id: string) => void;
+
+  // Section view preferences (persisted per section)
+  _sectionPrefs: Record<string, Record<string, unknown>>;
+  _sectionPrefsLoaded: Set<string>;
+  getSectionPref: <T = unknown>(sectionId: string, key: string, defaultValue: T) => T;
+  setSectionPref: (sectionId: string, key: string, value: unknown) => void;
+  loadSectionPrefs: (sectionId: string) => Promise<void>;
+  removeSectionPref: (sectionId: string, key: string) => void;
+  clearSectionPrefsCache: (sectionId: string) => void;
+
+  // Section snapshots (local per-section history)
+  snapshotsPanelOpen: boolean;
+  snapshotsPanelSectionId: string | null;
+  snapshotsPanelSectionTitle: string;
+  snapshots: Array<{ id: string; section_id: string; title: string; type: string; source: string; created_at: string; byte_size: number; content?: string }>;
+  snapshotsLoading: boolean;
+  snapshotsHasMore: boolean;
+  selectedSnapshotIds: string[];
+  diffData: { left: string; right: string; leftLabel: string; rightLabel: string } | null;
+  diffLoading: boolean;
+  openSnapshotsPanel: (sectionId: string, sectionTitle: string) => void;
+  closeSnapshotsPanel: () => void;
+  loadSnapshots: (sectionId: string) => Promise<void>;
+  loadMoreSnapshots: () => Promise<void>;
+  toggleSnapshotSelection: (snapshotId: string) => void;
+  clearSnapshotSelection: () => void;
+  loadDiff: () => Promise<void>;
+  loadDiffWithCurrent: (snapshotId: string) => Promise<void>;
+  restoreSnapshot: (snapshotId: string) => Promise<void>;
+  deleteSnapshot: (snapshotId: string) => Promise<void>;
 }
 
 // ─── Slice helper type ──────────────────────────────────────

@@ -2,9 +2,10 @@ import { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { useAppStore } from "../../stores/app.store.js";
 import { useT } from "../../i18n.js";
+import { callTierRaw, extractResponseText } from "../../stores/llm-engine.js";
 
 export function HistoryPanel({ saveRequested, onSaveHandled }: { saveRequested?: boolean; onSaveHandled?: () => void }) {
-  const { history, commitVersion, viewCommit, historyViewCommit, deleteHistoryCommit, llmApiKey, llmSummaryConfig, language, currentProject } = useAppStore();
+  const { history, commitVersion, viewCommit, historyViewCommit, deleteHistoryCommit, modelTiers, language, currentProject, hasLlmAccess } = useAppStore();
   const t = useT();
   const [showCommit, setShowCommit] = useState(false);
   const [message, setMessage] = useState("");
@@ -25,12 +26,12 @@ export function HistoryPanel({ saveRequested, onSaveHandled }: { saveRequested?:
   };
 
   const handleGenerateMessage = async () => {
-    if (!llmApiKey || !currentProject?.token) return;
+    if (!currentProject?.token) return;
     setGenerating(true);
     const { startBgTask, finishBgTask, updateBgTask } = useAppStore.getState();
-    const taskId = startBgTask(language === "ru" ? "Генерация сообщения" : "Generating message");
+    const taskId = startBgTask("Generating message");
     try {
-      const { model, maxTokens, temperature, thinking, thinkingBudget } = llmSummaryConfig;
+      const tierConfig = modelTiers[modelTiers.summaryTier];
       const diff = await window.api.getHistoryDiff(currentProject.token);
       const langInstruction = language === "ru" ? "Respond in Russian." : "Respond in English.";
 
@@ -39,14 +40,10 @@ export function HistoryPanel({ saveRequested, onSaveHandled }: { saveRequested?:
       const estInput = Math.round((commitSystem.length + commitMessages[0].content.length) / 4);
       updateBgTask(taskId, { tokens: { input: estInput, output: 0 } });
 
-      const data = await window.api.llmChat({
-        apiKey: llmApiKey,
+      const data = await callTierRaw("summaryTier", {
         system: commitSystem,
         messages: commitMessages,
-        model,
-        maxTokens,
-        temperature: thinking ? 1.0 : temperature,
-        ...(thinking ? { thinking: { type: "enabled", budget_tokens: thinkingBudget } } : {}),
+        ...(tierConfig.thinking ? { thinking: { type: "enabled", budget_tokens: tierConfig.thinkingBudget } } : {}),
       });
 
       if (data.usage) {
@@ -55,8 +52,7 @@ export function HistoryPanel({ saveRequested, onSaveHandled }: { saveRequested?:
         });
       }
 
-      const textBlock = data.content?.find((b: any) => b.type === "text");
-      const generated = textBlock?.text?.trim();
+      const generated = extractResponseText(data)?.trim();
       if (generated) setMessage(generated);
     } catch (err) {
       console.error("[generateCommitMessage] failed:", err);
@@ -124,8 +120,8 @@ export function HistoryPanel({ saveRequested, onSaveHandled }: { saveRequested?:
               <button
                 className="btn"
                 onClick={handleGenerateMessage}
-                disabled={generating || !llmApiKey}
-                title={!llmApiKey ? t("needApiKey") : t("generateCommitMsg")}
+                disabled={generating || !hasLlmAccess()}
+                title={!hasLlmAccess() ? t("needApiKey") : t("generateCommitMsg")}
                 style={{ display: "inline-flex", alignItems: "center", gap: 4, minWidth: 210 }}
               >
                 {generating ? (

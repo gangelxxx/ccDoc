@@ -1,5 +1,15 @@
 import type { AppState, TreeNode, SliceCreator } from "../types.js";
 
+/** Tag every node in a full tree as loaded (used after full-tree fetch). */
+function markAllLoaded(nodes: TreeNode[]): TreeNode[] {
+  return nodes.map(n => ({
+    ...n,
+    childrenLoaded: true,
+    hasChildren: n.children.length > 0,
+    children: markAllLoaded(n.children),
+  }));
+}
+
 export interface ExternalChangesSlice {
   externalChangePending: boolean;
   externalChangeTimestamp: number | null;
@@ -19,14 +29,15 @@ function buildTimestampMap(nodes: TreeNode[], out = new Map<string, string>()): 
   return out;
 }
 
-/** Find IDs of nodes that were added or modified compared to the old tree */
+/** Find IDs of nodes that were modified compared to the old tree.
+ *  Nodes absent from the old tree are ignored (they're lazily-loaded children, not external changes). */
 function detectChangedIds(oldTree: TreeNode[], newTree: TreeNode[]): Set<string> {
   const oldMap = buildTimestampMap(oldTree);
   const newMap = buildTimestampMap(newTree);
   const changed = new Set<string>();
   for (const [id, ts] of newMap) {
     const oldTs = oldMap.get(id);
-    if (!oldTs || oldTs !== ts) {
+    if (oldTs && oldTs !== ts) {
       changed.add(id);
     }
   }
@@ -42,13 +53,18 @@ export const createExternalChangesSlice: SliceCreator<ExternalChangesSlice> = (s
     const { currentProject, currentSection, tree: oldTree } = get();
     if (!currentProject) return;
     try {
-      const tree = await window.api.getTree(currentProject.token);
+      const rawTree = await window.api.getTree(currentProject.token);
+      const tree = markAllLoaded(rawTree);
       const changedIds = detectChangedIds(oldTree, tree);
 
       // Nothing changed — skip re-render
       if (changedIds.size === 0) return;
 
-      const updates: Partial<AppState> = { tree };
+      // Evict changed sections from cache
+      const cache = new Map(get()._sectionCache);
+      for (const id of changedIds) cache.delete(id);
+
+      const updates: Partial<AppState> = { tree, _sectionCache: cache };
 
       // Merge with any existing uncleared changed IDs
       const prev = get().externallyChangedIds;
@@ -91,10 +107,12 @@ export const createExternalChangesSlice: SliceCreator<ExternalChangesSlice> = (s
     }
     try {
       const section = await window.api.getSection(currentProject.token, currentSection.id);
-      // Also clear this ID from the changed set
+      // Also clear this ID from the changed set + update cache
       const next = new Set(get().externallyChangedIds);
       next.delete(currentSection.id);
-      set({ currentSection: section, externalChangePending: false, externallyChangedIds: next });
+      const cache = new Map(get()._sectionCache);
+      cache.set(currentSection.id, section);
+      set({ currentSection: section, _sectionCache: cache, externalChangePending: false, externallyChangedIds: next });
     } catch {
       // Section was deleted -- clear it
       set({ currentSection: null, externalChangePending: false });
@@ -108,6 +126,25 @@ export const createExternalChangesSlice: SliceCreator<ExternalChangesSlice> = (s
   clearExternalChange: (id: string) => {
     const next = new Set(get().externallyChangedIds);
     next.delete(id);
+
+    // Also clear all descendants (reading a file = reading all its sections)
+    const collectDescendantIds = (nodes: TreeNode[], parentId: string): void => {
+      for (const n of nodes) {
+        if (n.id === parentId) {
+          const clearChildren = (children: TreeNode[]) => {
+            for (const c of children) {
+              next.delete(c.id);
+              if (c.children.length) clearChildren(c.children);
+            }
+          };
+          clearChildren(n.children);
+          return;
+        }
+        if (n.children.length) collectDescendantIds(n.children, parentId);
+      }
+    };
+    collectDescendantIds(get().tree, id);
+
     set({ externallyChangedIds: next });
   },
 });

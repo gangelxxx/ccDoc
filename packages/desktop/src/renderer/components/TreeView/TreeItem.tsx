@@ -1,15 +1,16 @@
-import { useState, useRef, useEffect } from "react";
-import type { TreeNode, DragState, DropState, DropPosition } from "./tree-utils.js";
+import { useState, useRef, useEffect, memo } from "react";
+import type { FlatTreeItem, DragState, DropState, DropPosition } from "./tree-utils.js";
 import { useT } from "../../i18n.js";
+import { useAppStore } from "../../stores/app.store.js";
 
 export interface TreeItemProps {
-  node: TreeNode;
-  depth: number;
-  activeId: string | null;
-  editingId: string | null;
-  selectedIds: Set<string>;
-  expandedNodes: Set<string>;
-  externallyChangedIds: Set<string>;
+  item: FlatTreeItem;
+  style: React.CSSProperties;
+  isActive: boolean;
+  isEditing: boolean;
+  isSelected: boolean;
+  isExternallyChanged: boolean;
+  isSectionLoading: boolean;
   onToggleExpanded: (id: string) => void;
   onExpandNode: (id: string) => void;
   onSelect: (id: string) => void;
@@ -18,11 +19,11 @@ export interface TreeItemProps {
   onRename: (id: string, title: string) => void;
   onStartEdit: (id: string | null) => void;
   onCreateChild: (parentId: string, parentType?: string) => void;
-  onContextMenu: (x: number, y: number, node: TreeNode) => void;
+  onContextMenu: (x: number, y: number, node: FlatTreeItem["node"]) => void;
   onClearExternalChange: (id: string) => void;
   dragItem: DragState | null;
   dropTarget: DropState | null;
-  onDragStart: (node: TreeNode) => void;
+  onDragStart: (node: FlatTreeItem["node"]) => void;
   onDragEnd: () => void;
   onDragOver: (targetId: string, position: DropPosition) => void;
   onDrop: (targetId: string, position: DropPosition) => void;
@@ -31,14 +32,30 @@ export interface TreeItemProps {
   getImportableFilePaths?: (e: React.DragEvent) => string[];
 }
 
-export function TreeItem({
-  node,
-  depth,
-  activeId,
-  editingId,
-  selectedIds,
-  expandedNodes,
-  externallyChangedIds,
+function SummaryBadge({ nodeId, summary }: { nodeId: string; summary?: string | null }) {
+  const isSummarizing = useAppStore((s) => s.summarizingIds.has(nodeId));
+  const t = useT();
+  if (isSummarizing) {
+    return (
+      <span className="tree-item-summary-badge tree-item-summary-loading" title={t("bgGeneratingSummary" as any)}>
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" style={{ animation: "spin 1s linear infinite", display: "block" }}>
+          <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+        </svg>
+      </span>
+    );
+  }
+  if (!summary) return null;
+  return <span className="tree-item-summary-badge" title={summary}>S</span>;
+}
+
+export const TreeItem = memo(function TreeItem({
+  item,
+  style,
+  isActive,
+  isEditing,
+  isSelected,
+  isExternallyChanged,
+  isSectionLoading,
   onToggleExpanded,
   onExpandNode,
   onSelect,
@@ -60,22 +77,21 @@ export function TreeItem({
   getImportableFilePaths,
 }: TreeItemProps) {
   const t = useT();
-  const expanded = expandedNodes.has(node.id);
+  const { node, depth, isExpanded, isLoading, hasChildren } = item;
   const [editValue, setEditValue] = useState(node.title);
   const inputRef = useRef<HTMLInputElement>(null);
   const expandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const dragStartPos = useRef<{ x: number; y: number } | null>(null);
+  const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const isActive = node.id === activeId;
-  const isSelected = selectedIds.has(node.id);
-  const isEditing = editingId === node.id;
-  const isExternallyChanged = externallyChangedIds.has(node.id);
-  const hasChildren = node.children.length > 0;
+  const isLinkedProject = !!node.linkedProjectMeta;
+  const isWorkspaceRoot = node.id === "workspace-root";
+  const linkedMeta = node.linkedProjectMeta;
+
   const isFolder = node.type === "folder";
   const isFile = node.type === "file";
   const isContainer = isFolder || isFile;
   const isSection = node.type === "section";
-  const canAddChild = isContainer || isSection;
+  const canAddChild = (isContainer || isSection) && !isLinkedProject;
   const canCollapse = isContainer || hasChildren;
 
   useEffect(() => {
@@ -96,7 +112,7 @@ export function TreeItem({
     onStartEdit(null);
   };
 
-  const defaultIcon = isFolder ? (expanded ? "\uD83D\uDCC2" : "\uD83D\uDCC1")
+  const defaultIcon = isFolder ? (isExpanded ? "\uD83D\uDCC2" : "\uD83D\uDCC1")
     : isFile ? "\uD83D\uDCC4"
     : node.type === "section" ? "\u00A7"
     : node.type === "idea" ? "\uD83D\uDCA1"
@@ -123,26 +139,27 @@ export function TreeItem({
     : "";
 
   return (
-    <div>
+    <div style={style}>
       <div
-        className={`tree-item ${isActive ? "active" : ""} ${isSelected ? "selected" : ""} ${isDragging ? "tree-item-dragging" : ""} ${dropClass}`}
+        className={`tree-item ${isActive ? "active" : ""} ${isSelected ? "selected" : ""} ${isDragging ? "tree-item-dragging" : ""} ${isLinkedProject ? "tree-item-linked" : ""} ${dropClass}`}
         style={{ paddingLeft: 6 + depth * 12 }}
         tabIndex={0}
-        draggable={!isEditing}
+        draggable={!isEditing && !isLinkedProject && !isWorkspaceRoot}
         onDragStart={(e) => {
-          dragStartPos.current = { x: e.clientX, y: e.clientY };
           e.dataTransfer.effectAllowed = "move";
           e.dataTransfer.setData("text/plain", node.id);
-          // Delay so the element renders before capture
           setTimeout(() => onDragStart(node), 0);
         }}
         onDragEnd={() => {
-          dragStartPos.current = null;
           if (expandTimerRef.current) { clearTimeout(expandTimerRef.current); expandTimerRef.current = null; }
           onDragEnd();
         }}
         onDragOver={(e) => {
-          // External file drop on folders
+          // Block drops from user folder tree
+          if (e.dataTransfer.types.includes("text/x-user-section")) {
+            e.dataTransfer.dropEffect = "none";
+            return;
+          }
           if (!dragItem && hasImportableFiles?.(e) && isFolder) {
             e.preventDefault();
             e.stopPropagation();
@@ -150,14 +167,12 @@ export function TreeItem({
             onDragOver(node.id, "inside");
             return;
           }
-          // External file drag over non-folder: let it bubble to container for drop zone highlight
           if (!dragItem) return;
           e.preventDefault();
           e.stopPropagation();
           if (dragItem.id === node.id) return;
           const pos = getDropPosition(e);
-          // Auto-expand collapsed containers on hover
-          if (pos === "inside" && !expanded && canCollapse) {
+          if (pos === "inside" && !isExpanded && canCollapse) {
             if (!expandTimerRef.current) {
               expandTimerRef.current = setTimeout(() => { onExpandNode(node.id); expandTimerRef.current = null; }, 600);
             }
@@ -171,23 +186,19 @@ export function TreeItem({
           if (expandTimerRef.current) { clearTimeout(expandTimerRef.current); expandTimerRef.current = null; }
         }}
         onDrop={(e) => {
-          // External file drop on folder
+          // Block drops from user folder tree
+          if (e.dataTransfer.types.includes("text/x-user-section")) return;
           if (!dragItem && isFolder && getImportableFilePaths && onFileDrop) {
             e.preventDefault();
             e.stopPropagation();
             const paths = getImportableFilePaths(e);
-            if (paths.length) {
-              onFileDrop(paths, node.id);
-              return;
-            }
+            if (paths.length) { onFileDrop(paths, node.id); return; }
           }
-          // External file drop on non-folder: let it bubble to container
           if (!dragItem) return;
           e.preventDefault();
           e.stopPropagation();
           if (dragItem.id === node.id) return;
-          const pos = getDropPosition(e);
-          onDrop(node.id, pos);
+          onDrop(node.id, getDropPosition(e));
         }}
         onClick={(e) => {
           if (e.shiftKey) {
@@ -197,35 +208,42 @@ export function TreeItem({
             onMultiSelect(node.id, true, false);
           } else {
             onMultiSelect(node.id, false, false);
-            onSelect(node.id);
+            if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+            clickTimerRef.current = setTimeout(() => {
+              clickTimerRef.current = null;
+              onSelect(node.id);
+            }, 200);
           }
           if (isExternallyChanged) onClearExternalChange(node.id);
         }}
-        onKeyDown={(e) => {
-          if (e.key === "Delete" && !isEditing) {
-            e.preventDefault();
-            onDelete(node.id, node.type);
-          } else if (e.key === "F2" && !isEditing) {
-            e.preventDefault();
-            onStartEdit(node.id);
+        onDoubleClick={() => {
+          if (clickTimerRef.current) {
+            clearTimeout(clickTimerRef.current);
+            clickTimerRef.current = null;
           }
+          if (canCollapse) onToggleExpanded(node.id);
         }}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          onContextMenu(e.clientX, e.clientY, node);
+        onKeyDown={(e) => {
+          if (e.key === "Delete" && !isEditing && !isLinkedProject && !isWorkspaceRoot) { e.preventDefault(); onDelete(node.id, node.type); }
+          else if (e.key === "F2" && !isEditing && !isWorkspaceRoot) { e.preventDefault(); onStartEdit(node.id); }
         }}
+        onContextMenu={(e) => { e.preventDefault(); onContextMenu(e.clientX, e.clientY, node); }}
       >
         {canCollapse && (
-          <span
-            className="tree-item-toggle"
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleExpanded(node.id);
-              if (isExternallyChanged) onClearExternalChange(node.id);
-            }}
-          >
-            {expanded ? "\u25BC" : "\u25B6"}
-          </span>
+          isLoading ? (
+            <span className="tree-item-spinner" />
+          ) : (
+            <span
+              className="tree-item-toggle"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleExpanded(node.id);
+                if (isExternallyChanged) onClearExternalChange(node.id);
+              }}
+            >
+              {isExpanded ? "\u25BC" : "\u25B6"}
+            </span>
+          )
         )}
         {!canCollapse && <span style={{ width: 16, flexShrink: 0 }} />}
 
@@ -235,7 +253,7 @@ export function TreeItem({
             e.stopPropagation();
             onToggleExpanded(node.id);
           } : undefined}
-        >{icon}</span>
+        >{isLinkedProject && icon !== "📎" && <span className="tree-item-link-indicator">📎</span>}{icon}</span>
 
         {isEditing ? (
           <input
@@ -251,10 +269,20 @@ export function TreeItem({
             onClick={(e) => e.stopPropagation()}
           />
         ) : (
-          <span className="tree-item-title">{node.title}</span>
+          <span className={`tree-item-title${isSectionLoading ? " tree-item-loading" : ""}`}>{node.title}</span>
         )}
-        {!isEditing && isFile && node.summary && (
-          <span className="tree-item-summary-badge" title={node.summary}>S</span>
+        {!isEditing && isFile && <SummaryBadge nodeId={node.id} summary={node.summary} />}
+        {!isEditing && node.type === "idea" && typeof node.progress === "number" && node.progress > 0 && (
+          <span className="tree-item-progress" title={`${node.progress}%`}>
+            {node.progress}%
+          </span>
+        )}
+        {isLinkedProject && linkedMeta && (
+          <span className={`tree-item-link-badge tree-item-link-${linkedMeta.doc_status}`}>
+            {linkedMeta.doc_status === "loaded" ? "" :
+             linkedMeta.doc_status === "generating" ? "\u23F3" :
+             linkedMeta.doc_status === "error" ? "\u26A0" : "\u2014"}
+          </span>
         )}
         {isExternallyChanged && (
           <span className="tree-item-changed-dot" />
@@ -265,10 +293,7 @@ export function TreeItem({
             <button
               className="btn-icon"
               style={{ width: 20, height: 20, fontSize: 11 }}
-              onClick={(e) => {
-                e.stopPropagation();
-                onContextMenu(e.clientX, e.clientY, node);
-              }}
+              onClick={(e) => { e.stopPropagation(); onContextMenu(e.clientX, e.clientY, node); }}
               title={t("moreActions")}
             >
               {"\u2022\u2022\u2022"}
@@ -277,10 +302,7 @@ export function TreeItem({
               <button
                 className="btn-icon"
                 style={{ width: 20, height: 20, fontSize: 11 }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onCreateChild(node.id, node.type);
-                }}
+                onClick={(e) => { e.stopPropagation(); onCreateChild(node.id, node.type); }}
                 title={isSection ? t("addSubsection") : isFile ? t("addSection") : t("addChild")}
               >
                 +
@@ -289,42 +311,6 @@ export function TreeItem({
           </div>
         )}
       </div>
-
-      {hasChildren && (
-        <div className="tree-children" style={expanded ? undefined : { display: "none" }}>
-          {node.children.map((child) => (
-            <TreeItem
-              key={child.id}
-              node={child}
-              depth={depth + 1}
-              activeId={activeId}
-              editingId={editingId}
-              selectedIds={selectedIds}
-              expandedNodes={expandedNodes}
-              externallyChangedIds={externallyChangedIds}
-              onToggleExpanded={onToggleExpanded}
-              onExpandNode={onExpandNode}
-              onSelect={onSelect}
-              onMultiSelect={onMultiSelect}
-              onDelete={onDelete}
-              onRename={onRename}
-              onStartEdit={onStartEdit}
-              onCreateChild={onCreateChild}
-              onContextMenu={onContextMenu}
-              onClearExternalChange={onClearExternalChange}
-              dragItem={dragItem}
-              dropTarget={dropTarget}
-              onDragStart={onDragStart}
-              onDragEnd={onDragEnd}
-              onDragOver={onDragOver}
-              onDrop={onDrop}
-              onFileDrop={onFileDrop}
-              hasImportableFiles={hasImportableFiles}
-              getImportableFilePaths={getImportableFilePaths}
-            />
-          ))}
-        </div>
-      )}
     </div>
   );
-}
+});

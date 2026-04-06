@@ -2,7 +2,7 @@ import { create } from "zustand";
 import type { AppState } from "./types.js";
 
 // Re-export types that other components import from this module
-export type { LlmConfig, LlmEffort, LlmAttachment, AppState } from "./types.js";
+export type { LlmConfig, LlmEffort, LlmAttachment, AppState, ModelTier, ModelTierConfig, ModelTiersConfig, ModelTestResult, ProviderScriptMeta } from "./types.js";
 export { applyEffort } from "./llm-config.js";
 
 // Slice creators
@@ -24,6 +24,13 @@ import { createTreeUiSlice } from "./slices/tree-ui.slice.js";
 import { createExternalChangesSlice } from "./slices/external-changes.slice.js";
 import { createSessionBufferSlice } from "./slices/session-buffer.slice.js";
 import { createIndexingSlice } from "./slices/indexing.slice.js";
+import { createSpellcheckSlice } from "./slices/spellcheck.slice.js";
+import { createWorkspaceSlice } from "./slices/workspace.slice.js";
+import { createUserSlice } from "./slices/user.slice.js";
+import { createSectionPrefsSlice } from "./slices/section-prefs.slice.js";
+import { createSectionSnapshotsSlice } from "./slices/section-snapshots.slice.js";
+import { createHistorySettingsSlice } from "./slices/history-settings.slice.js";
+import { _setStoreGetter } from "./llm-engine.js";
 
 export const useAppStore = create<AppState>()((...a) => ({
   ...createUiSlice(...a),
@@ -44,4 +51,13 @@ export const useAppStore = create<AppState>()((...a) => ({
   ...createExternalChangesSlice(...a),
   ...createSessionBufferSlice(...a),
   ...createIndexingSlice(...a),
+  ...createSpellcheckSlice(...a),
+  ...createWorkspaceSlice(...a),
+  ...createUserSlice(...a),
+  ...createSectionPrefsSlice(...a),
+  ...createSectionSnapshotsSlice(...a),
+  ...createHistorySettingsSlice(...a),
 }));
+
+// Wire up store getter for llm-engine tier helpers
+_setStoreGetter(() => useAppStore.getState());

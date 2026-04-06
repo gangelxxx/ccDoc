@@ -35,25 +35,25 @@ export function buildIdeaProcessingPrompt(
 
   const modeInstructions: Record<IdeaProcessingMode, string> = {
     title: ru
-      ? `Сгенерируй краткий заголовок (title) для каждой идеи — одно предложение, отражающее суть.
-Не меняй text, не удаляй и не объединяй сообщения. Только добавь поле "title" к каждому.`
+      ? `Generate a short title for each idea — one sentence capturing its essence.
+Do not change text, do not remove or merge messages. Only add the "title" field to each.`
       : `Generate a short title for each idea — one sentence capturing its essence.
 Do not change text, do not remove or merge messages. Only add the "title" field to each.`,
 
     polish: ru
-      ? `Улучши формулировки каждой идеи: сделай текст более структурированным, грамотным и читабельным.
-Сохрани смысл. Исправь грамматику и опечатки. Не удаляй и не объединяй сообщения.
-Обнови поле "text" каждого сообщения.`
+      ? `Polish the text of each idea: make it more structured, grammatically correct, and readable.
+Preserve the meaning. Fix grammar and typos. Do not remove or merge messages.
+Update the "text" field of each message.`
       : `Polish the text of each idea: make it more structured, grammatically correct, and readable.
 Preserve the meaning. Fix grammar and typos. Do not remove or merge messages.
 Update the "text" field of each message.`,
 
     deduplicate: ru
-      ? `Найди семантические дубликаты — идеи с одинаковым смыслом (не обязательно одинаковыми словами).
-Для каждой группы дубликатов: оставь одну (лучшую формулировку), удали остальные.
-В оставшейся идее добавь поле "originalIds" — массив ID удалённых дубликатов.
-Заполни массив "removedDuplicates" в ответе с полями keptId, removedIds, reason.
-ВАЖНО: Не удаляй идеи со статусом completed=true при дедупликации.`
+      ? `Find semantic duplicates — ideas with the same meaning (not necessarily the same words).
+For each group of duplicates: keep one (best wording), remove the rest.
+In the kept idea add "originalIds" field — array of IDs of removed duplicates.
+Fill the "removedDuplicates" array in the response with keptId, removedIds, reason.
+IMPORTANT: Do not remove ideas with completed=true during deduplication.`
       : `Find semantic duplicates — ideas with the same meaning (not necessarily the same words).
 For each group of duplicates: keep one (best wording), remove the rest.
 In the kept idea add "originalIds" field — array of IDs of removed duplicates.
@@ -61,22 +61,22 @@ Fill the "removedDuplicates" array in the response with keptId, removedIds, reas
 IMPORTANT: Do not remove ideas with completed=true during deduplication.`,
 
     group: ru
-      ? `Группируй идеи по темам. Выдели 3–7 тематических групп.
-Каждому сообщению назначь одну группу через поле "group" (название группы).
-Заполни массив "groups" в ответе с полями name и messageIds.
-Не меняй text, не удаляй и не объединяй сообщения.`
+      ? `Group ideas by topics. Identify 3–7 thematic groups.
+Assign each message to one group via the "group" field (group name).
+Fill the "groups" array in the response with name and messageIds.
+Do not change text, do not remove or merge messages.`
       : `Group ideas by topics. Identify 3–7 thematic groups.
 Assign each message to one group via the "group" field (group name).
 Fill the "groups" array in the response with name and messageIds.
 Do not change text, do not remove or merge messages.`,
 
     full: ru
-      ? `Выполни все операции последовательно:
-1. Сгенерируй заголовки (title) для каждой идеи.
-2. Улучши формулировки (text) — грамматика, структура, читабельность.
-3. Удали семантические дубликаты (originalIds, removedDuplicates).
-4. Сгруппируй оставшиеся идеи по темам (group, groups).
-ВАЖНО: Не удаляй идеи со статусом completed=true при дедупликации.`
+      ? `Perform all operations sequentially:
+1. Generate titles (title) for each idea.
+2. Polish text — grammar, structure, readability.
+3. Remove semantic duplicates (originalIds, removedDuplicates).
+4. Group remaining ideas by topics (group, groups).
+IMPORTANT: Do not remove ideas with completed=true during deduplication.`
       : `Perform all operations sequentially:
 1. Generate titles (title) for each idea.
 2. Polish text — grammar, structure, readability.
@@ -86,13 +86,13 @@ IMPORTANT: Do not remove ideas with completed=true during deduplication.`,
   };
 
   const baseRules = ru
-    ? `ПРАВИЛА:
-- Ответ СТРОГО в формате JSON (без markdown code-blocks, без пояснений — только JSON).
-- Сохрани id, createdAt, planId, completed, images каждого сообщения без изменений.
-- Поле "images" НЕ включено во входные данные, но существует у некоторых сообщений — НЕ добавляй и НЕ удаляй его.
-- Для новых (объединённых) сообщений генерируй новый UUID v4. createdAt бери из самой ранней идеи в группе.
-- Язык текста: сохраняй оригинальный язык каждой идеи (RU/EN).
-- Поле "summary" — одно предложение, описывающее что было сделано.`
+    ? `RULES:
+- Response STRICTLY in JSON format (no markdown code-blocks, no explanations — only JSON).
+- Preserve id, createdAt, planId, completed, images of each message unchanged.
+- The "images" field is NOT included in input but exists for some messages — do NOT add or remove it.
+- For new (merged) messages generate a new UUID v4. Use createdAt from the earliest idea in the group.
+- Text language: preserve the original language of each idea (RU/EN).
+- "summary" field — one sentence describing what was done.`
     : `RULES:
 - Response STRICTLY in JSON format (no markdown code-blocks, no explanations — only JSON).
 - Preserve id, createdAt, planId, completed, images of each message unchanged.
@@ -123,17 +123,17 @@ IMPORTANT: Do not remove ideas with completed=true during deduplication.`,
   "summary": "string"
 }`;
 
-  return `${ru ? "Ты — ассистент для обработки списка идей." : "You are an assistant for processing a list of ideas."}
+  return `${ru ? "You are an assistant for processing a list of ideas." : "You are an assistant for processing a list of ideas."}
 
-${ru ? "ЗАДАНИЕ:" : "TASK:"}
+${ru ? "TASK:" : "TASK:"}
 ${modeInstructions[mode]}
 
 ${baseRules}
 
-${ru ? "ФОРМАТ ОТВЕТА (JSON):" : "RESPONSE FORMAT (JSON):"}
+${ru ? "RESPONSE FORMAT (JSON):" : "RESPONSE FORMAT (JSON):"}
 ${responseSchema}
 
-${ru ? "ВХОДНЫЕ ДАННЫЕ (идеи):" : "INPUT DATA (ideas):"}
+${ru ? "INPUT DATA (ideas):" : "INPUT DATA (ideas):"}
 ${messagesJson}`;
 }
 

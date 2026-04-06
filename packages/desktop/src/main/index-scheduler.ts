@@ -6,11 +6,11 @@
  * background re-indexing when needed.
  */
 
-import { statSync } from "fs";
-import { readdir } from "fs/promises";
+import { readdir, stat } from "fs/promises";
 import { join, extname } from "path";
-import { getProjectServices, getProjectsService, getSettingsService, trackBgTask } from "./services";
-import { triggerIndexing, invalidateSemanticIndex, triggerIncrementalUpdate } from "./ipc/semantic";
+import { getProjectServices, getProjectsService, getSettingsService, trackBgTask, suppressExternalChange } from "./services";
+import { triggerIndexing, invalidateSemanticIndex, triggerIncrementalUpdate, resolveLinkedProjects } from "./ipc/semantic";
+import { reindexFtsInWorker } from "./fts-reindex";
 import { CODE_EXTS } from "./source-tools";
 import { SOURCE_EXCLUDED } from "./semantic-index";
 import { SETTINGS_DEFAULTS } from "./services/settings.types";
@@ -57,15 +57,38 @@ export async function checkStaleness(token: string): Promise<StalenessResult> {
   // 2. Code staleness: compare directory mtimes with stored value
   const project = await getProjectsService().getByToken(token);
   let codeMaxMtime = 0;
+  const idxCfg = getSettingsService()?.getAll().indexing ?? SETTINGS_DEFAULTS.indexing;
   if (project?.path) {
-    const idxCfg = getSettingsService()?.getAll().indexing ?? SETTINGS_DEFAULTS.indexing;
     codeMaxMtime = await scanCodeMaxMtime(project.path, new Set(idxCfg.excludedDirs), new Set(idxCfg.codeExtensions));
   }
   const storedCodeMtime = Number(await passport.get("code_max_mtime") || "0");
 
+  // 3. Linked projects staleness: check doc updates and code mtimes
+  let linkedDocsStale = false;
+  let linkedCodeStale = false;
+  try {
+    const linked = await resolveLinkedProjects(token);
+    for (const lp of linked) {
+      try {
+        const lpServices = await getProjectServices(lp.token);
+        const lpSections = await lpServices.sections.listAll();
+        for (const s of lpSections) {
+          if (s.deleted_at) continue;
+          const t = new Date(s.updated_at).getTime();
+          if (t > semTs) { linkedDocsStale = true; break; }
+        }
+        if (lp.sourcePath) {
+          const lpMtime = await scanCodeMaxMtime(lp.sourcePath, new Set(idxCfg.excludedDirs), new Set(idxCfg.codeExtensions));
+          if (lpMtime > storedCodeMtime) linkedCodeStale = true;
+        }
+      } catch { /* skip unavailable linked project */ }
+      if (linkedDocsStale && linkedCodeStale) break;
+    }
+  } catch { /* no workspace */ }
+
   return {
     ftsStale: maxDocUpdated > ftsTs,
-    semanticStale: maxDocUpdated > semTs || codeMaxMtime > storedCodeMtime,
+    semanticStale: maxDocUpdated > semTs || codeMaxMtime > storedCodeMtime || linkedDocsStale || linkedCodeStale,
     docsChangedSince: maxDocUpdated > ftsTs ? new Date(maxDocUpdated) : null,
     codeChangedSince: codeMaxMtime > storedCodeMtime ? new Date(codeMaxMtime) : null,
   };
@@ -100,7 +123,7 @@ export async function scanCodeMaxMtime(
         if (excludedDirs.has(e.name)) continue;
         const fullPath = join(dir, e.name);
         try {
-          const st = statSync(fullPath);
+          const st = await stat(fullPath);
           if (st.mtimeMs > maxMtime) maxMtime = st.mtimeMs;
         } catch { /* skip */ }
         await walkDirs(fullPath);
@@ -108,7 +131,7 @@ export async function scanCodeMaxMtime(
         const ext = extname(e.name).toLowerCase();
         if (!codeExts.has(ext)) continue;
         try {
-          const st = statSync(join(dir, e.name));
+          const st = await stat(join(dir, e.name));
           if (st.mtimeMs > maxMtime) maxMtime = st.mtimeMs;
         } catch { /* skip */ }
       }
@@ -135,16 +158,20 @@ export function startPeriodicIndexing(token: string, intervalMs = STALENESS_CHEC
       const staleness = await checkStaleness(token);
 
       if (staleness.ftsStale) {
+        suppressExternalChange(token);
         const services = await getProjectServices(token);
-        await trackBgTask("Фоновое обновление поиска", async () => {
-          await services.index.reindexAll();
+        await trackBgTask("Background search update", async () => {
+          await reindexFtsInWorker(token);
           await services.passport.set("fts_last_indexed_at", new Date().toISOString());
+          suppressExternalChange(token);
         });
       }
 
       if (staleness.semanticStale) {
+        suppressExternalChange(token);
         // Incremental update: only re-index changed items
         await triggerIncrementalUpdate(token);
+        suppressExternalChange(token);
       }
     } catch (err) {
       console.warn(`[index-scheduler] Periodic check failed for ${token}:`, err);

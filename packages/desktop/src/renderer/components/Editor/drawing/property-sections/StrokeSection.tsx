@@ -1,4 +1,5 @@
 import { STROKE_COLORS, type SectionProps } from "./shared.js";
+import { useT } from "../../../../i18n.js";
 
 interface StrokeSectionProps extends SectionProps {
   hasStroke: boolean;
@@ -6,12 +7,14 @@ interface StrokeSectionProps extends SectionProps {
 }
 
 export function StrokeSection({ firstEl, updateSelectedProps, hasStroke, hasStrokeStyle }: StrokeSectionProps) {
+  const t = useT();
+
   return (
     <>
       {/* Stroke color */}
       {hasStroke && (
         <>
-          <div className="drawing-sidebar-label">Обводка</div>
+          <div className="drawing-sidebar-label">{t("drawStroke")}</div>
           <div className="drawing-sidebar-colors">
             {STROKE_COLORS.map((c) => (
               <button
@@ -34,7 +37,7 @@ export function StrokeSection({ firstEl, updateSelectedProps, hasStroke, hasStro
       {/* Stroke width */}
       {hasStrokeStyle && (
         <>
-          <div className="drawing-sidebar-label">Толщина штриха</div>
+          <div className="drawing-sidebar-label">{t("drawStrokeWidth")}</div>
           <div className="drawing-sidebar-row">
             {[1, 2, 4].map((w) => (
               <button
@@ -52,7 +55,7 @@ export function StrokeSection({ firstEl, updateSelectedProps, hasStroke, hasStro
       {/* Stroke style */}
       {hasStrokeStyle && (
         <>
-          <div className="drawing-sidebar-label">Стиль обводки</div>
+          <div className="drawing-sidebar-label">{t("drawStrokeStyle")}</div>
           <div className="drawing-sidebar-row">
             {(["solid", "dashed", "dotted"] as const).map((s) => (
               <button

@@ -2,7 +2,7 @@ import { useRef, useCallback, type RefObject } from "react";
 import { useAppStore } from "../../../stores/app.store.js";
 
 /**
- * Hook для resize LLM-панели с логикой snap (сворачивание/разворачивание по клику).
+ * Hook for LLM panel resize with snap logic (collapse/expand on click).
  */
 export function useLlmResize(mainContentRef: RefObject<HTMLDivElement | null>) {
   const { setLlmPanelWidth, savePanelWidths, llmPanelOpen } = useAppStore();
@@ -29,7 +29,7 @@ export function useLlmResize(mainContentRef: RefObject<HTMLDivElement | null>) {
     savePanelWidths();
   }, [setLlmPanelWidth, savePanelWidths]);
 
-  // Клик по сжатой области контента -> свернуть LLM до минимума
+  // Click on compressed content area -> collapse LLM to minimum
   const handleContentClick = useCallback(() => {
     if (!llmPanelOpen) return;
     const el = mainContentRef.current;
@@ -42,7 +42,7 @@ export function useLlmResize(mainContentRef: RefObject<HTMLDivElement | null>) {
     }
   }, [llmPanelOpen, setLlmPanelWidth, savePanelWidths]);
 
-  // Клик по свёрнутой LLM панели -> развернуть обратно
+  // Click on collapsed LLM panel -> expand back
   const handleLlmPanelClick = useCallback((e: React.MouseEvent) => {
     if (!llmSnapped.current) return;
     const target = e.target as HTMLElement;

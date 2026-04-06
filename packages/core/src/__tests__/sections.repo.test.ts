@@ -34,7 +34,7 @@ async function createSection(id: string, title: string, parentId: string, sortKe
 
 /* ────────────────── create & getById ────────────────── */
 describe("create & getById", () => {
-  it("создаёт секцию и читает по id", async () => {
+  it("creates a section and reads it by id", async () => {
     await createFile("s1", "Test Page");
     const s = await repo.getById("s1");
     expect(s).not.toBeNull();
@@ -44,19 +44,19 @@ describe("create & getById", () => {
     expect(s!.deleted_at).toBeNull();
   });
 
-  it("getById возвращает null для несуществующего id", async () => {
+  it("getById returns null for a nonexistent id", async () => {
     const s = await repo.getById("nonexistent");
     expect(s).toBeNull();
   });
 
-  it("сохраняет parent_id", async () => {
+  it("saves parent_id", async () => {
     await createFolder("f1", "Folder");
     await createFile("s1", "Page", "f1");
     const s = await repo.getById("s1");
     expect(s!.parent_id).toBe("f1");
   });
 
-  it("сохраняет icon", async () => {
+  it("saves icon", async () => {
     await repo.create({
       id: "s1", parent_id: null, title: "Iconic",
       content: "", type: "folder", sort_key: "a0", icon: "🚀",
@@ -68,14 +68,14 @@ describe("create & getById", () => {
 
 /* ────────────────── list & listMeta ────────────────── */
 describe("list & listMeta", () => {
-  it("list возвращает все неудалённые секции", async () => {
+  it("list returns all non-deleted sections", async () => {
     await createFile("s1", "A", null, "a0");
     await createFile("s2", "B", null, "a1");
     const all = await repo.list();
     expect(all).toHaveLength(2);
   });
 
-  it("list не возвращает удалённые секции", async () => {
+  it("list does not return deleted sections", async () => {
     await createFile("s1", "Live");
     await createFile("s2", "Will die");
     await repo.softDelete("s2");
@@ -84,7 +84,7 @@ describe("list & listMeta", () => {
     expect(all[0].id).toBe("s1");
   });
 
-  it("list(includeDeleted=true) возвращает всё", async () => {
+  it("list(includeDeleted=true) returns everything", async () => {
     await createFile("s1", "Live");
     await createFile("s2", "Dead");
     await repo.softDelete("s2");
@@ -92,7 +92,7 @@ describe("list & listMeta", () => {
     expect(all).toHaveLength(2);
   });
 
-  it("listMeta не содержит content", async () => {
+  it("listMeta does not contain content", async () => {
     await createFile("s1", "Page");
     const meta = await repo.listMeta();
     expect(meta).toHaveLength(1);
@@ -100,7 +100,7 @@ describe("list & listMeta", () => {
     expect(meta[0].title).toBe("Page");
   });
 
-  it("секции отсортированы по sort_key", async () => {
+  it("sections are sorted by sort_key", async () => {
     await createFile("s2", "Second", null, "b0");
     await createFile("s1", "First", null, "a0");
     await createFile("s3", "Third", null, "c0");
@@ -111,7 +111,7 @@ describe("list & listMeta", () => {
 
 /* ────────────────── getChildren ────────────────── */
 describe("getChildren", () => {
-  it("возвращает детей конкретного родителя", async () => {
+  it("returns children of a specific parent", async () => {
     await createFolder("f1", "Folder 1");
     await createFolder("f2", "Folder 2");
     await createFile("s1", "Child of f1", "f1");
@@ -122,7 +122,7 @@ describe("getChildren", () => {
     expect(children[0].title).toBe("Child of f1");
   });
 
-  it("возвращает корневые элементы при parent_id = null", async () => {
+  it("returns root elements when parent_id = null", async () => {
     await createFolder("f1", "Root 1", null, "a0");
     await createFolder("f2", "Root 2", null, "a1");
     await createFile("s1", "Child", "f1");
@@ -131,7 +131,7 @@ describe("getChildren", () => {
     expect(roots).toHaveLength(2);
   });
 
-  it("не возвращает удалённых детей", async () => {
+  it("does not return deleted children", async () => {
     await createFolder("f1", "Folder");
     await createFile("s1", "Live", "f1", "a0");
     await createFile("s2", "Dead", "f1", "a1");
@@ -142,7 +142,7 @@ describe("getChildren", () => {
     expect(children[0].id).toBe("s1");
   });
 
-  it("дети отсортированы по sort_key", async () => {
+  it("children are sorted by sort_key", async () => {
     await createFolder("f1", "Folder");
     await createFile("s3", "C", "f1", "c0");
     await createFile("s1", "A", "f1", "a0");
@@ -155,12 +155,12 @@ describe("getChildren", () => {
 
 /* ────────────────── getLastSortKey ────────────────── */
 describe("getLastSortKey", () => {
-  it("возвращает null для пустого родителя", async () => {
+  it("returns null for an empty parent", async () => {
     const key = await repo.getLastSortKey("empty-parent");
     expect(key).toBeNull();
   });
 
-  it("возвращает последний sort_key", async () => {
+  it("returns the last sort_key", async () => {
     await createFolder("f1", "Folder");
     await createFile("s1", "A", "f1", "a0");
     await createFile("s2", "B", "f1", "b0");
@@ -170,7 +170,7 @@ describe("getLastSortKey", () => {
     expect(key).toBe("c0");
   });
 
-  it("игнорирует удалённые", async () => {
+  it("ignores deleted entries", async () => {
     await createFolder("f1", "Folder");
     await createFile("s1", "A", "f1", "a0");
     await createFile("s2", "B", "f1", "z0");
@@ -183,7 +183,7 @@ describe("getLastSortKey", () => {
 
 /* ────────────────── updateContent ────────────────── */
 describe("updateContent", () => {
-  it("обновляет title и content", async () => {
+  it("updates title and content", async () => {
     await createFile("s1", "Old");
     await repo.updateContent("s1", "New Title", '{"type":"doc","content":[]}');
 
@@ -192,8 +192,8 @@ describe("updateContent", () => {
     expect(s!.content).toBe('{"type":"doc","content":[]}');
   });
 
-  it("обновляет updated_at", async () => {
-    // Ставим старую дату вручную, чтобы разница была гарантирована
+  it("updates updated_at", async () => {
+    // Set an old date manually to guarantee a difference
     await createFile("s1", "Title");
     await db.execute({ sql: "UPDATE sections SET updated_at = datetime('now', '-1 hour') WHERE id = ?", args: ["s1"] });
     const before = (await repo.getById("s1"))!.updated_at;
@@ -207,7 +207,7 @@ describe("updateContent", () => {
 
 /* ────────────────── updateIcon ────────────────── */
 describe("updateIcon", () => {
-  it("устанавливает иконку", async () => {
+  it("sets the icon", async () => {
     await createFile("s1", "Page");
     await repo.updateIcon("s1", "📝");
 
@@ -215,7 +215,7 @@ describe("updateIcon", () => {
     expect(s!.icon).toBe("📝");
   });
 
-  it("сбрасывает иконку на null", async () => {
+  it("resets icon to null", async () => {
     await repo.create({ id: "s1", parent_id: null, title: "P", content: "", type: "folder", sort_key: "a0", icon: "🚀" });
     await repo.updateIcon("s1", null);
 
@@ -226,7 +226,7 @@ describe("updateIcon", () => {
 
 /* ────────────────── move ────────────────── */
 describe("move", () => {
-  it("перемещает секцию к новому родителю", async () => {
+  it("moves a section to a new parent", async () => {
     await createFolder("f1", "Folder 1");
     await createFolder("f2", "Folder 2");
     await createFile("s1", "Page", "f1");
@@ -236,7 +236,7 @@ describe("move", () => {
     expect(s!.parent_id).toBe("f2");
   });
 
-  it("обновляет sort_key при перемещении", async () => {
+  it("updates sort_key on move", async () => {
     await createFolder("f1", "Folder");
     await createFile("s1", "Page", "f1", "a0");
 
@@ -248,7 +248,7 @@ describe("move", () => {
 
 /* ────────────────── softDelete ────────────────── */
 describe("softDelete", () => {
-  it("ставит deleted_at", async () => {
+  it("sets deleted_at", async () => {
     await createFile("s1", "Page");
     await repo.softDelete("s1");
 
@@ -256,7 +256,7 @@ describe("softDelete", () => {
     expect(s.deleted_at).not.toBeNull();
   });
 
-  it("рекурсивно удаляет потомков", async () => {
+  it("recursively deletes descendants", async () => {
     await createFolder("f1", "Root");
     await createFile("s1", "Child", "f1");
     await createSection("sub1", "Sub", "s1");
@@ -269,7 +269,7 @@ describe("softDelete", () => {
     }
   });
 
-  it("не трогает другие ветки", async () => {
+  it("does not affect other branches", async () => {
     await createFolder("f1", "Delete me", null, "a0");
     await createFolder("f2", "Keep me", null, "a1");
 
@@ -283,7 +283,7 @@ describe("softDelete", () => {
 
 /* ────────────────── restore ────────────────── */
 describe("restore", () => {
-  it("восстанавливает секцию и потомков", async () => {
+  it("restores a section and its descendants", async () => {
     await createFolder("f1", "Folder");
     await createFile("s1", "Page", "f1");
     await createSection("sub1", "Sub", "s1");
@@ -295,18 +295,18 @@ describe("restore", () => {
     expect(await repo.list()).toHaveLength(3);
   });
 
-  it("не восстанавливает ранее независимо удалённых потомков", async () => {
+  it("does not restore previously independently deleted descendants", async () => {
     await createFolder("f1", "Folder");
     await createFile("s1", "Will survive", "f1", "a0");
     await createFile("s2", "Already dead", "f1", "a1");
 
-    // Удалить s2 раньше
+    // Delete s2 first
     await repo.softDelete("s2");
-    // Потом удалить папку целиком
+    // Then delete the entire folder
     await new Promise(r => setTimeout(r, 1100)); // deleted_at difference
     await repo.softDelete("f1");
 
-    // Восстановить папку — s2 НЕ должен восстановиться
+    // Restore the folder — s2 should NOT be restored
     await repo.restore("f1");
     const live = await repo.list();
     const ids = live.map(s => s.id);
@@ -315,7 +315,7 @@ describe("restore", () => {
     expect(ids).not.toContain("s2");
   });
 
-  it("ничего не делает для неудалённой секции", async () => {
+  it("does nothing for a non-deleted section", async () => {
     await createFile("s1", "Live");
     await repo.restore("s1"); // no-op
     const s = await repo.getById("s1");
@@ -325,9 +325,9 @@ describe("restore", () => {
 
 /* ────────────────── purgeOldDeleted ────────────────── */
 describe("purgeOldDeleted", () => {
-  it("окончательно удаляет старые записи", async () => {
+  it("permanently deletes old entries", async () => {
     await createFile("s1", "Old dead");
-    // Ручная установка старого deleted_at
+    // Manually set an old deleted_at
     await db.execute({
       sql: "UPDATE sections SET deleted_at = datetime('now', '-60 days') WHERE id = ?",
       args: ["s1"],
@@ -338,7 +338,7 @@ describe("purgeOldDeleted", () => {
     expect(all).toHaveLength(0);
   });
 
-  it("не удаляет недавно удалённые", async () => {
+  it("does not delete recently deleted entries", async () => {
     await createFile("s1", "Fresh dead");
     await repo.softDelete("s1");
 
@@ -350,19 +350,19 @@ describe("purgeOldDeleted", () => {
 
 /* ────────────────── getLatestByType ────────────────── */
 describe("getLatestByType", () => {
-  it("возвращает последнюю секцию типа", async () => {
+  it("returns the latest section of a type", async () => {
     await createFolder("f1", "Folder 1");
     await createFolder("f2", "Folder 2");
     const latest = await repo.getLatestByType("folder");
     expect(latest).not.toBeNull();
   });
 
-  it("возвращает null если нет секций типа", async () => {
+  it("returns null if no sections of that type exist", async () => {
     const latest = await repo.getLatestByType("kanban");
     expect(latest).toBeNull();
   });
 
-  it("игнорирует удалённые", async () => {
+  it("ignores deleted entries", async () => {
     await createFolder("f1", "Dead folder");
     await repo.softDelete("f1");
 
@@ -373,7 +373,7 @@ describe("getLatestByType", () => {
 
 /* ────────────────── setSummary ────────────────── */
 describe("setSummary", () => {
-  it("устанавливает summary", async () => {
+  it("sets summary", async () => {
     await createFile("s1", "Page");
     await repo.setSummary("s1", "Brief summary");
 
@@ -381,7 +381,7 @@ describe("setSummary", () => {
     expect(s!.summary).toBe("Brief summary");
   });
 
-  it("сбрасывает summary на null", async () => {
+  it("resets summary to null", async () => {
     await createFile("s1", "Page");
     await repo.setSummary("s1", "Summary");
     await repo.setSummary("s1", null);

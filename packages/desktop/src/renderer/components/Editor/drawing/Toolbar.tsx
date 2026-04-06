@@ -3,16 +3,17 @@ import {
   MousePointer2, LayoutGrid, ImageIcon,
 } from "lucide-react";
 import type { ToolType } from "../drawing-engine.js";
+import { useT } from "../../../i18n.js";
 
-const TOOLS: { type: ToolType; icon: typeof Square; label: string; key: string }[] = [
-  { type: "selection", icon: MousePointer2, label: "Выбор", key: "V" },
-  { type: "rectangle", icon: Square, label: "Прямоугольник", key: "R" },
-  { type: "ellipse", icon: Circle, label: "Эллипс", key: "O" },
-  { type: "diamond", icon: Diamond, label: "Ромб", key: "D" },
-  { type: "line", icon: Minus, label: "Линия", key: "L" },
-  { type: "arrow", icon: ArrowRight, label: "Стрелка", key: "A" },
-  { type: "freedraw", icon: Pencil, label: "Карандаш", key: "P" },
-  { type: "text", icon: Type, label: "Текст", key: "T" },
+const TOOLS: { type: ToolType; icon: typeof Square; labelKey: string; key: string }[] = [
+  { type: "selection", icon: MousePointer2, labelKey: "drawSelect", key: "V" },
+  { type: "rectangle", icon: Square, labelKey: "drawRectangle", key: "R" },
+  { type: "ellipse", icon: Circle, labelKey: "drawEllipse", key: "O" },
+  { type: "diamond", icon: Diamond, labelKey: "drawDiamond", key: "D" },
+  { type: "line", icon: Minus, labelKey: "drawLine", key: "L" },
+  { type: "arrow", icon: ArrowRight, labelKey: "drawArrow", key: "A" },
+  { type: "freedraw", icon: Pencil, labelKey: "drawPencil", key: "P" },
+  { type: "text", icon: Type, labelKey: "drawText", key: "T" },
 ];
 
 interface ToolbarProps {
@@ -23,31 +24,33 @@ interface ToolbarProps {
 }
 
 export function Toolbar({ activeTool, setActiveTool, autoLayout, pickAndInsertImage }: ToolbarProps) {
+  const t = useT();
+
   return (
     <div className="drawing-toolbar">
       <div className="drawing-toolbar-group">
-        {TOOLS.map((t) => (
+        {TOOLS.map((tool) => (
           <button
-            key={t.type}
-            className={`drawing-tool-btn${activeTool === t.type ? " active" : ""}`}
-            onClick={() => setActiveTool(t.type)}
-            title={`${t.label} (${t.key})`}
+            key={tool.type}
+            className={`drawing-tool-btn${activeTool === tool.type ? " active" : ""}`}
+            onClick={() => setActiveTool(tool.type)}
+            title={`${t(tool.labelKey)} (${tool.key})`}
           >
-            <t.icon size={18} />
+            <tool.icon size={18} />
           </button>
         ))}
         <div className="drawing-toolbar-sep" />
         <button
           className="drawing-tool-btn"
           onClick={autoLayout}
-          title="Авто-раскладка"
+          title={t("drawAutoLayout")}
         >
           <LayoutGrid size={18} />
         </button>
         <button
           className="drawing-tool-btn"
           onClick={pickAndInsertImage}
-          title="Изображение (I)"
+          title={t("drawImage") + " (I)"}
         >
           <ImageIcon size={18} />
         </button>

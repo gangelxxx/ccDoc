@@ -43,7 +43,7 @@ export function Topbar({
   goBack: () => void;
   goForward: () => void;
   projectName?: string;
-  breadcrumbs?: { id: string; title: string }[];
+  breadcrumbs?: { id: string; title: string; isLinkedProject?: boolean }[];
   currentTitle?: string;
   onBreadcrumbClick?: (id: string) => void;
   llmPanelOpen?: boolean;
@@ -77,8 +77,11 @@ export function Topbar({
             breadcrumbs.map((bc) => (
               <span key={bc.id} style={{ display: "contents" }}>
                 <span className="breadcrumb-sep">/</span>
-                <span className="breadcrumb-item" onClick={() => onBreadcrumbClick?.(bc.id)}>
-                  {bc.title}
+                <span
+                  className={`breadcrumb-item${bc.isLinkedProject ? " breadcrumb-linked" : ""}`}
+                  onClick={() => onBreadcrumbClick?.(bc.id)}
+                >
+                  {bc.isLinkedProject ? "\uD83D\uDCCE " : ""}{bc.title}
                 </span>
               </span>
             ))}

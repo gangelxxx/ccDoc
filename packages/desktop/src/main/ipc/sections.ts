@@ -1,6 +1,7 @@
 import { ipcMain, clipboard } from "electron";
 import { getProjectServices, suppressExternalChange } from "../services";
 import type { OutputFormat, SectionType } from "@ccdoc/core";
+import { markdownToProsemirror } from "@ccdoc/core";
 
 export function registerSectionsIpc(): void {
   ipcMain.handle("sections:tree", async (_e, token: string) => {
@@ -30,7 +31,7 @@ export function registerSectionsIpc(): void {
     const result = await sections.create({ parentId, title, type, icon, content });
     console.log("[sections:create] result:", result?.id, result?.title, "content_len:", result?.content?.length);
     if (result) {
-      index.indexSection(result).catch((err) => console.warn("[index] index after create failed:", err));
+      index.indexSection(result).finally(() => suppressExternalChange(token)).catch((err) => console.warn("[index] index after create failed:", err));
     }
     return result;
   });
@@ -41,30 +42,30 @@ export function registerSectionsIpc(): void {
     await sections.updateIcon(id, icon);
   });
 
-  ipcMain.handle("sections:update", async (_e, token: string, id: string, title: string, content: string) => {
+  ipcMain.handle("sections:update", async (_e, token: string, id: string, title: string, content: string, source?: string) => {
     suppressExternalChange(token);
     const { sections, index } = await getProjectServices(token);
     const before = await sections.getById(id);
-    await sections.updateRaw(id, title, content);
+    await sections.updateRaw(id, title, content, (source as any) ?? undefined);
     const updated = await sections.getById(id);
     if (updated) {
-      index.indexSection(updated).catch((err) => console.warn("[index] index after update failed:", err));
+      index.indexSection(updated).finally(() => suppressExternalChange(token)).catch((err) => console.warn("[index] index after update failed:", err));
       if (before && before.title !== title) {
-        index.reindexDescendants(id).catch(err => console.warn("[index] title change descendants:", err));
+        index.reindexDescendants(id).finally(() => suppressExternalChange(token)).catch(err => console.warn("[index] title change descendants:", err));
       }
     }
   });
 
-  ipcMain.handle("sections:updateMarkdown", async (_e, token: string, id: string, title: string, markdown: string) => {
+  ipcMain.handle("sections:updateMarkdown", async (_e, token: string, id: string, title: string, markdown: string, source?: string) => {
     suppressExternalChange(token);
     const { sections, index } = await getProjectServices(token);
     const before = await sections.getById(id);
-    await sections.update(id, title, markdown);
+    await sections.update(id, title, markdown, (source as any) ?? undefined);
     const updated = await sections.getById(id);
     if (updated) {
-      index.indexSection(updated).catch(err => console.warn("[index] updateMd:", err));
+      index.indexSection(updated).finally(() => suppressExternalChange(token)).catch(err => console.warn("[index] updateMd:", err));
       if (before && before.title !== title) {
-        index.reindexDescendants(id).catch(err => console.warn("[index] updateMd descendants:", err));
+        index.reindexDescendants(id).finally(() => suppressExternalChange(token)).catch(err => console.warn("[index] updateMd descendants:", err));
       }
     }
   });
@@ -75,8 +76,8 @@ export function registerSectionsIpc(): void {
     await sections.move(id, newParentId, afterId);
     const moved = await sections.getById(id);
     if (moved) {
-      index.indexSection(moved).catch(err => console.warn("[index] move:", err));
-      index.reindexDescendants(id).catch(err => console.warn("[index] move descendants:", err));
+      index.indexSection(moved).finally(() => suppressExternalChange(token)).catch(err => console.warn("[index] move:", err));
+      index.reindexDescendants(id).finally(() => suppressExternalChange(token)).catch(err => console.warn("[index] move descendants:", err));
     }
   });
 
@@ -85,8 +86,8 @@ export function registerSectionsIpc(): void {
     const { sections, index } = await getProjectServices(token);
     const result = await sections.duplicate(id);
     if (result) {
-      index.indexSection(result).catch(err => console.warn("[index] duplicate:", err));
-      index.reindexDescendants(result.id).catch(err => console.warn("[index] dup descendants:", err));
+      index.indexSection(result).finally(() => suppressExternalChange(token)).catch(err => console.warn("[index] duplicate:", err));
+      index.reindexDescendants(result.id).finally(() => suppressExternalChange(token)).catch(err => console.warn("[index] dup descendants:", err));
     }
     return result;
   });
@@ -96,7 +97,7 @@ export function registerSectionsIpc(): void {
     const { sections, index } = await getProjectServices(token);
     const result = await sections.convertIdeaToKanban(ideaId, columnNames);
     if (result) {
-      index.indexSection(result).catch((err) => console.warn("[index] convertIdeaToKanban:", err));
+      index.indexSection(result).finally(() => suppressExternalChange(token)).catch((err) => console.warn("[index] convertIdeaToKanban:", err));
     }
     return result;
   });
@@ -105,7 +106,7 @@ export function registerSectionsIpc(): void {
     suppressExternalChange(token);
     const { sections, index } = await getProjectServices(token);
     await sections.softDelete(id);
-    index.removeSection(id).catch((err) => console.warn("[index] remove after delete failed:", err));
+    index.removeSection(id).finally(() => suppressExternalChange(token)).catch((err) => console.warn("[index] remove after delete failed:", err));
   });
 
   ipcMain.handle("sections:restore", async (_e, token: string, id: string) => {
@@ -114,8 +115,24 @@ export function registerSectionsIpc(): void {
     await sections.restore(id);
     const restored = await sections.getById(id);
     if (restored) {
-      index.indexSection(restored).catch(err => console.warn("[index] restore:", err));
+      index.indexSection(restored).finally(() => suppressExternalChange(token)).catch(err => console.warn("[index] restore:", err));
     }
+  });
+
+  // Lazy tree loading
+  ipcMain.handle("sections:rootTree", async (_e, token: string) => {
+    const { sections } = await getProjectServices(token);
+    return sections.getRootTreeNodes();
+  });
+
+  ipcMain.handle("sections:childrenTree", async (_e, token: string, parentId: string) => {
+    const { sections } = await getProjectServices(token);
+    return sections.getChildTreeNodes(parentId);
+  });
+
+  ipcMain.handle("sections:parentChain", async (_e, token: string, id: string) => {
+    const { sections } = await getProjectServices(token);
+    return sections.getParentChain(id);
   });
 
   ipcMain.handle("sections:getFileWithSections", async (_e, token: string, fileId: string) => {
@@ -131,6 +148,23 @@ export function registerSectionsIpc(): void {
     return sections.getSectionChildren(parentId);
   });
 
+  // ─── Rich node queries for LLM gt/read tools ──────────────────
+
+  ipcMain.handle("sections:nodesRich", async (_e, token: string, parentId: string | null, opts: any) => {
+    const { sections } = await getProjectServices(token);
+    return sections.getNodesRich(parentId, opts);
+  });
+
+  ipcMain.handle("sections:nodeInfo", async (_e, token: string, id: string) => {
+    const { sections } = await getProjectServices(token);
+    return sections.getNodeInfo(id);
+  });
+
+  ipcMain.handle("sections:treeStats", async (_e, token: string) => {
+    const { sections } = await getProjectServices(token);
+    return sections.getTreeStats();
+  });
+
   ipcMain.handle("sections:setSummary", async (_e, token: string, id: string, summary: string | null) => {
     suppressExternalChange(token);
     const { sections } = await getProjectServices(token);
@@ -141,5 +175,16 @@ export function registerSectionsIpc(): void {
     const { sections } = await getProjectServices(token);
     const markdown = await sections.buildSectionMarkdown(id);
     clipboard.writeText(markdown);
+  });
+
+  ipcMain.handle("convert:mdToProsemirror", (_e, markdown: string) => {
+    return markdownToProsemirror(markdown);
+  });
+
+  ipcMain.handle("import:markdown-clipboard", async (_e, token: string, fileId: string, markdown: string) => {
+    suppressExternalChange(token);
+    const { import_, index } = await getProjectServices(token);
+    await import_.importMarkdownIntoFile(fileId, markdown);
+    index.reindexAll().finally(() => suppressExternalChange(token)).catch(err => console.warn("[index] reindex after clipboard import:", err));
   });
 }

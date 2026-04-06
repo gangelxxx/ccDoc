@@ -34,7 +34,7 @@ export function registerHistoryIpc(): void {
       win?.webContents.send("history:restore-progress", { current, total, title });
     });
     // Rebuild FTS index in a worker thread — zero impact on main thread / UI.
-    trackBgTask("Индексация поиска", () => reindexFtsInWorker(token))
+    trackBgTask("Search indexing", () => reindexFtsInWorker(token))
       .catch(err => console.warn("[index] reindex after restore:", err));
   });
 

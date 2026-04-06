@@ -1,10 +1,11 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Loader2 } from "lucide-react";
-import { useAppStore, type LlmConfig } from "../../stores/app.store.js";
+import { useAppStore } from "../../stores/app.store.js";
 import { useT, type Lang } from "../../i18n.js";
-import type { IndexingConfig } from "../../stores/types.js";
+import type { IndexingConfig, ModelTier, ModelTierConfig, ModelTiersConfig } from "../../stores/types.js";
 import { ModelTab } from "./tabs/ModelTab.js";
+import { ModelTiersTab } from "./tabs/ModelTiersTab.js";
 import { EmbeddingsTab } from "./tabs/EmbeddingsTab.js";
 import { VoiceTab } from "./tabs/VoiceTab.js";
 import { WebSearchTab } from "./tabs/WebSearchTab.js";
@@ -12,24 +13,18 @@ import { AppearanceTab } from "./tabs/AppearanceTab.js";
 import { AgentsTab } from "./tabs/AgentsTab.js";
 import { DeveloperTab } from "./tabs/DeveloperTab.js";
 import { IndexingTab } from "./tabs/IndexingTab.js";
+import { SpellcheckTab } from "./tabs/SpellcheckTab.js";
+import { ProgressStagesTab } from "./tabs/ProgressStagesTab.js";
+import { HistoryTab } from "./tabs/HistoryTab.js";
 
-type Tab = "model" | "embeddings" | "indexing" | "voice" | "websearch" | "agents" | "appearance" | "developer";
+type Tab = "model" | "tiers" | "embeddings" | "indexing" | "voice" | "websearch" | "agents" | "appearance" | "spellcheck" | "progress" | "history" | "developer";
 
 type FontFamily = "default" | "serif" | "sans" | "mono" | "system";
 type FontSize = "small" | "medium" | "large";
 type ColorScheme = "teal" | "blue" | "purple";
 
-function configsEqual(a: LlmConfig, b: LlmConfig): boolean {
-  return a.model === b.model && a.effort === b.effort && a.thinking === b.thinking && a.inheritFromParent === b.inheritFromParent;
-}
-
 export function SettingsModal({ onClose, initialTab }: { onClose: () => void; initialTab?: string }) {
   const {
-    llmApiKey, setLlmApiKey,
-    llmModels, llmModelsLoading, llmModelsError, fetchLlmModels,
-    llmChatConfig, setLlmChatConfig,
-    llmPassportConfig, setLlmPassportConfig,
-    llmSummaryConfig, setLlmSummaryConfig,
     webSearchProvider, setWebSearchProvider,
     webSearchApiKey, setWebSearchApiKey,
     theme, toggleTheme,
@@ -43,13 +38,16 @@ export function SettingsModal({ onClose, initialTab }: { onClose: () => void; in
     devMode, setDevMode,
     addToast,
     indexingConfig, setIndexingConfig,
+    spellcheckConfig, setSpellcheckConfig,
+    historyConfig, setHistoryConfig,
+    modelTiers, setModelTier, setTierAssignment,
+    builtinScripts, loadBuiltinScripts,
   } = useAppStore();
   const t = useT();
 
-  const validTabs: Tab[] = ["model", "embeddings", "indexing", "voice", "websearch", "agents", "appearance"];
+  const validTabs: Tab[] = ["model", "tiers", "embeddings", "indexing", "voice", "websearch", "agents", "appearance", "spellcheck", "progress", "history"];
   const resolvedInitialTab = (initialTab === "theme" || initialTab === "language") ? "appearance" : initialTab;
   const [tab, setTab] = useState<Tab>(validTabs.includes(resolvedInitialTab as Tab) ? resolvedInitialTab as Tab : "model");
-  const [openSection, setOpenSection] = useState<string>("chat");
 
   // Secret dev mode activation: press "8" four times in a row
   const devCodeRef = useRef("");
@@ -74,10 +72,6 @@ export function SettingsModal({ onClose, initialTab }: { onClose: () => void; in
   }, [handleDevCode]);
 
   /* --- drafts --- */
-  const [keyDraft, setKeyDraft] = useState(llmApiKey);
-  const [chatDraft, setChatDraft] = useState<LlmConfig>(llmChatConfig);
-  const [passportDraft, setPassportDraft] = useState<LlmConfig>(llmPassportConfig);
-  const [summaryDraft, setSummaryDraft] = useState<LlmConfig>(llmSummaryConfig);
   const [webSearchProviderDraft, setWebSearchProviderDraft] = useState(webSearchProvider);
   const [webSearchApiKeyDraft, setWebSearchApiKeyDraft] = useState(webSearchApiKey);
   const [themeDraft, setThemeDraft] = useState(theme);
@@ -86,26 +80,36 @@ export function SettingsModal({ onClose, initialTab }: { onClose: () => void; in
   const [fontSizeDraft, setFontSizeDraft] = useState<FontSize>(fontSize);
   const [colorSchemeDraft, setColorSchemeDraft] = useState<ColorScheme>(colorScheme);
   const [voiceModelDraft, setVoiceModelDraft] = useState(voiceModelId);
+  const [autoVerifyPlanDraft, setAutoVerifyPlanDraft] = useState(useAppStore.getState().autoVerifyPlan);
+  const [showIconProgressDraft, setShowIconProgressDraft] = useState(useAppStore.getState().showIconProgress);
   const [indexingDraft, setIndexingDraft] = useState(indexingConfig);
+  const [spellcheckEnabledDraft, setSpellcheckEnabledDraft] = useState(spellcheckConfig.enabled);
+  const [spellcheckLangsDraft, setSpellcheckLangsDraft] = useState(spellcheckConfig.languages);
+  const [progressStagesDraft, setProgressStagesDraft] = useState(useAppStore.getState().progressStages);
+  const [tiersDraft, setTiersDraft] = useState<ModelTiersConfig>(modelTiers);
+
+  const handleTierChange = (tier: ModelTier, patch: Partial<ModelTierConfig>) => {
+    setTiersDraft((d) => ({ ...d, [tier]: { ...d[tier], ...patch } }));
+  };
+  const handleTierAssignmentChange = (key: "chatTier" | "passportTier" | "summaryTier", tier: ModelTier) => {
+    setTiersDraft((d) => ({ ...d, [key]: tier }));
+  };
+
+  const [historyRetainDaysDraft, setHistoryRetainDaysDraft] = useState(historyConfig.historyRetainDays);
+  const [maxSnapshotsDraft, setMaxSnapshotsDraft] = useState(historyConfig.maxSnapshotsPerSection);
+  const [snapshotMaxAgeDaysDraft, setSnapshotMaxAgeDaysDraft] = useState(historyConfig.snapshotMaxAgeDays);
+  const [snapshotCoalesceDraft, setSnapshotCoalesceDraft] = useState(historyConfig.snapshotCoalesceIntervalSec);
 
   /* --- side effects --- */
   useEffect(() => {
     if (tab === "embeddings") fetchEmbeddingStatus();
     if (tab === "voice") fetchVoiceStatuses();
+    if (tab === "tiers" && builtinScripts.length === 0) loadBuiltinScripts();
   }, [tab]);
-
-  useEffect(() => {
-    if (llmApiKey && llmModels.length === 0) {
-      fetchLlmModels(llmApiKey);
-    }
-  }, []);
 
   /* --- dirty check --- */
   const isDirty = useMemo(() =>
-    keyDraft !== llmApiKey ||
-    !configsEqual(chatDraft, llmChatConfig) ||
-    !configsEqual(passportDraft, llmPassportConfig) ||
-    !configsEqual(summaryDraft, llmSummaryConfig) ||
+    JSON.stringify(tiersDraft) !== JSON.stringify(modelTiers) ||
     webSearchProviderDraft !== webSearchProvider ||
     webSearchApiKeyDraft !== webSearchApiKey ||
     themeDraft !== theme ||
@@ -114,12 +118,22 @@ export function SettingsModal({ onClose, initialTab }: { onClose: () => void; in
     fontSizeDraft !== fontSize ||
     colorSchemeDraft !== colorScheme ||
     voiceModelDraft !== voiceModelId ||
-    JSON.stringify(indexingDraft) !== JSON.stringify(indexingConfig),
-    [keyDraft, chatDraft, passportDraft, summaryDraft, webSearchProviderDraft, webSearchApiKeyDraft,
+    JSON.stringify(indexingDraft) !== JSON.stringify(indexingConfig) ||
+    spellcheckEnabledDraft !== spellcheckConfig.enabled ||
+    JSON.stringify(spellcheckLangsDraft) !== JSON.stringify(spellcheckConfig.languages) ||
+    autoVerifyPlanDraft !== useAppStore.getState().autoVerifyPlan ||
+    JSON.stringify(progressStagesDraft) !== JSON.stringify(useAppStore.getState().progressStages) ||
+    historyRetainDaysDraft !== historyConfig.historyRetainDays ||
+    maxSnapshotsDraft !== historyConfig.maxSnapshotsPerSection ||
+    snapshotMaxAgeDaysDraft !== historyConfig.snapshotMaxAgeDays ||
+    snapshotCoalesceDraft !== historyConfig.snapshotCoalesceIntervalSec,
+    [tiersDraft, modelTiers,
+     webSearchProviderDraft, webSearchApiKeyDraft,
      themeDraft, langDraft, fontFamilyDraft, fontSizeDraft, colorSchemeDraft, voiceModelDraft,
-     indexingDraft,
-     llmApiKey, llmChatConfig, llmPassportConfig, llmSummaryConfig, webSearchProvider, webSearchApiKey,
-     theme, language, fontFamily, fontSize, colorScheme, voiceModelId, indexingConfig]
+     indexingDraft, spellcheckEnabledDraft, spellcheckLangsDraft, autoVerifyPlanDraft, progressStagesDraft,
+     historyRetainDaysDraft, maxSnapshotsDraft, snapshotMaxAgeDaysDraft, snapshotCoalesceDraft,
+     webSearchProvider, webSearchApiKey,
+     theme, language, fontFamily, fontSize, colorScheme, voiceModelId, indexingConfig, spellcheckConfig, historyConfig]
   );
 
   /* --- auto-configure indexing --- */
@@ -155,13 +169,19 @@ export function SettingsModal({ onClose, initialTab }: { onClose: () => void; in
 
   /* --- save --- */
   const applyChanges = () => {
-    if (keyDraft !== llmApiKey) {
-      setLlmApiKey(keyDraft);
-      if (keyDraft) fetchLlmModels(keyDraft);
+    // Model tiers
+    if (JSON.stringify(tiersDraft) !== JSON.stringify(modelTiers)) {
+      for (const tier of ["strong", "medium", "weak"] as const) {
+        if (JSON.stringify(tiersDraft[tier]) !== JSON.stringify(modelTiers[tier])) {
+          setModelTier(tier, tiersDraft[tier]);
+        }
+      }
+      for (const key of ["chatTier", "passportTier", "summaryTier"] as const) {
+        if (tiersDraft[key] !== modelTiers[key]) {
+          setTierAssignment(key, tiersDraft[key]);
+        }
+      }
     }
-    if (!configsEqual(chatDraft, llmChatConfig)) setLlmChatConfig(chatDraft);
-    if (!configsEqual(passportDraft, llmPassportConfig)) setLlmPassportConfig(passportDraft);
-    if (!configsEqual(summaryDraft, llmSummaryConfig)) setLlmSummaryConfig(summaryDraft);
     if (webSearchProviderDraft !== webSearchProvider) setWebSearchProvider(webSearchProviderDraft);
     if (webSearchApiKeyDraft !== webSearchApiKey) setWebSearchApiKey(webSearchApiKeyDraft);
     if (themeDraft !== theme) toggleTheme();
@@ -170,7 +190,26 @@ export function SettingsModal({ onClose, initialTab }: { onClose: () => void; in
     if (fontSizeDraft !== fontSize) setFontSize(fontSizeDraft);
     if (colorSchemeDraft !== colorScheme) setColorScheme(colorSchemeDraft);
     if (voiceModelDraft !== voiceModelId) setVoiceModelId(voiceModelDraft);
+    if (autoVerifyPlanDraft !== useAppStore.getState().autoVerifyPlan) useAppStore.getState().setAutoVerifyPlan(autoVerifyPlanDraft);
+    if (showIconProgressDraft !== useAppStore.getState().showIconProgress) useAppStore.getState().setShowIconProgress(showIconProgressDraft);
     if (JSON.stringify(indexingDraft) !== JSON.stringify(indexingConfig)) setIndexingConfig(indexingDraft);
+    if (spellcheckEnabledDraft !== spellcheckConfig.enabled || JSON.stringify(spellcheckLangsDraft) !== JSON.stringify(spellcheckConfig.languages)) {
+      setSpellcheckConfig({ enabled: spellcheckEnabledDraft, languages: spellcheckLangsDraft });
+    }
+    if (JSON.stringify(progressStagesDraft) !== JSON.stringify(useAppStore.getState().progressStages)) {
+      useAppStore.getState().setProgressStages(progressStagesDraft);
+    }
+    if (historyRetainDaysDraft !== historyConfig.historyRetainDays ||
+        maxSnapshotsDraft !== historyConfig.maxSnapshotsPerSection ||
+        snapshotMaxAgeDaysDraft !== historyConfig.snapshotMaxAgeDays ||
+        snapshotCoalesceDraft !== historyConfig.snapshotCoalesceIntervalSec) {
+      setHistoryConfig({
+        historyRetainDays: historyRetainDaysDraft,
+        maxSnapshotsPerSection: maxSnapshotsDraft,
+        snapshotMaxAgeDays: snapshotMaxAgeDaysDraft,
+        snapshotCoalesceIntervalSec: snapshotCoalesceDraft,
+      });
+    }
   };
 
   const handleSave = () => {
@@ -178,69 +217,74 @@ export function SettingsModal({ onClose, initialTab }: { onClose: () => void; in
     onClose();
   };
 
-  const toggleSection = (key: string) => {
-    const opening = openSection !== key;
-    setOpenSection((prev) => (prev === key ? "" : key));
-    if (opening && keyDraft && llmModels.length === 0 && !llmModelsLoading) {
-      fetchLlmModels(keyDraft);
-    }
-  };
 
-  /* --- shared LLM model props --- */
-  const modelProps = {
-    models: llmModels,
-    modelsLoading: llmModelsLoading,
-    modelsError: llmModelsError,
-    openSection,
-    onToggleSection: toggleSection,
-  };
 
   return createPortal(
     <div className="modal-overlay">
       <div className="modal settings-modal">
         <h3>{t("settings")}</h3>
 
-        <div className="settings-tabs">
-          <button className={`settings-tab${tab === "model" ? " active" : ""}`} onClick={() => setTab("model")}>
-            {t("settingsModel")}
-          </button>
-          <button className={`settings-tab${tab === "embeddings" ? " active" : ""}`} onClick={() => setTab("embeddings")}>
-            {t("settingsEmbeddings")}
-          </button>
-          <button className={`settings-tab${tab === "indexing" ? " active" : ""}`} onClick={() => setTab("indexing")}>
-            {t("settingsIndexing")}
-          </button>
-          <button className={`settings-tab${tab === "voice" ? " active" : ""}`} onClick={() => setTab("voice")}>
-            {t("settingsVoice")}
-          </button>
-          <button className={`settings-tab${tab === "appearance" ? " active" : ""}`} onClick={() => setTab("appearance")}>
-            {t("settingsAppearance")}
-          </button>
-          <button className={`settings-tab${tab === "websearch" ? " active" : ""}`} onClick={() => setTab("websearch")}>
-            {t("webSearchTitle")}
-          </button>
-          <button className={`settings-tab${tab === "agents" ? " active" : ""}`} onClick={() => setTab("agents")}>
-            {t("settingsAgents")}
-          </button>
-          {devMode && (
-            <button className={`settings-tab${tab === "developer" ? " active" : ""}`} onClick={() => setTab("developer")}>
-              {t("settingsDeveloper")}
+        <div className="settings-body">
+          <div className="settings-tabs">
+            <button className={`settings-tab${tab === "model" ? " active" : ""}`} onClick={() => setTab("model")}>
+              {t("settingsModel")}
             </button>
-          )}
-        </div>
+            <button className={`settings-tab${tab === "tiers" ? " active" : ""}`} onClick={() => setTab("tiers")}>
+              {t("settingsModelTiers")}
+            </button>
+            <button className={`settings-tab${tab === "embeddings" ? " active" : ""}`} onClick={() => setTab("embeddings")}>
+              {t("settingsEmbeddings")}
+            </button>
+            <button className={`settings-tab${tab === "indexing" ? " active" : ""}`} onClick={() => setTab("indexing")}>
+              {t("settingsIndexing")}
+            </button>
+            <button className={`settings-tab${tab === "voice" ? " active" : ""}`} onClick={() => setTab("voice")}>
+              {t("settingsVoice")}
+            </button>
+            <button className={`settings-tab${tab === "appearance" ? " active" : ""}`} onClick={() => setTab("appearance")}>
+              {t("settingsAppearance")}
+            </button>
+            <button className={`settings-tab${tab === "websearch" ? " active" : ""}`} onClick={() => setTab("websearch")}>
+              {t("webSearchTitle")}
+            </button>
+            <button className={`settings-tab${tab === "agents" ? " active" : ""}`} onClick={() => setTab("agents")}>
+              {t("settingsAgents")}
+            </button>
+            <button className={`settings-tab${tab === "spellcheck" ? " active" : ""}`} onClick={() => setTab("spellcheck")}>
+              {t("settingsSpellcheck")}
+            </button>
+            <button className={`settings-tab${tab === "progress" ? " active" : ""}`} onClick={() => setTab("progress")}>
+              {t("settingsProgressStages")}
+            </button>
+            <button className={`settings-tab${tab === "history" ? " active" : ""}`} onClick={() => setTab("history")}>
+              {t("settingsHistory")}
+            </button>
+            {devMode && (
+              <button className={`settings-tab${tab === "developer" ? " active" : ""}`} onClick={() => setTab("developer")}>
+                {t("settingsDeveloper")}
+              </button>
+            )}
+          </div>
 
-        <div className="settings-tab-content">
+          <div className="settings-tab-content">
           {tab === "model" && (
             <ModelTab
-              keyDraft={keyDraft}
-              onKeyChange={setKeyDraft}
-              chatDraft={chatDraft}
-              onChatChange={(cfg) => setChatDraft((d) => ({ ...d, ...cfg }))}
-              passportDraft={passportDraft}
-              onPassportChange={(cfg) => setPassportDraft((d) => ({ ...d, ...cfg }))}
-              summaryDraft={summaryDraft}
-              onSummaryChange={(cfg) => setSummaryDraft((d) => ({ ...d, ...cfg }))}
-              {...modelProps}
+              chatTierDraft={tiersDraft.chatTier}
+              onChatTierChange={(t) => handleTierAssignmentChange("chatTier", t)}
+              passportTierDraft={tiersDraft.passportTier}
+              onPassportTierChange={(t) => handleTierAssignmentChange("passportTier", t)}
+              summaryTierDraft={tiersDraft.summaryTier}
+              onSummaryTierChange={(t) => handleTierAssignmentChange("summaryTier", t)}
+              autoVerifyPlan={autoVerifyPlanDraft}
+              onAutoVerifyPlanChange={setAutoVerifyPlanDraft}
+            />
+          )}
+
+          {tab === "tiers" && (
+            <ModelTiersTab
+              tiersDraft={tiersDraft}
+              onTierChange={handleTierChange}
+              builtinScripts={builtinScripts}
             />
           )}
 
@@ -271,6 +315,35 @@ export function SettingsModal({ onClose, initialTab }: { onClose: () => void; in
 
           {tab === "agents" && <AgentsTab />}
 
+          {tab === "spellcheck" && (
+            <SpellcheckTab
+              enabled={spellcheckEnabledDraft}
+              onEnabledChange={setSpellcheckEnabledDraft}
+              languages={spellcheckLangsDraft}
+              onLanguagesChange={setSpellcheckLangsDraft}
+            />
+          )}
+
+          {tab === "progress" && (
+            <ProgressStagesTab
+              stages={progressStagesDraft}
+              onChange={setProgressStagesDraft}
+            />
+          )}
+
+          {tab === "history" && (
+            <HistoryTab
+              historyRetainDays={historyRetainDaysDraft}
+              onHistoryRetainDaysChange={setHistoryRetainDaysDraft}
+              maxSnapshotsPerSection={maxSnapshotsDraft}
+              onMaxSnapshotsChange={setMaxSnapshotsDraft}
+              snapshotMaxAgeDays={snapshotMaxAgeDaysDraft}
+              onSnapshotMaxAgeDaysChange={setSnapshotMaxAgeDaysDraft}
+              snapshotCoalesceIntervalSec={snapshotCoalesceDraft}
+              onSnapshotCoalesceChange={setSnapshotCoalesceDraft}
+            />
+          )}
+
           {tab === "developer" && <DeveloperTab />}
 
           {tab === "appearance" && (
@@ -285,9 +358,12 @@ export function SettingsModal({ onClose, initialTab }: { onClose: () => void; in
               onFontSizeChange={setFontSizeDraft}
               colorSchemeDraft={colorSchemeDraft}
               onColorSchemeChange={setColorSchemeDraft}
+              showIconProgress={showIconProgressDraft}
+              onShowIconProgressChange={setShowIconProgressDraft}
             />
           )}
 
+          </div>
         </div>
 
         <div className="modal-actions">

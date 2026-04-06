@@ -5,6 +5,8 @@ export function DeveloperTab() {
   const t = useT();
   const devTrackToolIssues = useAppStore(s => s.devTrackToolIssues);
   const setDevTrackToolIssues = useAppStore(s => s.setDevTrackToolIssues);
+  const devToolFeedback = useAppStore(s => s.devToolFeedback);
+  const setDevToolFeedback = useAppStore(s => s.setDevToolFeedback);
 
   return (
     <div className="settings-section">
@@ -16,6 +18,14 @@ export function DeveloperTab() {
           onChange={e => setDevTrackToolIssues(e.target.checked)}
         />
         {t("devTrackToolIssues")}
+      </label>
+      <label className="llm-context-toggle">
+        <input
+          type="checkbox"
+          checked={devToolFeedback}
+          onChange={e => setDevToolFeedback(e.target.checked)}
+        />
+        {t("devToolFeedback")}
       </label>
     </div>
   );

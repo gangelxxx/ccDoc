@@ -1,6 +1,7 @@
 import { useEffect, useCallback, useRef } from "react";
 import { useT } from "../../../i18n.js";
 import { useAppStore } from "../../../stores/app.store.js";
+import { sourceGetSection, sourceSaveSection } from "../source-api.js";
 
 import type { KanbanCard, KanbanColumn } from "./types.js";
 import { useKanbanState } from "./hooks/use-kanban-state.js";
@@ -14,6 +15,7 @@ import { ConfirmDialog } from "./ConfirmDialog.js";
 import { ViewTabs } from "./ViewTabs.js";
 import { TableView } from "./TableView.js";
 import { ListView } from "./ListView.js";
+import type { AutoCommitApi } from "../../../hooks/use-auto-commit.js";
 
 // Helper: sync idea message completed state when kanban card moves between columns
 async function syncIdeaCompleted(card: KanbanCard, fromColId: string, toColId: string, columns: KanbanColumn[]) {
@@ -24,22 +26,21 @@ async function syncIdeaCompleted(card: KanbanCard, fromColId: string, toColId: s
   const movedFromDone = doneColIds.has(fromColId) && !doneColIds.has(toColId);
   if (!movedToDone && !movedFromDone) return;
 
-  const proj = useAppStore.getState().currentProject;
-  if (!proj?.token) return;
   try {
-    const sec = await window.api.getSection(proj.token, card.sourceIdeaId);
+    const sec = await sourceGetSection(card.sourceIdeaId);
+    if (!sec) return;
     const data = JSON.parse(sec.content);
     const msg = data.messages?.find((m: any) => m.id === card.sourceMessageId);
     if (msg) {
       msg.completed = movedToDone;
-      await window.api.updateSection(proj.token, card.sourceIdeaId, sec.title, JSON.stringify(data));
+      await sourceSaveSection(card.sourceIdeaId, sec.title, JSON.stringify(data));
     }
   } catch { /* ignore */ }
 }
 
 // ── Main Component ─────────────────────────────────────────
 
-export function KanbanBoard({ sectionId, title, initialContent }: { sectionId: string; title: string; initialContent: string }) {
+export function KanbanBoard({ sectionId, title, initialContent, autoCommit }: { sectionId: string; title: string; initialContent: string; autoCommit?: AutoCommitApi }) {
   const t = useT();
 
   // Use ref to avoid circular dependency: handleCardMoved needs columns, but useKanbanState needs handleCardMoved
@@ -47,15 +48,21 @@ export function KanbanBoard({ sectionId, title, initialContent }: { sectionId: s
 
   const handleCardMoved = useCallback((card: KanbanCard, fromColId: string, toColId: string) => {
     syncIdeaCompleted(card, fromColId, toColId, columnsRef.current);
-  }, []);
+    // Auto-commit: trigger when card moves to Done column
+    if (autoCommit?.isEnabled) {
+      const doneColIds = new Set(columnsRef.current.filter((c) => c.isDone).map((c) => c.id));
+      if (doneColIds.has(toColId) && !doneColIds.has(fromColId)) {
+        autoCommit.triggerCommit(card.title);
+      }
+    }
+  }, [autoCommit]);
 
   // Sync idea message order when card is reordered in kanban
   const handleCardReordered = useCallback(async (card: KanbanCard, position: "top" | "bottom") => {
     if (!card.sourceIdeaId || !card.sourceMessageId) return;
-    const proj = useAppStore.getState().currentProject;
-    if (!proj?.token) return;
     try {
-      const sec = await window.api.getSection(proj.token, card.sourceIdeaId);
+      const sec = await sourceGetSection(card.sourceIdeaId);
+      if (!sec) return;
       const data = JSON.parse(sec.content);
       const msgs = data.messages;
       if (!msgs) return;
@@ -64,7 +71,7 @@ export function KanbanBoard({ sectionId, title, initialContent }: { sectionId: s
       const [msg] = msgs.splice(idx, 1);
       if (position === "top") msgs.unshift(msg);
       else msgs.push(msg);
-      await window.api.updateSection(proj.token, card.sourceIdeaId, sec.title, JSON.stringify(data));
+      await sourceSaveSection(card.sourceIdeaId, sec.title, JSON.stringify(data));
     } catch { /* ignore */ }
   }, []);
 
@@ -218,20 +225,19 @@ export function KanbanBoard({ sectionId, title, initialContent }: { sectionId: s
     const col = state.data.columns.find((c) => c.id === colId);
     const card = col?.cards.find((c) => c.id === cardId);
     if (card?.sourceIdeaId && card?.sourceMessageId) {
-      const proj = useAppStore.getState().currentProject;
-      if (proj?.token) {
-        try {
-          const sec = await window.api.getSection(proj.token, card.sourceIdeaId);
+      try {
+        const sec = await sourceGetSection(card.sourceIdeaId);
+        if (sec) {
           const data = JSON.parse(sec.content);
           const msg = data.messages?.find((m: any) => m.id === card.sourceMessageId);
           if (msg) {
             const descPart = card.description?.trim();
             msg.text = descPart ? `${newTitle}\n${descPart}` : newTitle;
             msg.editedAt = Date.now();
-            await window.api.updateSection(proj.token, card.sourceIdeaId, sec.title, JSON.stringify(data));
+            await sourceSaveSection(card.sourceIdeaId, sec.title, JSON.stringify(data));
           }
-        } catch { /* ignore */ }
-      }
+        }
+      } catch { /* ignore */ }
     }
   }, [state.updateCard, state.data.columns]);
 
@@ -251,7 +257,14 @@ export function KanbanBoard({ sectionId, title, initialContent }: { sectionId: s
     });
     // Sync idea completed state on cross-column move
     syncIdeaCompleted(card, fromColId, toColId, state.data.columns);
-  }, [state.data, state.save]);
+    // Auto-commit on move to Done via context menu
+    if (autoCommit?.isEnabled) {
+      const doneColIds = new Set(state.data.columns.filter((c) => c.isDone).map((c) => c.id));
+      if (doneColIds.has(toColId) && !doneColIds.has(fromColId)) {
+        autoCommit.triggerCommit(card.title);
+      }
+    }
+  }, [state.data, state.save, autoCommit]);
 
   // ── Render ──
 
@@ -296,6 +309,15 @@ export function KanbanBoard({ sectionId, title, initialContent }: { sectionId: s
           {state.data.columns.some((c) => c.width) && (
             <button className="kanban-toolbar-btn" onClick={state.resetColumnWidths} title={t("kanbanResetWidths")}>
               ↔
+            </button>
+          )}
+          {autoCommit?.isAvailable && (
+            <button
+              className={`auto-commit-toggle ${autoCommit.isEnabled ? "active" : ""}`}
+              onClick={autoCommit.toggle}
+              title={t("autoCommitTooltip")}
+            >
+              {t("autoCommitToggle")}
             </button>
           )}
           <button className="kanban-toolbar-btn" onClick={() => state.setShowSettings(true)}>&#x22EF;</button>
@@ -498,6 +520,7 @@ export function KanbanBoard({ sectionId, title, initialContent }: { sectionId: s
           onClose={() => state.setDetailCard(null)}
         />
       )}
+
     </div>
   );
 }

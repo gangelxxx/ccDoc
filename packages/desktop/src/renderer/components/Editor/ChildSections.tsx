@@ -28,8 +28,10 @@ export function ChildSections({ parentId, tree, onNavigate }: {
     let cancelled = false;
     const load = async () => {
       try {
-        const token = useAppStore.getState().currentProject!.token;
-        const sections = await window.api.getSectionChildren(token, parentId);
+        const state = useAppStore.getState();
+        const sections = state.sectionSource === "user"
+          ? await window.api.user.getSectionChildren(parentId)
+          : await window.api.getSectionChildren(state.activeSectionToken || state.currentProject!.token, parentId);
         if (!cancelled) {
           setChildren(flattenChildren(sections));
         }
@@ -60,10 +62,15 @@ export function ChildSections({ parentId, tree, onNavigate }: {
               title={t("copyAsMarkdown")}
               onClick={async (e) => {
                 e.stopPropagation();
-                const token = useAppStore.getState().currentProject?.token;
-                if (!token) return;
+                const state = useAppStore.getState();
                 try {
-                  await window.api.copySectionAsMarkdown(token, child.id);
+                  if (state.sectionSource === "user") {
+                    await window.api.user.copySectionAsMarkdown(child.id);
+                  } else {
+                    const token = state.activeSectionToken || state.currentProject?.token;
+                    if (!token) return;
+                    await window.api.copySectionAsMarkdown(token, child.id);
+                  }
                   setCopiedId(child.id);
                   useAppStore.getState().addToast("success", t("markdownCopied"));
                   setTimeout(() => setCopiedId(null), 1500);

@@ -1,5 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { join } from "path";
+import { homedir } from "os";
+import { mkdirSync, appendFileSync } from "fs";
+import { INTERNAL_PASSPORT_KEYS } from "@ccdoc/core";
 import {
   getProjectServices,
   getEmbeddingModel,
@@ -66,14 +70,19 @@ export function registerV2Tools(server: McpServer): void {
 
   server.tool(
     "overview",
-    "Get project passport (name, stack, conventions) and compact documentation tree (depth 2, no content). Call this first to orient yourself in the project.",
+    "Get project passport (name, description, stack, architecture, conventions, commands, structure, notes) and compact documentation tree (depth 2, no content). Call this first to orient yourself in the project.",
     {
       project_token: z.string().uuid().describe("Project UUID token"),
     },
     async ({ project_token }) => {
       try {
         const { sections, passport } = await getProjectServices(project_token);
-        const passportData = await passport.getAll();
+        const allData = await passport.getAll();
+        // Filter out internal system keys
+        const passportData: Record<string, string> = {};
+        for (const [key, value] of Object.entries(allData)) {
+          if (!INTERNAL_PASSPORT_KEYS.has(key)) passportData[key] = value;
+        }
         const tree = await sections.getTree();
         const compact = compactTree(tree as unknown as TreeNode[]);
 
@@ -185,6 +194,16 @@ export function registerV2Tools(server: McpServer): void {
           content: plainText,
         };
 
+        // Include progress for idea sections
+        if (section.type === "idea" && section.content) {
+          try {
+            const data = JSON.parse(section.content);
+            if (typeof data.progress === "number") {
+              result.progress = data.progress;
+            }
+          } catch { /* content is not JSON — skip */ }
+        }
+
         if (children.length > 0) {
           result.children = children.map((c) => ({
             id: c.id,
@@ -244,6 +263,35 @@ export function registerV2Tools(server: McpServer): void {
       } catch (e: unknown) {
         return errorResult(e);
       }
+    }
+  );
+
+  // ─── Tool Feedback ─────────────────────────────────────────────
+  const feedbackDir = join(homedir(), ".ccdoc", "logs", "mcp-feedback");
+  try { mkdirSync(feedbackDir, { recursive: true }); } catch { /* exists */ }
+
+  server.tool(
+    "tool_feedback",
+    "Leave feedback about tool behavior. Call this when a tool didn't work as expected, returned too much/little data, or you have a suggestion for improvement. Helps developers optimize tools.",
+    {
+      tool: z.string().describe("Tool name that you're giving feedback about"),
+      wanted: z.string().describe("What you wanted to achieve (1 line)"),
+      got: z.string().describe("What the tool actually returned vs what you needed (1 line)"),
+      suggestion: z.string().describe("What would have saved you a round, or 'none'"),
+    },
+    async ({ tool, wanted, got, suggestion }) => {
+      const entry = {
+        timestamp: new Date().toISOString(),
+        tool,
+        wanted,
+        got,
+        suggestion,
+      };
+      try {
+        const filename = `${new Date().toISOString().slice(0, 10)}.jsonl`;
+        appendFileSync(join(feedbackDir, filename), JSON.stringify(entry) + "\n");
+      } catch { /* non-fatal */ }
+      return { content: [{ type: "text", text: "Feedback recorded." }] };
     }
   );
 }

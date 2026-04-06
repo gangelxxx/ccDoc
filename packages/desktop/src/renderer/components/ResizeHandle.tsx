@@ -1,11 +1,11 @@
 import { useCallback, useRef, useEffect } from "react";
 
 interface ResizeHandleProps {
-  /** "left" = панель слева от хендла, "right" = панель справа */
+  /** "left" = panel to the left of the handle, "right" = panel to the right */
   side: "left" | "right";
-  /** Вызывается при начале перетаскивания */
+  /** Called when drag starts */
   onResizeStart?: () => void;
-  /** Абсолютная дельта от начала drag (не инкрементальная) */
+  /** Absolute delta from drag start (not incremental) */
   onResize: (delta: number) => void;
   onResizeEnd?: () => void;
   onDoubleClick?: () => void;
@@ -31,7 +31,7 @@ export function ResizeHandle({ side, onResizeStart, onResize, onResizeEnd, onDou
     const handleMouseMove = (e: MouseEvent) => {
       if (!dragging.current) return;
       const delta = e.clientX - startX.current;
-      // Для панели справа — инвертируем дельту (тянем влево = увеличиваем)
+      // For the right panel — invert delta (dragging left = expanding)
       onResize(side === "right" ? -delta : delta);
     };
 

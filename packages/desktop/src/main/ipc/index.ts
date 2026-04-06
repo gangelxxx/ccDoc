@@ -15,6 +15,15 @@ import { registerWebSearchIpc } from "./web-search";
 import { registerKnowledgeGraphIpc } from "./knowledge-graph";
 import { registerSemanticIpc } from "./semantic";
 import { registerSettingsIpc } from "./settings";
+import { registerWorkspaceIpc } from "./workspace";
+import { registerUserIpc } from "./user";
+import { registerTrashIpc } from "./trash";
+import { registerIconProgressIpc } from "./icon-progress";
+import { registerGitIpc } from "./git";
+import { registerSectionPrefsIpc } from "./section-prefs";
+import { registerIdeaProgressIpc } from "./idea-progress";
+import { registerSectionSnapshotsIpc } from "./section-snapshots";
+import { registerHistorySettingsIpc } from "./history-settings";
 import type { SettingsService } from "../services/settings.service";
 
 export function registerAllIpcHandlers(settingsService: SettingsService): void {
@@ -35,4 +44,13 @@ export function registerAllIpcHandlers(settingsService: SettingsService): void {
   registerKnowledgeGraphIpc(settingsService);
   registerSemanticIpc();
   registerSettingsIpc(settingsService);
+  registerWorkspaceIpc();
+  registerUserIpc();
+  registerTrashIpc();
+  registerIconProgressIpc();
+  registerGitIpc();
+  registerSectionPrefsIpc();
+  registerIdeaProgressIpc();
+  registerSectionSnapshotsIpc();
+  registerHistorySettingsIpc();
 }

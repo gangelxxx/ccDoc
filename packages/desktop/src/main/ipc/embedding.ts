@@ -5,7 +5,7 @@ import { homedir } from "os";
 import https from "https";
 import { LOCAL_MODELS, FtsRepo, EmbeddingRepo, IndexService, FindService } from "@ccdoc/core";
 import { getMainWindow } from "../window";
-import { getEmbeddingManager, getProjectDbsMap, trackBgTask } from "../services";
+import { getEmbeddingManager, getProjectDbsMap, trackBgTask, suppressExternalChange } from "../services";
 
 const activeDownloads = new Map<string, () => void>(); // modelId -> cancel fn
 
@@ -122,7 +122,7 @@ export function registerEmbeddingIpc(): void {
     const model = manager.getProvider();
 
     // 2. Rebuild IndexService and FindService in all cached projects
-    for (const [, services] of getProjectDbsMap()) {
+    for (const [token, services] of getProjectDbsMap()) {
       const ftsRepo = new FtsRepo(services.db);
       const embeddingRepo = new EmbeddingRepo(services.db);
       services.index = new IndexService(services.db, undefined, ftsRepo, model, embeddingRepo);
@@ -131,7 +131,9 @@ export function registerEmbeddingIpc(): void {
 
       // 3. Trigger background embedding reindex if model is available
       if (model) {
-        trackBgTask("Переиндексация эмбеддингов", () => services.index.reindexAll());
+        suppressExternalChange(token);
+        trackBgTask("Re-indexing embeddings", (sendProgress) => services.index.reindexAll(sendProgress))
+          .then(() => suppressExternalChange(token));
       }
     }
   });

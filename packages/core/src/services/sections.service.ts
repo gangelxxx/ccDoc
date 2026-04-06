@@ -8,21 +8,56 @@ import { prosemirrorToPlain } from "../converters/prosemirror-to-plain.js";
 import { prosemirrorToStructured } from "../converters/prosemirror-to-structured.js";
 import { kanbanToMarkdown, kanbanToPlain, markdownToKanban, emptyKanbanData } from "../converters/kanban.js";
 import { drawingToText, drawingToPlain, textToDrawing } from "../converters/drawing/index.js";
-import type { Section, SectionType, TreeNode, OutputFormat, ProseMirrorNode, StructuredOutput, KanbanData, KanbanCard, FileSectionNode, DrawingElement, IdeaData, IdeaMessage } from "../types.js";
+import type { Section, SectionType, TreeNode, OutputFormat, ProseMirrorNode, StructuredOutput, KanbanData, KanbanCard, FileSectionNode, DrawingElement, IdeaData, IdeaMessage, RichNode, TreeStats } from "../types.js";
 import { SOFT_DELETE_DAYS } from "../constants.js";
 import { validateHierarchy } from "../hierarchy.js";
+import type { SectionSnapshotService } from "./section-snapshot.service.js";
+import type { SnapshotSource } from "../db/section-snapshot.repo.js";
 
 export class SectionsService {
   private repo: SectionsRepo;
+  private snapshotService?: SectionSnapshotService;
 
   constructor(private db: Client) {
     this.repo = new SectionsRepo(db);
   }
 
+  setSnapshotService(service: SectionSnapshotService): void {
+    this.snapshotService = service;
+  }
+
   async getTree(): Promise<TreeNode[]> {
     // Use listMeta (excludes content) — tree only needs id/title/type/parent/sort_key.
     const sections = await this.repo.listMeta();
-    return buildTree(sections);
+    const tree = buildTree(sections);
+    await this.fillIdeaProgress(tree);
+    return tree;
+  }
+
+  /** Root-level tree nodes only (for lazy loading). */
+  async getRootTreeNodes(): Promise<TreeNode[]> {
+    const rows = await this.repo.getRootMeta();
+    const nodes = rows.map(r => ({
+      id: r.id, parent_id: r.parent_id, title: r.title, type: r.type,
+      icon: r.icon, sort_key: r.sort_key, summary: r.summary ?? null,
+      updated_at: r.updated_at, children: [] as TreeNode[],
+      hasChildren: !!r.has_children, childrenLoaded: false,
+    }));
+    await this.fillIdeaProgress(nodes);
+    return nodes;
+  }
+
+  /** Children tree nodes for a parent (for lazy loading). */
+  async getChildTreeNodes(parentId: string): Promise<TreeNode[]> {
+    const rows = await this.repo.getChildrenMetaWithFlag(parentId);
+    const nodes = rows.map(r => ({
+      id: r.id, parent_id: r.parent_id, title: r.title, type: r.type,
+      icon: r.icon, sort_key: r.sort_key, summary: r.summary ?? null,
+      updated_at: r.updated_at, children: [] as TreeNode[],
+      hasChildren: !!r.has_children, childrenLoaded: false,
+    }));
+    await this.fillIdeaProgress(nodes);
+    return nodes;
   }
 
   async getById(id: string): Promise<Section | null> {
@@ -190,7 +225,7 @@ export class SectionsService {
     return (await this.repo.getById(id))!;
   }
 
-  async update(id: string, title: string, content: string): Promise<void> {
+  async update(id: string, title: string, content: string, source?: SnapshotSource): Promise<void> {
     const section = await this.repo.getById(id);
     if (!section) throw new Error(`Section ${id} not found`);
     let storedContent: string;
@@ -224,6 +259,14 @@ export class SectionsService {
     }
 
     await this.repo.updateContent(id, title, storedContent);
+
+    // Capture snapshot (fire-and-forget) — section.type is already known from the getById above
+    if (this.snapshotService) {
+      this.snapshotService
+        .captureIfChanged({ id, title, content: storedContent, type: section.type }, source ?? "manual")
+        .then(snapId => console.log(`[snapshot] update id=${id.substring(0,8)} source=${source ?? "manual"} → ${snapId ? "captured " + snapId.substring(0,8) : "skipped"}`))
+        .catch(err => console.warn("[snapshot] capture failed:", err));
+    }
   }
 
   async setSummary(id: string, summary: string | null): Promise<void> {
@@ -234,8 +277,32 @@ export class SectionsService {
     await this.repo.updateIcon(id, icon);
   }
 
-  async updateRaw(id: string, title: string, prosemirrorJson: string): Promise<void> {
+  async updateRaw(id: string, title: string, prosemirrorJson: string, source?: SnapshotSource | false): Promise<void> {
     await this.repo.updateContent(id, title, prosemirrorJson);
+
+    // Capture snapshot (fire-and-forget). Pass source=false to skip.
+    // We need section.type for the snapshot; fetch it lazily inside the async block
+    // to avoid blocking the main update path.
+    if (this.snapshotService && source !== false) {
+      (async () => {
+        try {
+          const section = await this.repo.getById(id);
+          if (section) {
+            const snapId = await this.snapshotService!.captureIfChanged(
+              { id, title, content: prosemirrorJson, type: section.type },
+              source ?? "manual",
+            );
+            console.log(`[snapshot] updateRaw id=${id.substring(0,8)} source=${source ?? "manual"} → ${snapId ? "captured " + snapId.substring(0,8) : "skipped"}`);
+          } else {
+            console.warn(`[snapshot] updateRaw: section ${id} not found after update`);
+          }
+        } catch (err) {
+          console.warn("[snapshot] capture failed:", err);
+        }
+      })();
+    } else {
+      if (!this.snapshotService) console.warn("[snapshot] updateRaw: snapshotService is not set");
+    }
   }
 
   async move(id: string, newParentId: string | null, afterId: string | null): Promise<void> {
@@ -453,6 +520,31 @@ export class SectionsService {
     return this.buildSectionTree(parentId, 2);
   }
 
+  /** Fetch content for idea nodes and extract progress field. */
+  private async fillIdeaProgress(nodes: TreeNode[]): Promise<void> {
+    for (const node of nodes) {
+      if (node.type === "idea") {
+        try {
+          const section = await this.repo.getById(node.id);
+          if (section?.content) {
+            const data = JSON.parse(section.content);
+            // Aggregate: average of per-message progress values (fallback to idea-level)
+            const msgs: any[] = data.messages ?? [];
+            const withProgress = msgs.filter((m: any) => typeof m.progress === "number" && m.progress > 0);
+            if (withProgress.length > 0) {
+              node.progress = Math.round(withProgress.reduce((s: number, m: any) => s + m.progress, 0) / msgs.length);
+            } else if (typeof data.progress === "number") {
+              node.progress = data.progress;
+            }
+          }
+        } catch { /* ignore parse errors */ }
+      }
+      if (node.children.length > 0) {
+        await this.fillIdeaProgress(node.children);
+      }
+    }
+  }
+
   private async buildSectionTree(parentId: string, maxDepth = 20): Promise<FileSectionNode[]> {
     // Only load direct children (1 level) to avoid loading the entire tree.
     // For large PDFs (304 sections), recursive loading produces 19+ MB of JSON.
@@ -503,6 +595,23 @@ export class SectionsService {
 
   async getLatestByType(type: SectionType): Promise<Section | null> {
     return this.repo.getLatestByType(type);
+  }
+
+  // ─── Rich node queries for LLM gt/read tools ──────────────────
+
+  async getNodesRich(parentId: string | null, opts: {
+    offset?: number; limit?: number;
+    sort?: "default" | "updated" | "size" | "title";
+  } = {}): Promise<{ total: number; rows: RichNode[] }> {
+    return this.repo.getChildrenRich(parentId, opts);
+  }
+
+  async getNodeInfo(id: string): Promise<RichNode | null> {
+    return this.repo.getNodeInfo(id);
+  }
+
+  async getTreeStats(): Promise<TreeStats> {
+    return this.repo.getTreeStats();
   }
 }
 

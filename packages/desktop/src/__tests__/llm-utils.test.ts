@@ -504,7 +504,7 @@ describe("shouldHardStop", () => {
 describe("Tool sets", () => {
   describe("READ_ONLY_TOOLS", () => {
     it("contains all doc read tools", () => {
-      for (const t of ["get_tree", "get_section", "get_file_with_sections", "get_sections_batch", "search"]) {
+      for (const t of ["gt", "read", "search"]) {
         expect(READ_ONLY_TOOLS.has(t)).toBe(true);
       }
     });
@@ -535,7 +535,7 @@ describe("Tool sets", () => {
 
   describe("PLAN_TOOLS", () => {
     it("contains all read tools needed for planning", () => {
-      for (const t of ["get_tree", "get_section", "search", "get_project_tree", "find_symbols"]) {
+      for (const t of ["gt", "read", "search", "get_project_tree", "find_symbols"]) {
         expect(PLAN_TOOLS.has(t)).toBe(true);
       }
     });
@@ -555,7 +555,8 @@ describe("Tool sets", () => {
 
 describe("isReadOnlyTool", () => {
   it("returns true for read tools", () => {
-    expect(isReadOnlyTool("get_tree")).toBe(true);
+    expect(isReadOnlyTool("gt")).toBe(true);
+    expect(isReadOnlyTool("read")).toBe(true);
     expect(isReadOnlyTool("search")).toBe(true);
     expect(isReadOnlyTool("find_symbols")).toBe(true);
   });
@@ -572,7 +573,8 @@ describe("isReadOnlyTool", () => {
 
 describe("isPlanModeTool", () => {
   it("allows read + create_section only", () => {
-    expect(isPlanModeTool("get_tree")).toBe(true);
+    expect(isPlanModeTool("gt")).toBe(true);
+    expect(isPlanModeTool("read")).toBe(true);
     expect(isPlanModeTool("create_section")).toBe(true);
     expect(isPlanModeTool("update_section")).toBe(false);
     expect(isPlanModeTool("delete_section")).toBe(false);
@@ -583,7 +585,7 @@ describe("isPlanModeTool", () => {
 
 describe("Tool execution order invariants", () => {
   it("read-only tools CAN run in parallel (all independent)", () => {
-    const readTools = ["get_tree", "get_section", "search", "get_project_tree", "find_symbols"];
+    const readTools = ["gt", "read", "search", "get_project_tree", "find_symbols"];
     for (const t of readTools) {
       expect(isReadOnlyTool(t)).toBe(true);
     }

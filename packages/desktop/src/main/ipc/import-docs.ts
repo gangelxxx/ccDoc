@@ -70,7 +70,7 @@ export function registerImportDocsIpc(): void {
       getMainWindow()?.webContents.send("import-docs:progress", { phase: "import", current: i + 1, total: files.length, file: files[i].relativePath });
     }
     console.log("[import-docs:import] all done, results:", results.length);
-    trackBgTask("Индексация поиска", () => index.reindexAll()).catch(err => console.warn("[index] reindex after docs import:", err));
+    trackBgTask("Search indexing", (sp) => index.reindexAll(sp)).then(() => suppressExternalChange(token)).catch(err => console.warn("[index] reindex after docs import:", err));
     return results;
   });
 
@@ -120,16 +120,16 @@ export function registerImportDocsIpc(): void {
 
           if (isImage) {
             const found = existsSync(resolvedAbs);
-            results.push({ href, isImage, type: "image", status: found ? "warning" : "broken", detail: found ? "Файл найден, но не будет доступен в приложении" : "Файл не найден" });
+            results.push({ href, isImage, type: "image", status: found ? "warning" : "broken", detail: found ? "File found but will not be accessible in the app" : "File not found" });
           } else {
             // Check if target is also being imported
             const normalized = resolvedRel.replace(/^\.\//, "");
             if (importedPaths.has(normalized)) {
-              results.push({ href, isImage, type: "internal_md", status: "ok", detail: "Тоже импортируется" });
+              results.push({ href, isImage, type: "internal_md", status: "ok", detail: "Also being imported" });
             } else if (existsSync(resolvedAbs)) {
-              results.push({ href, isImage, type: "internal_md", status: "warning", detail: "Файл не импортируется" });
+              results.push({ href, isImage, type: "internal_md", status: "warning", detail: "File is not being imported" });
             } else {
-              results.push({ href, isImage, type: "internal_md", status: "broken", detail: "Файл не найден" });
+              results.push({ href, isImage, type: "internal_md", status: "broken", detail: "File not found" });
             }
           }
         }
@@ -184,9 +184,9 @@ export function registerImportDocsIpc(): void {
         const links = extractLinks(originalText, r.relativePath);
         const brokenLinks = links.filter(l => l.status === "broken").length;
         const warnings: string[] = [];
-        if (!match) warnings.push(`Расхождение контента: оригинал ${originalStats.charCount} симв., импорт ${importedStats.charCount} симв.`);
-        if (originalStats.headings !== importedStats.headings) warnings.push(`Заголовков: оригинал ${originalStats.headings}, импорт ${importedStats.headings}`);
-        if (brokenLinks > 0) warnings.push(`${brokenLinks} ссылок не найдено`);
+        if (!match) warnings.push(`Content mismatch: original ${originalStats.charCount} chars, imported ${importedStats.charCount} chars`);
+        if (originalStats.headings !== importedStats.headings) warnings.push(`Headings: original ${originalStats.headings}, imported ${importedStats.headings}`);
+        if (brokenLinks > 0) warnings.push(`${brokenLinks} broken links found`);
 
         verifyResults.push({
           relativePath: r.relativePath,
@@ -205,7 +205,7 @@ export function registerImportDocsIpc(): void {
           match: false,
           links: [],
           brokenLinks: 0,
-          warnings: [`Ошибка верификации: ${err.message}`],
+          warnings: [`Verification error: ${err.message}`],
         });
       }
       getMainWindow()?.webContents.send("import-docs:progress", { phase: "verify", current: i + 1, total: importResults.length });

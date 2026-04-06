@@ -1,8 +1,9 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, memo } from "react";
 import { RotateCcw, X, Loader2, Paperclip, Send, Square, XCircle, ChevronDown, Plus, Copy, Check, Brain, Sparkles, Bot } from "lucide-react";
 import { useAppStore } from "../../stores/app.store.js";
 import type { LlmAttachment, LlmEffort } from "../../stores/app.store.js";
-import { applyEffort } from "../../stores/llm-config.js";
+import { useShallow } from "zustand/react/shallow";
+import { applyEffort, EFFORT_PRESETS } from "../../stores/llm-config.js";
 import { useT } from "../../i18n.js";
 import { renderMarkdown } from "../Editor/editor-utils.js";
 import { resolveIdInTree, buildSlugMap } from "../../llm-utils.js";
@@ -26,11 +27,152 @@ function estimateCost(tokens: { input: number; output: number; cacheRead: number
   return `~$${cost.toFixed(2)}`;
 }
 
+interface LlmMessageItemProps {
+  msg: any;
+  index: number;
+  copiedIdx: number | null;
+  setCopiedIdx: (idx: number | null) => void;
+  llmLoading: boolean;
+  retryLlmMessage: (idx: number) => void;
+  stopLlmChat: () => void;
+}
+
+const LlmMessageItem = memo(function LlmMessageItem({ msg, index: i, copiedIdx, setCopiedIdx, llmLoading, retryLlmMessage, stopLlmChat }: LlmMessageItemProps) {
+  const t = useT();
+  const rawText = typeof msg.content === "string" ? msg.content
+    : Array.isArray(msg.content) ? msg.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n")
+    : "";
+  const text = msg.displayContent || rawText;
+  if (!text && !msg.attachments?.length && !msg.plan && !msg.agentCard) return null;
+  const isToolStatus = msg.role === "assistant" && (text.startsWith("\u{1F527}") || text.startsWith("\u{1F50D}") || text.startsWith("\u{1F504}") || text.startsWith("\u{1F4DD}") || text.startsWith("\u{1F4CB}") || text.startsWith("\u{1F4D0}"));
+  const isError = msg.role === "assistant" && typeof msg.content === "string" && msg.content.startsWith("\u26A0");
+  const isQuestionMsg = !!msg.isQuestion;
+  return (
+    <div className={`llm-message llm-message-${msg.role}${isToolStatus ? " llm-message-tool" : ""}${isError ? " llm-message-error" : ""}${isQuestionMsg ? " llm-message-question" : ""}`}>
+      {msg.role === "user" && msg.attachments && msg.attachments.length > 0 && (
+        <div className="llm-message-images">
+          {msg.attachments.map((att: any, j: number) => (
+            <img key={j} src={`data:${att.mediaType};base64,${att.data}`} alt={att.name} />
+          ))}
+        </div>
+      )}
+      {text ? <div
+        className="llm-message-content"
+        dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }}
+      /> : null}
+      {msg.plan && (
+        <div className="llm-plan">
+          <div className="llm-plan-header">{t("workPlan")}</div>
+          {msg.plan.steps.map((step: any, j: number) => (
+            <div key={j} className={`llm-plan-step llm-plan-step-${step.status}`}>
+              <span className="llm-plan-check">
+                {step.status === "done" ? "\u2713" : step.status === "in_progress" ? "\u203A" : " "}
+              </span>
+              <span className="llm-plan-text">{j + 1}. {step.text}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {msg.agentCard && (
+        <div className={`llm-agent-card llm-agent-card-${msg.agentCard.status}`}>
+          <div className="llm-agent-card-header">
+            <Bot size={14} />
+            <span className="llm-agent-card-name">{msg.agentCard.agentName}</span>
+            {msg.agentCard.status === "running" && (
+              <button className="llm-agent-card-stop" onClick={() => stopLlmChat()} title={t("stopChat")}>
+                <Square size={10} />
+                {t("stopChat")}
+              </button>
+            )}
+            {msg.agentCard.status !== "running" && (
+              <span className={`llm-agent-card-badge llm-agent-card-badge-${msg.agentCard.status}`}>
+                {msg.agentCard.status === "done" ? "\u2713" : msg.agentCard.status === "stopped" ? "\u25A0" : "\u2717"}
+              </span>
+            )}
+          </div>
+          {msg.agentCard.actions.length > 0 && (
+            <div className="llm-agent-card-actions">
+              {(() => {
+                const groups: { description: string; count: number; status: string; lastTimestamp: number }[] = [];
+                for (const action of msg.agentCard!.actions) {
+                  const last = groups[groups.length - 1];
+                  if (last && last.description === action.description) {
+                    last.count++;
+                    last.status = action.status;
+                    last.lastTimestamp = action.timestamp;
+                  } else {
+                    groups.push({ description: action.description, count: 1, status: action.status, lastTimestamp: action.timestamp });
+                  }
+                }
+                return groups.map((g, j) => (
+                  <div key={j} className={`llm-agent-card-action llm-agent-card-action-${g.status}`}>
+                    <span className="llm-agent-card-action-icon">
+                      {g.status === "running" ? "\u23F3" : g.status === "done" ? "\u2713" : "\u2717"}
+                    </span>
+                    <span className="llm-agent-card-action-text">{g.description}</span>
+                    {g.count > 1 && (
+                      <span className="llm-agent-card-action-count">{"\u00D7"}{g.count}</span>
+                    )}
+                    <span className="llm-agent-card-action-time">
+                      {Math.round((g.lastTimestamp - msg.agentCard!.startedAt) / 1000)}s
+                    </span>
+                  </div>
+                ));
+              })()}
+            </div>
+          )}
+        </div>
+      )}
+      {msg.createdSections?.length > 0 && (
+        <div className="llm-created-sections">
+          {msg.createdSections.map((section: any) => (
+            <a
+              key={section.id}
+              className="llm-section-link llm-created-section-card"
+              href={`#section:${section.id}`}
+            >
+              <span className="llm-created-section-icon">
+                {section.type === "folder" ? "\uD83D\uDCC1" : section.type === "idea" ? "\uD83D\uDCA1" : section.type === "todo" ? "\u2705" : section.type === "kanban" ? "\uD83D\uDCCB" : section.type === "drawing" ? "\uD83C\uDFA8" : "\uD83D\uDCC4"}
+              </span>
+              <span className="llm-created-section-title">{section.title}</span>
+              <span className="llm-created-section-arrow">{"\u2192"}</span>
+            </a>
+          ))}
+        </div>
+      )}
+      {!isToolStatus && text && (
+        <div className="llm-msg-actions">
+          <button
+            className="llm-msg-action-btn"
+            onClick={() => {
+              navigator.clipboard.writeText(rawText);
+              setCopiedIdx(i);
+              setTimeout(() => setCopiedIdx(null), 1500);
+            }}
+            title={t("copy")}
+          >
+            {copiedIdx === i ? <Check size={12} /> : <Copy size={12} />}
+          </button>
+          {msg.role === "user" && (
+            <button
+              className="llm-msg-action-btn"
+              onClick={() => retryLlmMessage(i)}
+              disabled={llmLoading}
+              title={t("retry")}
+            >
+              <RotateCcw size={12} />
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+});
+
 export function LlmPanel({ width, onClick }: { width?: number; onClick?: (e: React.MouseEvent) => void }) {
   const {
     llmPanelOpen,
     toggleLlmPanel,
-    llmApiKey,
     llmMessages,
     llmLoading,
     llmAborted,
@@ -46,17 +188,35 @@ export function LlmPanel({ width, onClick }: { width?: number; onClick?: (e: Rea
     llmWaitingForUser,
     llmPendingOptions,
     submitUserAnswer,
-  } = useAppStore();
+  } = useAppStore(useShallow((s) => ({
+    llmPanelOpen: s.llmPanelOpen,
+    toggleLlmPanel: s.toggleLlmPanel,
+    llmMessages: s.llmMessages,
+    llmLoading: s.llmLoading,
+    llmAborted: s.llmAborted,
+    sendLlmMessage: s.sendLlmMessage,
+    stopLlmChat: s.stopLlmChat,
+    clearLlmMessages: s.clearLlmMessages,
+    currentSection: s.currentSection,
+    llmSessions: s.llmSessions,
+    llmCurrentSessionId: s.llmCurrentSessionId,
+    loadLlmSession: s.loadLlmSession,
+    deleteLlmSession: s.deleteLlmSession,
+    retryLlmMessage: s.retryLlmMessage,
+    llmWaitingForUser: s.llmWaitingForUser,
+    llmPendingOptions: s.llmPendingOptions,
+    submitUserAnswer: s.submitUserAnswer,
+  })));
 
-  const llmSessionMode = useAppStore((s) => s.llmSessionMode);
+  const hasLlmAccess = useAppStore((s) => s.hasLlmAccess)();
+  const llmSessionContext = useAppStore((s) => s.llmSessionContext);
   const llmTokensUsed = useAppStore((s) => s.llmTokensUsed);
   const includeContext = useAppStore((s) => s.llmIncludeContext);
   const setIncludeContext = useAppStore((s) => s.setLlmIncludeContext);
   const includeSourceCode = useAppStore((s) => s.llmIncludeSourceCode);
   const setIncludeSourceCode = useAppStore((s) => s.setLlmIncludeSourceCode);
   const editorSelectedText = useAppStore((s) => s.editorSelectedText);
-  const llmChatConfig = useAppStore((s) => s.llmChatConfig);
-  const setLlmChatConfig = useAppStore((s) => s.setLlmChatConfig);
+  const modelTiers = useAppStore((s) => s.modelTiers);
   const llmModels = useAppStore((s) => s.llmModels);
   const llmModelsLoading = useAppStore((s) => s.llmModelsLoading);
   const fetchLlmModels = useAppStore((s) => s.fetchLlmModels);
@@ -83,25 +243,35 @@ export function LlmPanel({ width, onClick }: { width?: number; onClick?: (e: Rea
     localStorage.setItem(INPUT_HISTORY_KEY, JSON.stringify(history));
   };
   const selectSection = useAppStore((s) => s.selectSection);
-  const tree = useAppStore((s) => s.tree);
 
-  // Handle clicks on section links inside LLM messages
+  const addToast = useAppStore((s) => s.addToast);
+
+  // Handle clicks on section links and cross-reference links inside LLM messages
+  // Read tree at click time (not as subscription) to avoid re-renders on tree changes
   const handleMessagesClick = useCallback((e: React.MouseEvent) => {
-    const link = (e.target as HTMLElement).closest(".llm-section-link") as HTMLAnchorElement | null;
-    if (link) {
+    const sectionLink = (e.target as HTMLElement).closest(".llm-section-link") as HTMLAnchorElement | null;
+    if (sectionLink) {
       e.preventDefault();
-      const href = link.getAttribute("href") || "";
+      const href = sectionLink.getAttribute("href") || "";
       const match = href.match(/^#section:(.+)$/);
       if (match) {
-        // Resolve slug or UUID prefix to full UUID
-        const resolvedId = resolveIdInTree(match[1], tree, buildSlugMap(tree));
+        const currentTree = useAppStore.getState().tree;
+        const resolvedId = resolveIdInTree(match[1], currentTree, buildSlugMap(currentTree));
         selectSection(resolvedId);
       }
+      return;
     }
-  }, [selectSection, tree]);
+
+    const crossRefLink = (e.target as HTMLElement).closest(".llm-cross-ref-link") as HTMLAnchorElement | null;
+    if (crossRefLink) {
+      e.preventDefault();
+      const projectAlias = crossRefLink.dataset.project || "";
+      const sectionSlug = crossRefLink.dataset.slug || "";
+      addToast("info", `Cross-reference: ${projectAlias} / ${sectionSlug}`);
+    }
+  }, [selectSection, addToast]);
 
   const [showModelPicker, setShowModelPicker] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const modelPickerRef = useRef<HTMLDivElement>(null);
@@ -110,8 +280,8 @@ export function LlmPanel({ width, onClick }: { width?: number; onClick?: (e: Rea
 
   // Fetch models when panel is open, API key is set, and models not yet loaded
   useEffect(() => {
-    if (llmPanelOpen && llmApiKey && llmModels.length === 0) fetchLlmModels();
-  }, [llmPanelOpen, llmApiKey, llmModels.length]);
+    if (llmPanelOpen && hasLlmAccess && llmModels.length === 0) fetchLlmModels();
+  }, [llmPanelOpen, hasLlmAccess, llmModels.length]);
 
   // Close model picker on outside click
   useEffect(() => {
@@ -125,14 +295,19 @@ export function LlmPanel({ width, onClick }: { width?: number; onClick?: (e: Rea
     return () => document.removeEventListener("mousedown", handler);
   }, [showModelPicker]);
 
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
     const sessionChanged = prevSessionIdRef.current !== llmCurrentSessionId;
     prevSessionIdRef.current = llmCurrentSessionId;
-    // First render (mount/remount) or session switch → instant (no visible animation)
-    // New message in same session → smooth scroll
-    const behavior = isFirstRenderRef.current || sessionChanged ? "instant" : "smooth";
-    isFirstRenderRef.current = false;
-    messagesEndRef.current?.scrollIntoView({ behavior });
+    // First render or session switch → instant, otherwise smooth
+    if (isFirstRenderRef.current || sessionChanged) {
+      isFirstRenderRef.current = false;
+      container.scrollTop = container.scrollHeight;
+    } else {
+      container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+    }
   }, [llmMessages, llmLoading, llmCurrentSessionId]);
 
   // Reset selected option when waiting state ends
@@ -201,7 +376,8 @@ export function LlmPanel({ width, onClick }: { width?: number; onClick?: (e: Rea
     setAttachments([]);
     // Reset textarea height
     if (textareaRef.current) textareaRef.current.style.height = "auto";
-    sendLlmMessage(text, includeContext, atts, includeSourceCode);
+    // Defer to next frame so UI updates (clear input, show loading) before heavy serialization
+    setTimeout(() => sendLlmMessage(text, includeContext, atts, includeSourceCode), 0);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -342,7 +518,7 @@ export function LlmPanel({ width, onClick }: { width?: number; onClick?: (e: Rea
       </div>
 
       {/* Doc-update banner */}
-      {llmSessionMode === "doc-update" && (
+      {llmSessionContext?.mode === "doc-update" && (
         <div className="llm-doc-update-banner">
           <Sparkles size={14} className={llmLoading ? "pulsing" : ""} />
           <span>{llmLoading ? t("docUpdateInProgress") : t("docUpdateComplete")}</span>
@@ -350,7 +526,7 @@ export function LlmPanel({ width, onClick }: { width?: number; onClick?: (e: Rea
       )}
 
       {/* Messages */}
-      <div className="llm-messages" onClick={handleMessagesClick}>
+      <div className="llm-messages" ref={messagesContainerRef} onClick={handleMessagesClick}>
         {llmMessages.length === 0 && (
           <div className="llm-empty">
             <p>{t("llmEmptyHint")}</p>
@@ -362,123 +538,18 @@ export function LlmPanel({ width, onClick }: { width?: number; onClick?: (e: Rea
           </div>
         )}
 
-        {llmMessages.map((msg, i) => {
-          const rawText = typeof msg.content === "string" ? msg.content
-            : Array.isArray(msg.content) ? msg.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n")
-            : "";
-          const text = msg.displayContent || rawText;
-          if (!text && !msg.attachments?.length && !msg.plan && !msg.agentCard) return null;
-          const isToolStatus = msg.role === "assistant" && (text.startsWith("\u{1F527}") || text.startsWith("\u{1F50D}") || text.startsWith("\u{1F504}") || text.startsWith("\u{1F4DD}") || text.startsWith("\u{1F4CB}") || text.startsWith("\u{1F4D0}"));
-          const isError = msg.role === "assistant" && typeof msg.content === "string" && msg.content.startsWith("\u26A0");
-          const isQuestionMsg = !!msg.isQuestion;
-          return (
-            <div key={i} className={`llm-message llm-message-${msg.role}${isToolStatus ? " llm-message-tool" : ""}${isError ? " llm-message-error" : ""}${isQuestionMsg ? " llm-message-question" : ""}`}>
-              {msg.role === "user" && msg.attachments && msg.attachments.length > 0 && (
-                <div className="llm-message-images">
-                  {msg.attachments.map((att, j) => (
-                    <img key={j} src={`data:${att.mediaType};base64,${att.data}`} alt={att.name} />
-                  ))}
-                </div>
-              )}
-              {msg.role === "assistant" ? (
-                text ? <div
-                  className="llm-message-content"
-                  dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }}
-                /> : null
-              ) : (
-                text ? <div className="llm-message-content">{text}</div> : null
-              )}
-              {msg.plan && (
-                <div className="llm-plan">
-                  <div className="llm-plan-header">{t("workPlan")}</div>
-                  {msg.plan.steps.map((step, j) => (
-                    <div key={j} className={`llm-plan-step llm-plan-step-${step.status}`}>
-                      <span className="llm-plan-check">
-                        {step.status === "done" ? "\u2713" : step.status === "in_progress" ? "\u203A" : " "}
-                      </span>
-                      <span className="llm-plan-text">{j + 1}. {step.text}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {msg.agentCard && (
-                <div className={`llm-agent-card llm-agent-card-${msg.agentCard.status}`}>
-                  <div className="llm-agent-card-header">
-                    <Bot size={14} />
-                    <span className="llm-agent-card-name">{msg.agentCard.agentName}</span>
-                    {msg.agentCard.status === "running" && (
-                      <button className="llm-agent-card-stop" onClick={() => stopLlmChat()} title={t("stopChat")}>
-                        <Square size={10} />
-                        {t("stopChat")}
-                      </button>
-                    )}
-                    {msg.agentCard.status !== "running" && (
-                      <span className={`llm-agent-card-badge llm-agent-card-badge-${msg.agentCard.status}`}>
-                        {msg.agentCard.status === "done" ? "\u2713" : msg.agentCard.status === "stopped" ? "\u25A0" : "\u2717"}
-                      </span>
-                    )}
-                  </div>
-                  {msg.agentCard.actions.length > 0 && (
-                    <div className="llm-agent-card-actions">
-                      {(() => {
-                        const groups: { description: string; count: number; status: string; lastTimestamp: number }[] = [];
-                        for (const action of msg.agentCard!.actions) {
-                          const last = groups[groups.length - 1];
-                          if (last && last.description === action.description) {
-                            last.count++;
-                            last.status = action.status;
-                            last.lastTimestamp = action.timestamp;
-                          } else {
-                            groups.push({ description: action.description, count: 1, status: action.status, lastTimestamp: action.timestamp });
-                          }
-                        }
-                        return groups.map((g, j) => (
-                          <div key={j} className={`llm-agent-card-action llm-agent-card-action-${g.status}`}>
-                            <span className="llm-agent-card-action-icon">
-                              {g.status === "running" ? "\u23F3" : g.status === "done" ? "\u2713" : "\u2717"}
-                            </span>
-                            <span className="llm-agent-card-action-text">{g.description}</span>
-                            {g.count > 1 && (
-                              <span className="llm-agent-card-action-count">{"\u00D7"}{g.count}</span>
-                            )}
-                            <span className="llm-agent-card-action-time">
-                              {Math.round((g.lastTimestamp - msg.agentCard!.startedAt) / 1000)}s
-                            </span>
-                          </div>
-                        ));
-                      })()}
-                    </div>
-                  )}
-                </div>
-              )}
-              {!isToolStatus && text && (
-                <div className="llm-msg-actions">
-                  <button
-                    className="llm-msg-action-btn"
-                    onClick={() => {
-                      navigator.clipboard.writeText(rawText);
-                      setCopiedIdx(i);
-                      setTimeout(() => setCopiedIdx(null), 1500);
-                    }}
-                    title={t("copy")}
-                  >
-                    {copiedIdx === i ? <Check size={12} /> : <Copy size={12} />}
-                  </button>
-                  {msg.role === "user" && (
-                    <button
-                      className="llm-msg-action-btn"
-                      onClick={() => retryLlmMessage(i)}
-                      disabled={llmLoading}
-                      title={t("retry")}
-                    >
-                      <RotateCcw size={12} />
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
+        {llmMessages.map((msg, i) => (
+          <LlmMessageItem
+            key={i}
+            msg={msg}
+            index={i}
+            copiedIdx={copiedIdx}
+            setCopiedIdx={setCopiedIdx}
+            llmLoading={llmLoading}
+            retryLlmMessage={retryLlmMessage}
+            stopLlmChat={stopLlmChat}
+          />
+        ))}
 
         {/* Selectable options when waiting for user answer */}
         {llmWaitingForUser && llmPendingOptions && llmPendingOptions.length > 0 && (
@@ -560,7 +631,7 @@ export function LlmPanel({ width, onClick }: { width?: number; onClick?: (e: Rea
           </div>
         )}
 
-        <div ref={messagesEndRef} />
+        {/* scroll target handled via messagesContainerRef.scrollTop */}
       </div>
 
       {/* Footer */}
@@ -627,22 +698,22 @@ export function LlmPanel({ width, onClick }: { width?: number; onClick?: (e: Rea
           <button
             className="btn-icon llm-attach-btn"
             onClick={() => fileInputRef.current?.click()}
-            disabled={!llmApiKey || (llmLoading && !llmWaitingForUser)}
+            disabled={!hasLlmAccess || (llmLoading && !llmWaitingForUser)}
             title={t("attachImage")}
           >
             <Paperclip size={18} />
           </button>
           <VoiceButton
             onTranscript={(text) => setInput((prev) => prev ? prev + " " + text : text)}
-            disabled={!llmApiKey || (llmLoading && !llmWaitingForUser)}
+            disabled={!hasLlmAccess || (llmLoading && !llmWaitingForUser)}
             size={16}
           />
           <textarea
             ref={textareaRef}
             className={`llm-input${llmWaitingForUser ? " llm-input-waiting" : ""}`}
-            placeholder={llmWaitingForUser ? (selectedOption !== null ? t("llmAddDetails") : t("llmAnswerPlaceholder")) : llmApiKey ? t("llmMessagePlaceholder") : t("llmApiKeyHint")}
+            placeholder={llmWaitingForUser ? (selectedOption !== null ? t("llmAddDetails") : t("llmAnswerPlaceholder")) : hasLlmAccess ? t("llmMessagePlaceholder") : t("llmApiKeyHint")}
             value={input}
-            disabled={!llmApiKey || (llmLoading && !llmWaitingForUser)}
+            disabled={!hasLlmAccess || (llmLoading && !llmWaitingForUser)}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
@@ -661,7 +732,7 @@ export function LlmPanel({ width, onClick }: { width?: number; onClick?: (e: Rea
             <button
               className="btn-icon llm-send-btn"
               onClick={handleSend}
-              disabled={!llmApiKey || (llmWaitingForUser ? (selectedOption === null && !input.trim()) : (!input.trim() && attachments.length === 0))}
+              disabled={!hasLlmAccess || (llmWaitingForUser ? (selectedOption === null && !input.trim()) : (!input.trim() && attachments.length === 0))}
               title={llmWaitingForUser ? t("llmAnswer") : t("sendMessage")}
             >
               <Send size={16} />
@@ -675,11 +746,11 @@ export function LlmPanel({ width, onClick }: { width?: number; onClick?: (e: Rea
               onClick={() => {
                 const opening = !showModelPicker;
                 setShowModelPicker(opening);
-                if (opening && llmModels.length === 0 && llmApiKey) fetchLlmModels();
+                if (opening && llmModels.length === 0 && hasLlmAccess) fetchLlmModels();
               }}
-              title={llmChatConfig.model}
+              title={modelTiers[modelTiers.chatTier].modelId}
             >
-              {llmChatConfig.model.replace(/^claude-/, "").replace(/-\d{8}$/, "")}
+              {modelTiers[modelTiers.chatTier].modelId.replace(/^claude-/, "").replace(/-\d{8}$/, "")}
               <ChevronDown size={10} />
             </button>
             {showModelPicker && (
@@ -714,8 +785,8 @@ export function LlmPanel({ width, onClick }: { width?: number; onClick?: (e: Rea
                 })().map((m) => (
                   <div
                     key={m.id}
-                    className={`llm-model-option${m.id === llmChatConfig.model ? " active" : ""}`}
-                    onClick={() => { setLlmChatConfig({ model: m.id }); setShowModelPicker(false); }}
+                    className={`llm-model-option${m.id === modelTiers[modelTiers.chatTier].modelId ? " active" : ""}`}
+                    onClick={() => { useAppStore.getState().setModelTier(modelTiers.chatTier, { modelId: m.id }); setShowModelPicker(false); }}
                   >
                     {m.display_name || m.id.replace(/^claude-/, "").replace(/-\d{8}$/, "")}
                   </div>
@@ -725,22 +796,22 @@ export function LlmPanel({ width, onClick }: { width?: number; onClick?: (e: Rea
           </div>
           <div className="llm-model-right">
             <button
-              className={`llm-thinking-btn${llmChatConfig.thinking ? " active" : ""}`}
-              onClick={() => setLlmChatConfig({ thinking: !llmChatConfig.thinking })}
-              title={llmChatConfig.thinking ? "Thinking ON" : "Thinking OFF"}
+              className={`llm-thinking-btn${modelTiers[modelTiers.chatTier].thinking ? " active" : ""}`}
+              onClick={() => useAppStore.getState().setModelTier(modelTiers.chatTier, { thinking: !modelTiers[modelTiers.chatTier].thinking })}
+              title={modelTiers[modelTiers.chatTier].thinking ? "Thinking ON" : "Thinking OFF"}
             >
               <Brain size={14} />
-              {!llmChatConfig.thinking && <span className="llm-thinking-strike" />}
+              {!modelTiers[modelTiers.chatTier].thinking && <span className="llm-thinking-strike" />}
             </button>
             <div className="llm-effort-inline">
               {(["low", "medium", "high"] as LlmEffort[]).map((level, i) => {
                 const effortIdx = { low: 0, medium: 1, high: 2 };
-                const filled = i <= effortIdx[llmChatConfig.effort];
+                const filled = i <= effortIdx[modelTiers[modelTiers.chatTier].effort];
                 return (
                   <button
                     key={level}
                     className={`llm-effort-dot${filled ? " active" : ""}`}
-                    onClick={() => setLlmChatConfig(applyEffort(level))}
+                    onClick={() => useAppStore.getState().setModelTier(modelTiers.chatTier, { effort: level, ...EFFORT_PRESETS[level] })}
                     title={level === "low" ? "Low" : level === "medium" ? "Medium" : "High"}
                   />
                 );

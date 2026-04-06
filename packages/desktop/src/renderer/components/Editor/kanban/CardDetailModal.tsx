@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useT } from "../../../i18n.js";
 import { useAppStore } from "../../../stores/app.store.js";
+import { sourceGetSection, sourceSaveSection } from "../source-api.js";
 import type { KanbanCard, PropertyDefinition } from "./types.js";
 import { PropertyEditor, PropertyDisplay } from "./PropertyEditor.js";
 
@@ -50,17 +51,16 @@ export function CardDetailModal({
 
   const syncIdeaText = async (newTitle: string, newDesc: string) => {
     if (!card.sourceIdeaId || !card.sourceMessageId) return;
-    const proj = useAppStore.getState().currentProject;
-    if (!proj?.token) return;
     try {
-      const sec = await window.api.getSection(proj.token, card.sourceIdeaId);
+      const sec = await sourceGetSection(card.sourceIdeaId);
+      if (!sec) return;
       const data = JSON.parse(sec.content);
       const msg = data.messages?.find((m: any) => m.id === card.sourceMessageId);
       if (msg) {
         const descPart = newDesc.trim();
         msg.text = descPart ? `${newTitle}\n${descPart}` : newTitle;
         msg.editedAt = Date.now();
-        await window.api.updateSection(proj.token, card.sourceIdeaId, sec.title, JSON.stringify(data));
+        await sourceSaveSection(card.sourceIdeaId, sec.title, JSON.stringify(data));
       }
     } catch { /* ignore */ }
   };

@@ -1,4 +1,5 @@
 import type { SectionProps } from "./shared.js";
+import { useT } from "../../../../i18n.js";
 
 interface ArrowSectionProps extends SectionProps {
   hasLines: boolean;
@@ -6,24 +7,26 @@ interface ArrowSectionProps extends SectionProps {
 }
 
 export function ArrowSection({ firstEl, updateSelectedProps, hasLines, hasArrows }: ArrowSectionProps) {
+  const t = useT();
+
   return (
     <>
       {/* Line/Arrow type */}
       {hasLines && (
         <>
-          <div className="drawing-sidebar-label">Тип линии</div>
+          <div className="drawing-sidebar-label">{t("drawLineType")}</div>
           <div className="drawing-sidebar-row">
-            {(["sharp", "round", "elbow"] as const).map((t) => (
+            {(["sharp", "round", "elbow"] as const).map((lt) => (
               <button
-                key={t}
-                className={`drawing-tool-btn${firstEl?.arrowType === t ? " active" : ""}`}
-                onClick={() => updateSelectedProps({ arrowType: t })}
-                title={t === "sharp" ? "Прямая" : t === "round" ? "Кривая" : "Ломаная"}
+                key={lt}
+                className={`drawing-tool-btn${firstEl?.arrowType === lt ? " active" : ""}`}
+                onClick={() => updateSelectedProps({ arrowType: lt })}
+                title={lt === "sharp" ? t("drawStraight") : lt === "round" ? t("drawCurved") : t("drawElbow")}
               >
                 <svg width="18" height="18" viewBox="0 0 18 18">
-                  {t === "sharp" && <path d="M3 15L15 3" stroke="currentColor" strokeWidth="1.5" fill="none" />}
-                  {t === "round" && <path d="M3 15Q9 3 15 3" stroke="currentColor" strokeWidth="1.5" fill="none" />}
-                  {t === "elbow" && <path d="M3 15L3 3L15 3" stroke="currentColor" strokeWidth="1.5" fill="none" />}
+                  {lt === "sharp" && <path d="M3 15L15 3" stroke="currentColor" strokeWidth="1.5" fill="none" />}
+                  {lt === "round" && <path d="M3 15Q9 3 15 3" stroke="currentColor" strokeWidth="1.5" fill="none" />}
+                  {lt === "elbow" && <path d="M3 15L3 3L15 3" stroke="currentColor" strokeWidth="1.5" fill="none" />}
                 </svg>
               </button>
             ))}
@@ -34,14 +37,14 @@ export function ArrowSection({ firstEl, updateSelectedProps, hasLines, hasArrows
       {/* Arrowheads (arrows only) */}
       {hasArrows && (
         <>
-          <div className="drawing-sidebar-label">Конец стрелки</div>
+          <div className="drawing-sidebar-label">{t("drawArrowEnd")}</div>
           <div className="drawing-sidebar-row">
             {([null, "arrow"] as const).map((ah) => (
               <button
                 key={String(ah)}
                 className={`drawing-tool-btn${firstEl?.arrowhead === ah ? " active" : ""}`}
                 onClick={() => updateSelectedProps({ arrowhead: ah })}
-                title={ah ? "Со стрелкой" : "Без стрелки"}
+                title={ah ? t("drawWithArrowhead") : t("drawNoArrowhead")}
               >
                 <svg width="18" height="12" viewBox="0 0 18 12">
                   {ah ? (
@@ -53,14 +56,14 @@ export function ArrowSection({ firstEl, updateSelectedProps, hasLines, hasArrows
               </button>
             ))}
           </div>
-          <div className="drawing-sidebar-label">Начало стрелки</div>
+          <div className="drawing-sidebar-label">{t("drawArrowStart")}</div>
           <div className="drawing-sidebar-row">
             {([null, "arrow"] as const).map((ah) => (
               <button
                 key={"start-" + String(ah)}
                 className={`drawing-tool-btn${firstEl?.startArrowhead === ah ? " active" : ""}`}
                 onClick={() => updateSelectedProps({ startArrowhead: ah })}
-                title={ah ? "Со стрелкой" : "Без стрелки"}
+                title={ah ? t("drawWithArrowhead") : t("drawNoArrowhead")}
               >
                 <svg width="18" height="12" viewBox="0 0 18 12">
                   {ah ? (

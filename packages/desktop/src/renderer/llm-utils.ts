@@ -9,9 +9,9 @@ export const COMPRESS_AT = 0.6;
 export const HARD_STOP_AT = 0.85;
 export const ABSOLUTE_MAX_ROUNDS = 200;
 export const ROUNDS_WARNING_AT = 180;
-export const TOOL_RESULT_LIMIT = 6000;
-export const DEFAULT_CONTENT_LIMIT = 6000;
-export const MAX_CONTENT_LIMIT = 10_000;
+export const TOOL_RESULT_LIMIT = 15_000;
+export const DEFAULT_CONTENT_LIMIT = 10_000;
+export const MAX_CONTENT_LIMIT = 15_000;
 export const PLAN_RESEARCH_MAX_ROUNDS = 2; // After this many rounds, strip read-only tools in planMode to force writing
 
 // Soft budget: warn model when it uses too many read-only rounds
@@ -22,7 +22,7 @@ export const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
 export const CAPABLE_MODEL = "claude-sonnet-4-6";
 
 export const READ_ONLY_TOOLS = new Set([
-  "get_tree", "get_section", "get_file_with_sections", "get_sections_batch",
+  "gt", "read",
   "search", "semantic_search", "get_history", "list_backups",
   "get_project_tree", "get_file_outlines", "read_project_file", "search_project_files", "find_symbols",
   "web_search",
@@ -30,7 +30,7 @@ export const READ_ONLY_TOOLS = new Set([
 ]);
 
 export const PLAN_TOOLS = new Set([
-  "get_tree", "get_section", "get_file_with_sections", "get_sections_batch", "search", "semantic_search",
+  "gt", "read", "search", "semantic_search",
   "get_project_tree", "get_file_outlines", "read_project_file", "search_project_files", "find_symbols",
   "web_search",
   "create_section",
@@ -56,6 +56,38 @@ export function estimateInputTokens(system: string, messages: any[]): number {
   // ~2.7 chars per token for mixed content with JSON structure overhead
   // (validated against actual API usage across multiple sessions)
   return Math.round(chars / 2.7);
+}
+
+/**
+ * Estimate total character length of messages WITHOUT JSON.stringify.
+ * Walks the message tree and sums up content lengths directly.
+ * For base64 image data, uses .length (O(1)) instead of serializing.
+ */
+export function estimateMessagesChars(messages: any[]): number {
+  let chars = 2; // []
+  for (const m of messages) {
+    chars += 30; // {"role":"...","content":...},
+    if (typeof m.content === "string") {
+      chars += m.content.length + 2;
+    } else if (Array.isArray(m.content)) {
+      chars += 2; // []
+      for (const b of m.content) {
+        chars += 20; // {"type":"..."},
+        if (b.type === "text") {
+          chars += (b.text?.length || 0);
+        } else if (b.type === "image" && b.source?.data) {
+          chars += b.source.data.length + 80;
+        } else if (b.type === "tool_result") {
+          chars += typeof b.content === "string" ? b.content.length : 0;
+        } else if (b.type === "tool_use") {
+          chars += (b.name?.length || 0) + JSON.stringify(b.input || {}).length + 20;
+        } else if (b.type === "thinking") {
+          chars += (b.thinking?.length || 0);
+        }
+      }
+    }
+  }
+  return chars;
 }
 
 // ─── Tool result processing ────────────────────────────────────

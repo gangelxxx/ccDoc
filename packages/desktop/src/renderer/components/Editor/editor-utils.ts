@@ -11,6 +11,11 @@ export function renderMarkdown(text: string): string {
     .replace(/^# (.+)$/gm, "<h1>$1</h1>")
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
     .replace(/\*(.+?)\*/g, "<em>$1</em>")
+    // Cross-project references: [text](linked:alias/slug) → styled cross-ref link
+    .replace(
+      /\[([^\]]+)\]\(linked:([^/\s)]+)\/([^)\s]+)\)/g,
+      '<a href="#linked:$2/$3" class="llm-cross-ref-link" data-project="$2" data-slug="$3">📎 $1</a>'
+    )
     // Section links: [text](ccdoc:ID_OR_SLUG) → clickable link to navigate to section
     .replace(/\[([^\]]+)\]\(ccdoc:([a-z0-9-]+)\)/g, '<a href="#section:$2" class="llm-section-link">📄 $1</a>')
     .replace(/^[-*] (.+)$/gm, "<li>$1</li>")
@@ -24,14 +29,24 @@ export function renderMarkdown(text: string): string {
 export function buildBreadcrumbs(
   tree: any[],
   targetId: string | null
-): { id: string; title: string }[] {
+): { id: string; title: string; isLinkedProject?: boolean }[] {
   if (!targetId) return [];
 
-  function find(nodes: any[], path: { id: string; title: string }[]): { id: string; title: string }[] | null {
+  function find(
+    nodes: any[],
+    path: { id: string; title: string; isLinkedProject?: boolean }[]
+  ): typeof path | null {
     for (const node of nodes) {
       if (node.id === targetId) return path;
       if (node.children?.length) {
-        const result = find(node.children, [...path, { id: node.id, title: node.title }]);
+        const result = find(node.children, [
+          ...path,
+          {
+            id: node.id,
+            title: node.title,
+            isLinkedProject: !!node.linkedProjectMeta,
+          },
+        ]);
         if (result) return result;
       }
     }

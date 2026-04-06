@@ -1,5 +1,6 @@
 import type { CustomAgent } from "./types.js";
 import { AVAILABLE_TOOLS } from "../../components/SettingsModal/tabs/AgentEditor.js";
+import { callTierRaw, extractResponseText } from "../llm-engine.js";
 
 const SYSTEM_PROMPT = `You are an AI agent architect. Your task: take a brief user description and produce a complete, production-ready agent configuration as a JSON object.
 
@@ -14,10 +15,8 @@ The agent operates inside ccDoc — a structured documentation management system
 Available tools (assign ONLY what the agent actually needs):
 
 Reading:
-- get_tree: Documentation tree structure (titles, IDs, types)
-- get_section: Section content by ID with pagination
-- get_file_with_sections: Full document with all sub-sections
-- get_sections_batch: Up to 20 sections at once
+- gt: Navigate documentation tree (titles, types, sizes, summaries, children counts)
+- read: Read section content by ID (single or batch up to 20, with pagination)
 - search: Full-text search across documentation
 
 Writing:
@@ -25,6 +24,7 @@ Writing:
 - bulk_create_sections: Create multiple sections with $N parent refs
 - update_section: Update title and/or content
 - delete_section: Soft-delete section and children
+- delete_sections: Batch soft-delete multiple sections at once
 - move_section: Move/reorder sections
 - duplicate_section: Deep copy with children
 - restore_section: Restore soft-deleted section
@@ -105,7 +105,7 @@ Keep it short: 2-5 sentences. If the agent doesn't need a prompt prefix, leave i
 ## Tool selection logic
 
 Assign the MINIMUM set of tools the agent needs:
-- Read-only agents: get_tree, get_section, search (+ source code tools if analyzing code)
+- Read-only agents: gt, read, search (+ source code tools if analyzing code)
 - Writing agents: add create_section, update_section, commit_version
 - Destructive operations (delete, restore_version): only if the agent's core function requires them
 - web_search: only for agents that need external information
@@ -165,7 +165,7 @@ function parseJsonResponse(text: string): any {
 function normalizeAgentConfig(raw: any): GeneratedConfig {
   const tools = Array.isArray(raw.tools)
     ? raw.tools.filter((t: string) => AVAILABLE_TOOLS.includes(t))
-    : ["get_tree", "get_section", "search"];
+    : ["gt", "read", "search"];
 
   const validEfforts = ["low", "medium", "high"] as const;
   const effort = validEfforts.includes(raw.effort) ? raw.effort : "medium";
@@ -184,25 +184,16 @@ function normalizeAgentConfig(raw: any): GeneratedConfig {
 
 export async function generateAgentConfig(params: {
   description: string;
-  apiKey: string;
-  model: string;
 }): Promise<GeneratedConfig> {
-  const { description, apiKey, model } = params;
+  const { description } = params;
 
-  const response = await window.api.llmChat({
-    apiKey,
+  const response = await callTierRaw("chatTier", {
     system: SYSTEM_PROMPT,
     messages: [{ role: "user", content: description }],
-    model,
-    maxTokens: 8192,
     temperature: 0.7,
   });
 
-  const text = response.content
-    .filter((b: any) => b.type === "text")
-    .map((b: any) => b.text)
-    .join("\n");
-
+  const text = extractResponseText(response) || "";
   const parsed = parseJsonResponse(text);
   return normalizeAgentConfig(parsed);
 }

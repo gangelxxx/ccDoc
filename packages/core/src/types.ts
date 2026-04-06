@@ -143,11 +143,37 @@ export interface IdeaMessage {
   title?: string;
   group?: string;
   originalIds?: string[];
+  progress?: number;    // 0–100
 }
+
+export interface ProgressStage {
+  id: string;
+  name: string;
+  percent: number;      // 0–100
+  color?: string;       // HEX
+}
+
+export const DEFAULT_PROGRESS_STAGES: ProgressStage[] = [
+  { id: 'new',     name: 'New',         percent: 0,   color: '#94a3b8' },
+  { id: 'dev',     name: 'In Development',  percent: 25,  color: '#3b82f6' },
+  { id: 'test',    name: 'Testing',   percent: 50,  color: '#f59e0b' },
+  { id: 'prod',    name: 'In Production',       percent: 75,  color: '#22c55e' },
+  { id: 'done',    name: 'Done',        percent: 100, color: '#10b981' },
+];
 
 export interface IdeaData {
   messages: IdeaMessage[];
   kanbanId?: string;
+  progress?: number;    // 0–100
+}
+
+/** Extended IdeaMessage stored in the trash bin with deletion metadata */
+export interface TrashIdeaMessage extends IdeaMessage {
+  deletedAt: number;
+  fromProjectToken: string;
+  fromProjectName: string;
+  fromSectionId: string;
+  fromSectionTitle: string;
 }
 
 export type IdeaProcessingMode = "title" | "polish" | "deduplicate" | "group" | "full";
@@ -172,6 +198,15 @@ export interface ExportHash {
   exported_at: string;
 }
 
+export interface LinkedProjectMeta {
+  linked_project_id: string;
+  project_token: string | null;
+  has_ccdoc: boolean;
+  doc_status: DocStatus;
+  link_type: LinkType;
+  source_path: string;
+}
+
 export interface TreeNode {
   id: string;
   parent_id: string | null;
@@ -182,6 +217,31 @@ export interface TreeNode {
   summary: string | null;
   updated_at: string;
   children: TreeNode[];
+  hasChildren?: boolean;
+  childrenLoaded?: boolean;
+  linkedProjectMeta?: LinkedProjectMeta;
+  progress?: number;    // 0–100, only for type="idea"
+}
+
+/** Rich node metadata for LLM gt() tool — includes content_length and children_count. */
+export interface RichNode {
+  id: string;
+  parent_id: string | null;
+  title: string;
+  type: SectionType;
+  icon: string | null;
+  summary: string | null;
+  updated_at: string;
+  content_length: number;
+  children_count: number;
+}
+
+export interface TreeStats {
+  total_nodes: number;
+  total_content_length: number;
+  max_depth: number;
+  types: Record<string, number>;
+  last_updated: string;
 }
 
 export interface HistoryCommit {
@@ -302,4 +362,32 @@ export interface PdfOutlineEntry {
   title: string;
   pageNum: number; // 1-based
   level: number;   // 0 = chapter, 1 = section, 2 = subsection, ...
+}
+
+// ─── Workspace types ────────────────────────────────────────
+
+export type DocStatus = "none" | "loaded" | "generating" | "error";
+export type LinkType = "dependency" | "reference" | "monorepo_part";
+
+export interface Workspace {
+  id: string;
+  name: string;
+  icon: string | null;
+  root_project_token: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LinkedProject {
+  id: string;
+  workspace_id: string;
+  project_token: string | null;
+  source_path: string;
+  alias: string | null;
+  icon: string | null;
+  has_ccdoc: boolean;
+  doc_status: DocStatus;
+  link_type: LinkType;
+  added_at: string;
+  sort_order: number;
 }

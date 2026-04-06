@@ -21,36 +21,36 @@ function makeSuccessResponse(embedding: number[]) {
 }
 
 describe("OnlineEmbeddingProvider.isAvailable", () => {
-  it("возвращает true при наличии ключа и известной модели", () => {
+  it("returns true when key and known model are provided", () => {
     const provider = new OnlineEmbeddingProvider("openai", "text-embedding-3-small", "sk-test");
     expect(provider.isAvailable()).toBe(true);
   });
 
-  it("возвращает false если apiKey пустой", () => {
+  it("returns false if apiKey is empty", () => {
     const provider = new OnlineEmbeddingProvider("openai", "text-embedding-3-small", "");
     expect(provider.isAvailable()).toBe(false);
   });
 
-  it("возвращает true для неизвестной модели при указании провайдера (fallback)", () => {
+  it("returns true for unknown model when provider is specified (fallback)", () => {
     const provider = new OnlineEmbeddingProvider("openai", "custom-model-v1", "sk-test");
     expect(provider.isAvailable()).toBe(true);
   });
 });
 
 describe("OnlineEmbeddingProvider.load", () => {
-  it("возвращает true если isAvailable() === true", async () => {
+  it("returns true if isAvailable() === true", async () => {
     const provider = new OnlineEmbeddingProvider("openai", "text-embedding-3-small", "sk-test");
     expect(await provider.load()).toBe(true);
   });
 
-  it("возвращает false если apiKey пустой", async () => {
+  it("returns false if apiKey is empty", async () => {
     const provider = new OnlineEmbeddingProvider("openai", "text-embedding-3-small", "");
     expect(await provider.load()).toBe(false);
   });
 });
 
 describe("OnlineEmbeddingProvider.encode", () => {
-  it("вызывает fetch с правильными параметрами для OpenAI", async () => {
+  it("calls fetch with correct parameters for OpenAI", async () => {
     const emb = [0.1, 0.2, 0.3];
     mockFetch.mockResolvedValue(makeSuccessResponse(emb));
 
@@ -67,7 +67,7 @@ describe("OnlineEmbeddingProvider.encode", () => {
     const body = JSON.parse(options.body);
     expect(body.model).toBe("text-embedding-3-small");
     expect(body.input).toBe("hello world");
-    // OpenAI не должен получать input_type
+    // OpenAI should not receive input_type
     expect(body.input_type).toBeUndefined();
 
     expect(result).toBeInstanceOf(Float32Array);
@@ -77,20 +77,20 @@ describe("OnlineEmbeddingProvider.encode", () => {
     }
   });
 
-  it("вызывает fetch без input_type для Voyage при encode (не query)", async () => {
+  it("calls fetch without input_type for Voyage on encode (not query)", async () => {
     mockFetch.mockResolvedValue(makeSuccessResponse([0.5, 0.5]));
 
     const provider = new OnlineEmbeddingProvider("voyage", "voyage-3", "voy-key");
     await provider.encode("test text");
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-    // encode не передаёт inputType, поэтому input_type не должен быть в теле
+    // encode does not pass inputType, so input_type should not be in the body
     expect(body.input_type).toBeUndefined();
   });
 });
 
 describe("OnlineEmbeddingProvider.encodeQuery", () => {
-  it("вызывает fetch с input_type 'query' для Voyage", async () => {
+  it("calls fetch with input_type 'query' for Voyage", async () => {
     mockFetch.mockResolvedValue(makeSuccessResponse([0.1, 0.2]));
 
     const provider = new OnlineEmbeddingProvider("voyage", "voyage-3", "voy-key");
@@ -104,7 +104,7 @@ describe("OnlineEmbeddingProvider.encodeQuery", () => {
     expect(body.model).toBe("voyage-3");
   });
 
-  it("не добавляет input_type для OpenAI при encodeQuery", async () => {
+  it("does not add input_type for OpenAI on encodeQuery", async () => {
     mockFetch.mockResolvedValue(makeSuccessResponse([0.1, 0.2, 0.3]));
 
     const provider = new OnlineEmbeddingProvider("openai", "text-embedding-3-small", "sk-key");
@@ -115,8 +115,8 @@ describe("OnlineEmbeddingProvider.encodeQuery", () => {
   });
 });
 
-describe("OnlineEmbeddingProvider — обработка ошибок", () => {
-  it("API ошибка → бросает Error с текстом", async () => {
+describe("OnlineEmbeddingProvider — error handling", () => {
+  it("API error → throws Error with message", async () => {
     mockFetch.mockResolvedValue({
       ok: false,
       status: 401,
@@ -127,7 +127,7 @@ describe("OnlineEmbeddingProvider — обработка ошибок", () => {
     await expect(provider.encode("test")).rejects.toThrow("Embedding API error 401");
   });
 
-  it("некорректный формат ответа → бросает Error", async () => {
+  it("invalid response format → throws Error", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
       json: vi.fn().mockResolvedValue({ data: [] }),
@@ -137,34 +137,34 @@ describe("OnlineEmbeddingProvider — обработка ошибок", () => {
     await expect(provider.encode("test")).rejects.toThrow("Unexpected embedding API response format");
   });
 
-  it("провайдер не настроен → бросает Error", async () => {
+  it("provider not configured → throws Error", async () => {
     const provider = new OnlineEmbeddingProvider("openai", "text-embedding-3-small", "");
     await expect(provider.encode("test")).rejects.toThrow("Online embedding provider not configured");
   });
 });
 
 describe("OnlineEmbeddingProvider.dimension", () => {
-  it("возвращает правильное значение для text-embedding-3-small", () => {
+  it("returns correct value for text-embedding-3-small", () => {
     const provider = new OnlineEmbeddingProvider("openai", "text-embedding-3-small", "key");
     expect(provider.dimension).toBe(1536);
   });
 
-  it("возвращает правильное значение для text-embedding-3-large", () => {
+  it("returns correct value for text-embedding-3-large", () => {
     const provider = new OnlineEmbeddingProvider("openai", "text-embedding-3-large", "key");
     expect(provider.dimension).toBe(3072);
   });
 
-  it("возвращает правильное значение для voyage-3", () => {
+  it("returns correct value for voyage-3", () => {
     const provider = new OnlineEmbeddingProvider("voyage", "voyage-3", "key");
     expect(provider.dimension).toBe(1024);
   });
 
-  it("возвращает правильное значение для voyage-3-lite", () => {
+  it("returns correct value for voyage-3-lite", () => {
     const provider = new OnlineEmbeddingProvider("voyage", "voyage-3-lite", "key");
     expect(provider.dimension).toBe(512);
   });
 
-  it("возвращает 1536 по умолчанию для неизвестной модели", () => {
+  it("returns 1536 by default for an unknown model", () => {
     const provider = new OnlineEmbeddingProvider("openai", "unknown-model", "key");
     expect(provider.dimension).toBe(1536);
   });

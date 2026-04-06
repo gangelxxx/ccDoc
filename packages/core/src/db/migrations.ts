@@ -24,6 +24,67 @@ const APP_MIGRATIONS = [
       INSERT INTO _meta (schema_version) VALUES (1);
     `,
   },
+  {
+    version: 2,
+    sql: `
+      CREATE TABLE IF NOT EXISTS workspaces (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        root_project_token TEXT NOT NULL,
+        created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+        updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS linked_projects (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        project_token TEXT,
+        source_path TEXT NOT NULL,
+        alias TEXT,
+        has_ccdoc INTEGER NOT NULL DEFAULT 0,
+        doc_status TEXT NOT NULL DEFAULT 'none',
+        link_type TEXT NOT NULL DEFAULT 'dependency',
+        added_at DATETIME NOT NULL DEFAULT (datetime('now')),
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(workspace_id, source_path)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_linked_workspace ON linked_projects(workspace_id);
+      CREATE INDEX IF NOT EXISTS idx_linked_project_token ON linked_projects(project_token);
+    `,
+  },
+  {
+    version: 3,
+    sql: `
+      ALTER TABLE workspaces ADD COLUMN icon TEXT DEFAULT NULL;
+    `,
+  },
+  {
+    version: 4,
+    sql: `
+      ALTER TABLE linked_projects ADD COLUMN icon TEXT DEFAULT NULL;
+    `,
+  },
+  {
+    version: 5,
+    sql: `
+      CREATE TABLE IF NOT EXISTS vault_revisions (
+        revision INTEGER PRIMARY KEY AUTOINCREMENT,
+        source   TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS vault_entries (
+        id       INTEGER PRIMARY KEY AUTOINCREMENT,
+        revision INTEGER NOT NULL REFERENCES vault_revisions(revision),
+        key      TEXT NOT NULL,
+        value    TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_vault_key_rev ON vault_entries(key, revision DESC);
+      CREATE INDEX IF NOT EXISTS idx_vault_rev ON vault_entries(revision DESC);
+    `,
+  },
 ];
 
 const PROJECT_MIGRATIONS = [
@@ -336,6 +397,38 @@ const PROJECT_MIGRATIONS = [
     version: 11,
     sql: `
       ALTER TABLE semantic_chunks ADD COLUMN content TEXT NOT NULL DEFAULT '';
+    `,
+  },
+  {
+    version: 12,
+    sql: `
+      CREATE TABLE IF NOT EXISTS section_view_prefs (
+        section_id TEXT NOT NULL,
+        pref_key   TEXT NOT NULL,
+        pref_value TEXT NOT NULL DEFAULT 'null',
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        PRIMARY KEY (section_id, pref_key),
+        FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
+      );
+    `,
+  },
+  {
+    version: 13,
+    sql: `
+      CREATE TABLE IF NOT EXISTS section_snapshots (
+        id TEXT PRIMARY KEY,
+        section_id TEXT NOT NULL,
+        content TEXT NOT NULL,
+        title TEXT NOT NULL,
+        type TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'manual',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        byte_size INTEGER NOT NULL DEFAULT 0,
+        FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX idx_snapshots_section_created
+        ON section_snapshots(section_id, created_at DESC);
     `,
   },
 ];

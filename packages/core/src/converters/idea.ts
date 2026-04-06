@@ -2,14 +2,14 @@ import type { IdeaData, IdeaMessage, ProseMirrorNode } from "../types.js";
 import { prosemirrorToPlain } from "./prosemirror-to-plain.js";
 
 /**
- * Извлекает текст из содержимого идеи (чат-сообщения) для поискового индекса.
- * Конкатенирует текст всех сообщений.
- * @param content JSON-строка формата IdeaData или legacy ProseMirror document
+ * Extracts text from idea content (chat messages) for the search index.
+ * Concatenates text from all messages.
+ * @param content JSON string in IdeaData format or a legacy ProseMirror document
  */
 export function ideaToPlain(content: string): string {
   try {
     const parsed = JSON.parse(content);
-    // Legacy: идеи в старом ProseMirror-формате
+    // Legacy: ideas in the old ProseMirror format
     if (parsed.type === "doc") {
       return prosemirrorToPlain(parsed as ProseMirrorNode);
     }
@@ -25,8 +25,8 @@ export function ideaToPlain(content: string): string {
 }
 
 /**
- * Экспортирует идеи с учётом групп и заголовков.
- * Если группы есть — выводит по группам, если нет — плоский список.
+ * Exports ideas with group and title support.
+ * If groups exist, outputs by group; otherwise outputs a flat list.
  */
 export function ideaToGroupedPlain(content: string): string {
   try {

@@ -11,6 +11,7 @@ import { ConfirmModal } from "./components/ConfirmModal/ConfirmModal.js";
 import { RestoreProgressModal } from "./components/Editor/HistoryView.js";
 import { ResizeHandle } from "./components/ResizeHandle.js";
 import { QuickIdeaPopup } from "./components/QuickIdea/QuickIdea.js";
+import { useIconProgress } from "./hooks/useIconProgress.js";
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null };
@@ -41,7 +42,11 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
 }
 
 export function App() {
-  const { loadProjects, theme, toggleTheme, fontFamily, fontSize, colorScheme, toggleSidebar, setPaletteOpen, paletteOpen, sidebarCollapsed, sidebarWidth, setSidebarWidth, savePanelWidths, sectionLoading, treeLoading, initEmbeddingProgressListener, initVoiceProgressListener } = useAppStore();
+  const { loadProjects, loadUserTree, theme, toggleTheme, fontFamily, fontSize, colorScheme, toggleSidebar, setPaletteOpen, paletteOpen, sidebarCollapsed, sidebarWidth, setSidebarWidth, savePanelWidths, sectionLoading, treeLoading, initEmbeddingProgressListener, initVoiceProgressListener } = useAppStore();
+  const currentProject = useAppStore((s) => s.currentProject);
+
+  // Icon progress bar on taskbar/dock
+  useIconProgress();
 
   // Init theme & layout on mount
   useEffect(() => {
@@ -52,9 +57,10 @@ export function App() {
     document.documentElement.setAttribute("data-font-size", fontSize);
     document.documentElement.setAttribute("data-color-scheme", colorScheme);
   }, [fontFamily, fontSize, colorScheme]);
-  // Load projects
+  // Load projects + user folder tree
   useEffect(() => {
     loadProjects();
+    loadUserTree();
   }, []);
 
   // Global embedding progress listener (survives modal close)
@@ -118,10 +124,20 @@ export function App() {
         }
       }
 
-      // Ctrl+Shift+I — quick idea
-      if (mod && e.shiftKey && e.key === "I") {
+      // Ctrl+Shift+Alt+I — quick idea
+      if (mod && e.shiftKey && e.altKey && e.key === "I") {
         e.preventDefault();
         useAppStore.getState().toggleQuickIdea();
+        return;
+      }
+
+      // Ctrl+Shift+H — section history (snapshots)
+      if (mod && e.shiftKey && e.key === "H") {
+        e.preventDefault();
+        const s = useAppStore.getState();
+        if (s.currentSection && s.currentSection.type !== "folder") {
+          s.openSnapshotsPanel(s.currentSection.id, s.currentSection.title);
+        }
         return;
       }
 
@@ -160,8 +176,8 @@ export function App() {
       <div className="app-root">
         <div className="app-layout">
           {(sectionLoading || treeLoading) && <div className="global-loading-bar" />}
-          <Sidebar />
-          {!sidebarCollapsed && (
+          {currentProject && <Sidebar />}
+          {currentProject && !sidebarCollapsed && (
             <ResizeHandle
               side="left"
               onResizeStart={handleSidebarResizeStart}

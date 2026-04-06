@@ -17,7 +17,7 @@ function createEmptyAgent(description?: string): CustomAgent {
     description: description || "",
     systemPrompt: "",
     prompt: "",
-    tools: ["get_tree", "get_section", "search", "create_section", "update_section"],
+    tools: ["gt", "read", "search", "create_section", "update_section"],
     model: "claude-haiku-4-5-20251001",
     thinking: false,
     effort: "medium",
@@ -43,8 +43,7 @@ export function AgentsTab() {
   };
 
   const handleGenerate = async () => {
-    const { llmApiKey, llmChatConfig } = useAppStore.getState();
-    if (!llmApiKey) {
+    if (!useAppStore.getState().hasLlmAccess()) {
       addToast("error", t("apiKeyRequired"));
       return;
     }
@@ -53,8 +52,6 @@ export function AgentsTab() {
     try {
       const config = await generateAgentConfig({
         description: descText,
-        apiKey: llmApiKey,
-        model: llmChatConfig.model,
       });
 
       const agent: CustomAgent = {

@@ -23,11 +23,11 @@ function generateFiles(token: string, mcpServerPath: string): Map<string, string
 
   // --- Commands ---
 
-  files.set(".claude/commands/tree.md", `Покажи дерево документации ccDoc проекта.
+  files.set(".claude/commands/tree.md", `Show the ccDoc project documentation tree.
 
-Используй MCP-инструмент \`overview\` с project_token "${token}". Он вернёт паспорт проекта и компактное дерево (глубина 2).
+Use the MCP tool \`overview\` with project_token "${token}". It will return the project passport and a compact tree (depth 2).
 
-Отобрази результат как читаемое дерево с отступами и иконками типов:
+Display the result as a readable tree with indentation and type icons:
 - 📁 folder
 - 📄 file
 - 📝 section
@@ -36,130 +36,160 @@ function generateFiles(token: string, mcpServerPath: string): Map<string, string
 - 📋 kanban
 - 🎨 drawing
 
-Если есть паспорт проекта — покажи его в начале.
+If a project passport exists, show it at the beginning.
 
 $ARGUMENTS
 `);
 
-  files.set(".claude/commands/search.md", `Поиск по документации ccDoc проекта.
+  files.set(".claude/commands/search.md", `Search the ccDoc project documentation.
 
-Используй MCP-инструмент \`find\` с project_token "${token}" и запросом ниже.
+Use the MCP tool \`find\` with project_token "${token}" and the query below.
 
-Покажи результаты с путями, релевантностью и сниппетами.
-Если нужны полные детали — используй \`read\` для конкретной секции.
-Если запрос пуст — спроси что искать.
+Show results with paths, relevance, and snippets.
+If full details are needed, use \`read\` for the specific section.
+If the query is empty, ask what to search for.
 
-Запрос: $ARGUMENTS
+Query: $ARGUMENTS
 `);
 
-  files.set(".claude/commands/section.md", `Прочитай секцию из ccDoc проекта.
+  files.set(".claude/commands/section.md", `Read a section from the ccDoc project.
 
-1. Используй \`find\` с project_token "${token}" и именем секции ниже как запрос
-2. Используй \`read\` с найденным section_id для получения полного содержимого и дочерних секций
+1. Use \`find\` with project_token "${token}" and the section name below as a query
+2. Use \`read\` with the found section_id to get the full content and child sections
 
-Если имя неоднозначно — покажи подходящие варианты и уточни у пользователя.
+If the name is ambiguous, show matching options and ask the user to clarify.
 
-Секция: $ARGUMENTS
+Section: $ARGUMENTS
 `);
 
-  files.set(".claude/commands/create-doc.md", `Создай структурированный документ в ccDoc проекте.
+  files.set(".claude/commands/create-doc.md", `Create a structured document in the ccDoc project.
 
-Шаги:
-1. \`overview\` с project_token "${token}" — посмотри текущую структуру
-2. Выбери подходящую папку или предложи создать новую
-3. \`create_section\` — создай секцию type "file" в выбранной папке с полным markdown содержимым
-4. Создай подсекции type "section" для каждой основной части документа
+Steps:
+1. \`overview\` with project_token "${token}" — review the current structure
+2. Choose an appropriate folder or suggest creating a new one
+3. \`create_section\` — create a section with type "file" in the chosen folder with full markdown content
+4. Create subsections with type "section" for each major part of the document
 
-Правила иерархии:
-- Корневой уровень: только folders
-- Folders содержат: folders, files, ideas, todos, kanban, drawing
-- Files содержат: sections
-- Sections содержат: sections (для вложенности)
+Hierarchy rules:
+- Root level: folders only
+- Folders contain: folders, files, ideas, todos, kanban, drawing
+- Files contain: sections
+- Sections contain: sections (for nesting)
 
-Пиши содержимое в markdown формате.
-После создания — вызови \`commit_history\` с описательным сообщением.
+Write content in markdown format.
+After creation, call \`commit_history\` with a descriptive message.
 
-Тема/требования: $ARGUMENTS
+AFTER COMPLETING ALL STEPS:
+- Verify each created element: correct types, hierarchy, and content
+- Ensure markdown formatting is valid
+- Verify that all subsections are created and attached to the correct parents
+If errors are found, fix them and verify again.
+
+Topic/requirements: $ARGUMENTS
 `);
 
-  files.set(".claude/commands/import.md", `Импортируй markdown содержимое в ccDoc проект.
+  files.set(".claude/commands/import.md", `Import markdown content into the ccDoc project.
 
-Шаги:
-1. \`overview\` с project_token "${token}" — посмотри доступные папки
-2. Уточни целевую папку если не указана ниже
-3. \`import_markdown\` с project_token "${token}", folder_id целевой папки, именем файла и markdown содержимым
+Steps:
+1. \`overview\` with project_token "${token}" — review available folders
+2. Clarify the target folder if not specified below
+3. \`import_markdown\` with project_token "${token}", the target folder's folder_id, a file name, and the markdown content
 
-Инструмент автоматически разбивает markdown по заголовкам на секции.
+The tool automatically splits markdown into sections by headings.
 
-Если пользователь указал путь к файлу — прочитай содержимое файла.
-Если предоставлен raw markdown — используй напрямую.
+If the user specified a file path, read the file's content.
+If raw markdown is provided, use it directly.
 
-После импорта — вызови \`commit_history\` с описанием.
+After import, call \`commit_history\` with a description.
 
-Что импортировать: $ARGUMENTS
+What to import: $ARGUMENTS
 `);
 
-  files.set(".claude/commands/scaffold.md", `Создай структуру документации в ccDoc проекте за один вызов.
+  files.set(".claude/commands/scaffold.md", `Create a documentation structure in the ccDoc project in a single call.
 
-Шаги:
-1. \`overview\` с project_token "${token}" — текущая структура
-2. Спланируй структуру папок, файлов и секций по требованиям ниже
-3. \`bulk_create_sections\` с project_token "${token}" — создай всё одним вызовом
-   - Используй '$N' ссылки для parent_id (0-indexed, ссылка на N-ю созданную секцию в батче)
-   - Пример: '$0' ссылается на первую созданную секцию
+Steps:
+1. \`overview\` with project_token "${token}" — review the current structure
+2. Plan the folder, file, and section structure based on the requirements below
+3. \`bulk_create_sections\` with project_token "${token}" — create everything in one call
+   - Use '$N' references for parent_id (0-indexed, referencing the Nth created section in the batch)
+   - Example: '$0' refers to the first created section
 
-Правила иерархии: root→folder, folder→file/idea/todo/kanban/drawing, file→section, section→section
+Hierarchy rules: root->folder, folder->file/idea/todo/kanban/drawing, file->section, section->section
 
-После создания — \`commit_history\` с описанием.
+After creation, call \`commit_history\` with a description.
 
-Структура для создания: $ARGUMENTS
+AFTER COMPLETION:
+- Verify that all sections were created with correct types and hierarchy
+- Verify that parent_id references are correct
+If errors are found, fix them and verify again.
+
+Structure to create: $ARGUMENTS
 `);
 
-  files.set(".claude/commands/review.md", `Проанализируй структуру документации ccDoc проекта.
+  files.set(".claude/commands/review.md", `Analyze the ccDoc project documentation structure.
 
-Шаги:
-1. \`overview\` с project_token "${token}" — структура и паспорт
-2. Оцени организацию:
-   - Логичность иерархии папок
-   - Консистентность именования
-   - Папки с избытком или недостатком элементов
-   - Возможности группировки плоских структур
-   - Пробелы в документации
-3. Прочитай ключевые секции через \`read\` для оценки качества содержимого
-4. Предоставь конкретные рекомендации по улучшению
+Steps:
+1. \`overview\` with project_token "${token}" — structure and passport
+2. Evaluate the organization:
+   - Logical consistency of the folder hierarchy
+   - Naming consistency
+   - Folders with too many or too few elements
+   - Opportunities to group flat structures
+   - Documentation gaps
+3. Read key sections via \`read\` to assess content quality
+4. Provide specific improvement recommendations
 
-Если указан фокус — приоритизируй эту область.
+If a focus area is specified, prioritize that area.
 
-Фокус: $ARGUMENTS
+Focus: $ARGUMENTS
 `);
 
-  files.set(".claude/commands/summarize.md", `Суммаризируй документацию ccDoc проекта.
+  files.set(".claude/commands/summarize.md", `Summarize the ccDoc project documentation.
 
-Если указана конкретная секция:
-1. \`find\` с project_token "${token}" — найди секцию
-2. \`read\` — прочитай полное содержимое
+If a specific section is specified:
+1. \`find\` with project_token "${token}" — locate the section
+2. \`read\` — read the full content
 
-Если секция не указана — суммаризируй весь проект:
-1. \`overview\` с project_token "${token}" — структура и паспорт
-2. Прочитай ключевые секции через \`read\`
-3. Дай обзор высокого уровня
+If no section is specified, summarize the entire project:
+1. \`overview\` with project_token "${token}" — structure and passport
+2. Read key sections via \`read\`
+3. Provide a high-level overview
 
-Результат:
-- Краткое резюме (2-3 предложения)
-- Ключевые темы
-- Важные решения и детали
-- Пробелы в документации
+Output:
+- Brief summary (2-3 sentences)
+- Key topics
+- Important decisions and details
+- Documentation gaps
 
-Что суммаризировать: $ARGUMENTS
+What to summarize: $ARGUMENTS
 `);
 
-  files.set(".claude/commands/history.md", `Покажи историю версий ccDoc проекта.
+  files.set(".claude/commands/history.md", `Show the ccDoc project version history.
 
-Используй \`commit_history\` для создания снимков и \`get_history\` (legacy) для просмотра истории.
+Use \`commit_history\` to create snapshots and \`get_history\` (legacy) to view history.
 
 Project token: "${token}"
 
 $ARGUMENTS
+`);
+
+  files.set(".claude/commands/execute-plan.md", `Execute a plan from the ccDoc project.
+
+1. Use \`find\` with project_token "${token}" and the query below to locate the plan
+2. Use \`read\` to get the full plan content and all its phases/steps
+3. Execute each step of the plan STRICTLY in order, without skipping any item
+4. After completing all steps, perform at least TWO verification iterations:
+   Iteration 1: check compliance with the plan -> check for errors -> fix issues found.
+   Iteration 2: re-check compliance with the plan -> re-check for errors -> fix issues.
+5. Do NOT report completion until both iterations have passed
+
+RULES:
+- Do not skip plan steps
+- Do not change the execution order without an explicit reason
+- Do not add unplanned functionality
+- Pay close attention to file names, paths, types, and signatures
+
+Plan: $ARGUMENTS
 `);
 
   // --- Agent ---
@@ -170,46 +200,46 @@ description: "ccDoc documentation assistant — manages project documentation st
 model: sonnet
 ---
 
-Ты — специалист по документации, работающий с системой управления документацией ccDoc.
+You are a documentation specialist working with the ccDoc documentation management system.
 
-## Контекст проекта
+## Project context
 
 Project token: ${token}
 
-Документация организована иерархически:
-- **Folders** (только на корневом уровне) — организационные контейнеры
-- **Files** (внутри папок) — документы с содержимым
-- **Sections** (внутри files или других sections) — части документа
-- **Ideas** (внутри папок) — быстрые заметки
-- **Todos** (внутри папок) — списки задач
-- **Kanban** (внутри папок) — канбан-доски
-- **Drawing** (внутри папок) — диаграммы
+Documentation is organized hierarchically:
+- **Folders** (root level only) — organizational containers
+- **Files** (inside folders) — documents with content
+- **Sections** (inside files or other sections) — parts of a document
+- **Ideas** (inside folders) — quick notes
+- **Todos** (inside folders) — task lists
+- **Kanban** (inside folders) — kanban boards
+- **Drawing** (inside folders) — diagrams
 
-## Доступные MCP-инструменты
+## Available MCP tools
 
-### Чтение (воронка: ориентация → поиск → чтение)
-- \`overview\` — **точка входа**. Возвращает паспорт проекта и компактное дерево (depth 2). Вызови один раз в начале.
-- \`find\` — **основной инструмент** для поиска. Возвращает сниппеты с путями секций. Часто сниппета достаточно.
-- \`read\` — полное содержимое секции по ID. Используй только когда сниппета из find недостаточно.
-- \`list_projects\` — список проектов
+### Reading (funnel: orient -> search -> read)
+- \`overview\` — **entry point**. Returns the project passport and a compact tree (depth 2). Call once at the start.
+- \`find\` — **primary tool** for searching. Returns snippets with section paths. Often a snippet is sufficient.
+- \`read\` — full section content by ID. Use only when a snippet from find is not enough.
+- \`list_projects\` — list of projects
 
-### Запись
-- \`create_section\` — создать секцию
-- \`update_section\` — обновить заголовок и/или содержимое
-- \`delete_section\` — мягкое удаление
-- \`move_section\` — переместить в дереве
-- \`import_markdown\` — импорт markdown
-- \`bulk_create_sections\` — массовое создание
-- \`export_project\` — экспорт в markdown файлы
-- \`commit_history\` — сохранить снимок версии
+### Writing
+- \`create_section\` — create a section
+- \`update_section\` — update title and/or content
+- \`delete_section\` — soft delete
+- \`move_section\` — move within the tree
+- \`import_markdown\` — import markdown
+- \`bulk_create_sections\` — bulk creation
+- \`export_project\` — export to markdown files
+- \`commit_history\` — save a version snapshot
 
-## Принципы работы
+## Working principles
 
-1. **overview → find → read** — следуй воронке. Начни с overview для ориентации, используй find для поиска, read только для полных деталей.
-2. **Сниппетов часто достаточно** — find возвращает короткие сниппеты, не читай полную секцию если ответ виден в сниппете.
-3. **Соблюдай иерархию** — root→folder, folder→file/idea/todo/kanban/drawing, file→section, section→section
-4. **Коммить после изменений** — вызывай \`commit_history\` после значимых модификаций
-5. **Читай перед обновлением** — всегда читай текущее содержимое через \`read\` перед update_section
+1. **overview -> find -> read** — follow the funnel. Start with overview to orient, use find to search, read only for full details.
+2. **Snippets are often enough** — find returns short snippets; do not read the full section if the answer is visible in the snippet.
+3. **Respect the hierarchy** — root->folder, folder->file/idea/todo/kanban/drawing, file->section, section->section
+4. **Commit after changes** — call \`commit_history\` after significant modifications
+5. **Read before updating** — always read the current content via \`read\` before calling update_section
 `);
 
   return files;

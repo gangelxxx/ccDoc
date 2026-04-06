@@ -1,116 +1,112 @@
-import { useState } from "react";
-import { Eye, EyeOff, Key } from "lucide-react";
-import { type LlmConfig } from "../../../stores/app.store.js";
+import { useAppStore } from "../../../stores/app.store.js";
 import { useT } from "../../../i18n.js";
-import { LlmConfigSection } from "../LlmConfigSection.js";
+import type { ModelTier } from "../../../stores/types.js";
 
 export interface ModelTabProps {
-  keyDraft: string;
-  onKeyChange: (key: string) => void;
-  chatDraft: LlmConfig;
-  onChatChange: (cfg: Partial<LlmConfig>) => void;
-  passportDraft: LlmConfig;
-  onPassportChange: (cfg: Partial<LlmConfig>) => void;
-  summaryDraft: LlmConfig;
-  onSummaryChange: (cfg: Partial<LlmConfig>) => void;
-  models: { id: string; display_name: string }[];
-  modelsLoading: boolean;
-  modelsError: string | null;
-  openSection: string;
-  onToggleSection: (key: string) => void;
+  chatTierDraft: ModelTier;
+  onChatTierChange: (tier: ModelTier) => void;
+  passportTierDraft: ModelTier;
+  onPassportTierChange: (tier: ModelTier) => void;
+  summaryTierDraft: ModelTier;
+  onSummaryTierChange: (tier: ModelTier) => void;
+  autoVerifyPlan: boolean;
+  onAutoVerifyPlanChange: (v: boolean) => void;
+}
+
+const TIER_OPTIONS: ModelTier[] = ["strong", "medium", "weak"];
+
+const TIER_LABEL_KEYS: Record<ModelTier, string> = {
+  strong: "tierStrong",
+  medium: "tierMedium",
+  weak: "tierWeak",
+};
+
+function TierSummary({ tier }: { tier: ModelTier }) {
+  const modelTiers = useAppStore((s) => s.modelTiers);
+  const config = modelTiers[tier];
+  const script = config.providerScript.builtinId || "custom";
+  const parts = [script, config.modelId, config.effort];
+  if (config.thinking) parts.push("thinking");
+
+  return (
+    <span style={{ fontSize: 11, opacity: 0.55, marginLeft: 4 }}>
+      {parts.join(" · ")}
+    </span>
+  );
+}
+
+function TierSelect({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: ModelTier;
+  onChange: (tier: ModelTier) => void;
+}) {
+  const t = useT();
+
+  return (
+    <div className="settings-accordion" style={{ padding: "10px 12px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span style={{ fontWeight: 500 }}>{label}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <TierSummary tier={value} />
+          <select
+            className="llm-settings-input llm-model-select"
+            style={{ width: "auto", minWidth: 140, marginBottom: 0 }}
+            value={value}
+            onChange={(e) => onChange(e.target.value as ModelTier)}
+          >
+            {TIER_OPTIONS.map((tier) => (
+              <option key={tier} value={tier}>{t(TIER_LABEL_KEYS[tier] as any)}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export function ModelTab({
-  keyDraft, onKeyChange,
-  chatDraft, onChatChange,
-  passportDraft, onPassportChange,
-  summaryDraft, onSummaryChange,
-  models, modelsLoading, modelsError,
-  openSection, onToggleSection,
+  chatTierDraft, onChatTierChange,
+  passportTierDraft, onPassportTierChange,
+  summaryTierDraft, onSummaryTierChange,
+  autoVerifyPlan, onAutoVerifyPlanChange,
 }: ModelTabProps) {
   const t = useT();
-  const [showKey, setShowKey] = useState(false);
-  const [setupLoading, setSetupLoading] = useState(false);
-  const handleSetupToken = async () => {
-    setSetupLoading(true);
-    try {
-      const result = await window.api.llmSetupToken();
-      if (result.ok && result.key) {
-        onKeyChange(result.key);
-      }
-    } catch (err) {
-      console.error("setup-token error:", err);
-    } finally {
-      setSetupLoading(false);
-    }
-  };
 
   return (
     <div className="settings-section">
-      <label className="llm-settings-label">{t("anthropicApiKey")}</label>
-      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-        <input
-          type={showKey ? "text" : "password"}
-          className="llm-settings-input"
-          style={{ flex: 1, minWidth: 0, marginBottom: 0 }}
-          placeholder="sk-ant-..."
-          value={keyDraft}
-          onChange={(e) => onKeyChange(e.target.value)}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <TierSelect
+          label={t("llmAssistant")}
+          value={chatTierDraft}
+          onChange={onChatTierChange}
         />
-        <button
-          className="btn-icon"
-          onClick={() => setShowKey((v) => !v)}
-          title={showKey ? t("hideApiKey") : t("showApiKey")}
-        >
-          {showKey ? <EyeOff size={14} /> : <Eye size={14} />}
-        </button>
-        <button
-          className="btn-icon"
-          onClick={handleSetupToken}
-          disabled={setupLoading}
-          title={t("requestApiKey")}
-        >
-          <Key size={14} />
-        </button>
+        <TierSelect
+          label={t("llmPassport")}
+          value={passportTierDraft}
+          onChange={onPassportTierChange}
+        />
+        <TierSelect
+          label={t("llmSummary")}
+          value={summaryTierDraft}
+          onChange={onSummaryTierChange}
+        />
       </div>
 
-      <div style={{ marginTop: 12 }}>
-        <LlmConfigSection
-          label={t("llmAssistant")}
-          sectionKey="chat"
-          draft={chatDraft}
-          onChange={onChatChange}
-          models={models}
-          modelsLoading={modelsLoading}
-          modelsError={modelsError}
-
-          open={openSection === "chat"}
-          onToggle={() => onToggleSection("chat")}
-        />
-        <LlmConfigSection
-          label={t("llmPassport")}
-          sectionKey="passport"
-          draft={passportDraft}
-          onChange={onPassportChange}
-          models={models}
-          modelsLoading={modelsLoading}
-          modelsError={modelsError}
-
-          open={openSection === "passport"}
-          onToggle={() => onToggleSection("passport")}
-        />
-        <LlmConfigSection
-          label={t("llmSummary")}
-          sectionKey="summary"
-          draft={summaryDraft}
-          onChange={onSummaryChange}
-          models={models}
-          modelsLoading={modelsLoading}
-          modelsError={modelsError}
-
-          open={openSection === "summary"}
-          onToggle={() => onToggleSection("summary")}
-        />
+      {/* Auto-verify plans */}
+      <div style={{ marginTop: 16 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={autoVerifyPlan}
+            onChange={(e) => onAutoVerifyPlanChange(e.target.checked)}
+          />
+          <span>{t("autoVerifyPlan")}</span>
+        </label>
+        <div className="settings-hint">{t("autoVerifyPlanHint")}</div>
       </div>
     </div>
   );

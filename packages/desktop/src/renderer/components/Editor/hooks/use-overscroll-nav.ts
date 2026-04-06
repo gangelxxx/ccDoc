@@ -17,9 +17,9 @@ export interface SiblingInfo {
 }
 
 /**
- * Hook для overscroll-навигации между соседними секциями.
- * При прокрутке за край контейнера накапливает «тягу» и по достижении порога
- * переключает на соседнюю секцию.
+ * Hook for overscroll navigation between adjacent sections.
+ * When scrolling past the container edge, accumulates "pull" and upon reaching
+ * the threshold switches to the adjacent section.
  */
 export function useOverscrollNav(
   contentBodyRef: RefObject<HTMLDivElement | null>,

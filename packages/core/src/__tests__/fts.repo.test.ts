@@ -12,7 +12,7 @@ beforeEach(async () => {
 });
 
 describe("FtsRepo.search", () => {
-  it("находит раздел по точному совпадению в заголовке", async () => {
+  it("finds a section by exact match in title", async () => {
     await insertSection(db, "id-1", "Kanban board");
     await fts.upsert("id-1", "Kanban board", "", "", "workflow cards columns");
 
@@ -22,7 +22,7 @@ describe("FtsRepo.search", () => {
     expect(results[0].title).toBe("Kanban board");
   });
 
-  it("находит по префиксу — 'kan' → 'Kanban board'", async () => {
+  it("finds by prefix — 'kan' → 'Kanban board'", async () => {
     await insertSection(db, "id-1", "Kanban board");
     await fts.upsert("id-1", "Kanban board", "", "", "");
 
@@ -31,7 +31,7 @@ describe("FtsRepo.search", () => {
     expect(results[0].id).toBe("id-1");
   });
 
-  it("находит по тексту в теле (body), не только в заголовке", async () => {
+  it("finds by text in body, not just in title", async () => {
     await insertSection(db, "id-2", "Project management");
     await fts.upsert("id-2", "Project management", "", "", "workflow cards swim lanes");
 
@@ -40,7 +40,7 @@ describe("FtsRepo.search", () => {
     expect(results[0].id).toBe("id-2");
   });
 
-  it("находит по тегам", async () => {
+  it("finds by tags", async () => {
     await insertSection(db, "id-3", "Architecture");
     await fts.upsert("id-3", "Architecture", "backend microservices", "", "");
 
@@ -49,10 +49,10 @@ describe("FtsRepo.search", () => {
     expect(results[0].id).toBe("id-3");
   });
 
-  it("исключает удалённые секции (deleted_at IS NOT NULL)", async () => {
+  it("excludes deleted sections (deleted_at IS NOT NULL)", async () => {
     await insertSection(db, "id-del", "Kanban deleted");
     await fts.upsert("id-del", "Kanban deleted", "", "", "");
-    // Мягко удаляем секцию
+    // Soft-delete the section
     await db.execute({
       sql: "UPDATE sections SET deleted_at = datetime('now') WHERE id = ?",
       args: ["id-del"],
@@ -62,7 +62,7 @@ describe("FtsRepo.search", () => {
     expect(results).toHaveLength(0);
   });
 
-  it("пустой запрос возвращает []", async () => {
+  it("empty query returns []", async () => {
     await insertSection(db, "id-1", "Kanban");
     await fts.upsert("id-1", "Kanban", "", "", "");
 
@@ -70,26 +70,26 @@ describe("FtsRepo.search", () => {
     expect(results).toHaveLength(0);
   });
 
-  it("спецсимволы в запросе не вызывают ошибку", async () => {
+  it("special characters in query do not cause an error", async () => {
     await insertSection(db, "id-1", "Kanban board");
     await fts.upsert("id-1", "Kanban board", "", "", "");
 
-    // sanitizeFtsQuery должен почистить спецсимволы FTS5
+    // sanitizeFtsQuery should clean FTS5 special characters
     await expect(fts.search("(kanban)")).resolves.toBeDefined();
     await expect(fts.search('"kanban"')).resolves.toBeDefined();
     await expect(fts.search("kan*ban")).resolves.toBeDefined();
   });
 
-  it("НЕ находит 'kanban' по запросу 'канбан' — FTS5 unicode61 не делает кросс-скрипт матчинг", async () => {
+  it("does NOT find 'kanban' by query 'kanban-cyrillic' — FTS5 unicode61 does not do cross-script matching", async () => {
     await insertSection(db, "id-1", "Kanban board");
     await fts.upsert("id-1", "Kanban board", "", "", "kanban workflow");
 
-    // Это ожидаемое ограничение FTS5. Именно поэтому нужен embedding.
+    // This is an expected FTS5 limitation. This is why embedding is needed.
     const results = await fts.search("канбан");
     expect(results).toHaveLength(0);
   });
 
-  it("возвращает score > 0 для найденных результатов", async () => {
+  it("returns score > 0 for found results", async () => {
     await insertSection(db, "id-1", "API documentation");
     await fts.upsert("id-1", "API documentation", "", "", "endpoints REST");
 
@@ -97,7 +97,7 @@ describe("FtsRepo.search", () => {
     expect(results[0].score).toBeGreaterThan(0);
   });
 
-  it("ранжирует по релевантности — точное совпадение в заголовке выше чем в теле", async () => {
+  it("ranks by relevance — exact match in title ranks higher than in body", async () => {
     await insertSection(db, "id-title", "Authentication guide");
     await fts.upsert("id-title", "Authentication guide", "", "", "login security");
 
@@ -106,11 +106,11 @@ describe("FtsRepo.search", () => {
 
     const results = await fts.search("authentication");
     expect(results.length).toBeGreaterThanOrEqual(2);
-    // Заголовок с точным совпадением должен быть первым
+    // Title with exact match should come first
     expect(results[0].id).toBe("id-title");
   });
 
-  it("возвращает не больше limit результатов", async () => {
+  it("returns no more than limit results", async () => {
     for (let i = 1; i <= 8; i++) {
       await insertSection(db, `id-${i}`, `Section ${i} about kanban`);
       await fts.upsert(`id-${i}`, `Section ${i} about kanban`, "", "", "workflow");
@@ -120,7 +120,7 @@ describe("FtsRepo.search", () => {
     expect(results).toHaveLength(3);
   });
 
-  it("count() возвращает число проиндексированных записей", async () => {
+  it("count() returns the number of indexed entries", async () => {
     expect(await fts.count()).toBe(0);
 
     await insertSection(db, "id-1", "First");
@@ -131,7 +131,7 @@ describe("FtsRepo.search", () => {
     expect(await fts.count()).toBe(2);
   });
 
-  it("delete() удаляет запись из индекса", async () => {
+  it("delete() removes an entry from the index", async () => {
     await insertSection(db, "id-1", "Kanban");
     await fts.upsert("id-1", "Kanban", "", "", "");
     await fts.delete("id-1");
@@ -140,7 +140,7 @@ describe("FtsRepo.search", () => {
     expect(results).toHaveLength(0);
   });
 
-  it("reindexAll() перестраивает весь индекс", async () => {
+  it("reindexAll() rebuilds the entire index", async () => {
     await insertSection(db, "id-old", "Old entry");
     await fts.upsert("id-old", "Old entry", "", "", "");
 
@@ -149,15 +149,15 @@ describe("FtsRepo.search", () => {
       { id: "id-new", title: "New entry", tags: "", breadcrumbs: "", body: "fresh content" },
     ]);
 
-    // Старая запись должна исчезнуть
+    // Old entry should be gone
     expect(await fts.search("Old")).toHaveLength(0);
-    // Новая должна быть
+    // New entry should exist
     expect(await fts.search("fresh")).toHaveLength(1);
   });
 });
 
 describe("FtsRepo.getByIds", () => {
-  it("возвращает title и breadcrumbs по ID", async () => {
+  it("returns title and breadcrumbs by ID", async () => {
     await insertSection(db, "id-1", "First Section");
     await fts.upsert("id-1", "First Section", "", "Parent Folder", "body text");
 
@@ -176,12 +176,12 @@ describe("FtsRepo.getByIds", () => {
     expect(second?.breadcrumbs).toBe("Other Folder");
   });
 
-  it("для несуществующих ID возвращает пустую Map", async () => {
+  it("returns an empty Map for nonexistent IDs", async () => {
     const result = await fts.getByIds(["nonexistent-1", "nonexistent-2"]);
     expect(result.size).toBe(0);
   });
 
-  it("для пустого массива возвращает пустую Map", async () => {
+  it("returns an empty Map for an empty array", async () => {
     const result = await fts.getByIds([]);
     expect(result.size).toBe(0);
   });

@@ -1,5 +1,6 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useCallback } from "react";
 import { useAppStore } from "../../stores/app.store.js";
+import { useShallow } from "zustand/react/shallow";
 import { useT } from "../../i18n.js";
 import { TipTapEditor, EditorToolbar } from "./TipTapEditor.js";
 import { KanbanBoard } from "./KanbanBoard.js";
@@ -21,6 +22,9 @@ import { NoProjectState, NoSectionState } from "./EmptyStates.js";
 import { useOverscrollNav } from "./hooks/use-overscroll-nav.js";
 import { useLlmResize } from "./hooks/use-llm-resize.js";
 import { useTitleFit } from "./hooks/use-title-fit.js";
+import { useAutoCommit } from "../../hooks/use-auto-commit.js";
+import { CommitConfirmModal } from "../CommitConfirmModal/CommitConfirmModal.js";
+import { SectionSnapshotsPanel } from "./SectionSnapshotsPanel.js";
 
 export function ContentArea() {
   const {
@@ -34,7 +38,10 @@ export function ContentArea() {
     goBack,
     goForward,
     tree,
+    userTree,
+    sectionSource,
     selectSection,
+    selectUserSection,
     llmPanelOpen,
     toggleLlmPanel,
     quickIdeaOpen,
@@ -45,19 +52,61 @@ export function ContentArea() {
     externalChangePending,
     refreshCurrentSection,
     dismissExternalChange,
-  } = useAppStore();
+  } = useAppStore(useShallow((s) => ({
+    currentProject: s.currentProject,
+    currentSection: s.currentSection,
+    sectionLoading: s.sectionLoading,
+    sidebarCollapsed: s.sidebarCollapsed,
+    toggleSidebar: s.toggleSidebar,
+    canGoBack: s.canGoBack,
+    canGoForward: s.canGoForward,
+    goBack: s.goBack,
+    goForward: s.goForward,
+    tree: s.tree,
+    userTree: s.userTree,
+    sectionSource: s.sectionSource,
+    selectSection: s.selectSection,
+    selectUserSection: s.selectUserSection,
+    llmPanelOpen: s.llmPanelOpen,
+    toggleLlmPanel: s.toggleLlmPanel,
+    quickIdeaOpen: s.quickIdeaOpen,
+    toggleQuickIdea: s.toggleQuickIdea,
+    renameSection: s.renameSection,
+    llmPanelWidth: s.llmPanelWidth,
+    historyViewCommit: s.historyViewCommit,
+    externalChangePending: s.externalChangePending,
+    refreshCurrentSection: s.refreshCurrentSection,
+    dismissExternalChange: s.dismissExternalChange,
+  })));
 
   const tca = useT();
 
+  // Auto-commit hook for todo/kanban sections
+  const autoCommit = useAutoCommit({ projectToken: currentProject?.token ?? null });
+  const handleTaskChecked = autoCommit.isEnabled ? autoCommit.triggerCommit : undefined;
+
   // Build breadcrumb path
-  const breadcrumbs = buildBreadcrumbs(tree, currentSection?.id || null);
+  const isUserSection = sectionSource === "user";
+  const userFolderLabel = "\uD83D\uDC64 " + tca("userFolder.title" as any);
+  const activeTree = isUserSection ? userTree : tree;
+  const activeNavigate = isUserSection ? selectUserSection : selectSection;
+  const breadcrumbs = isUserSection
+    ? buildBreadcrumbs(userTree, currentSection?.id || null)
+    : buildBreadcrumbs(tree, currentSection?.id || null).filter(bc => bc.id !== "workspace-root");
 
   // Section navigation (overscroll between sibling sections)
   const contentBodyRef = useRef<HTMLDivElement>(null);
   const [editorInstance, setEditorInstance] = useState<any>(null);
+  const [activeEditorSectionId, setActiveEditorSectionId] = useState<string | null>(null);
+  const [activeEditorSectionTitle, setActiveEditorSectionTitle] = useState<string>("");
+  const handleActiveEditorChange = useCallback((editor: any, secId?: string, secTitle?: string) => {
+    setEditorInstance(editor);
+    setActiveEditorSectionId(secId || null);
+    setActiveEditorSectionTitle(secTitle || "");
+  }, []);
   const mainContentRef = useRef<HTMLDivElement>(null);
 
-  const { overscrollPull, siblingInfo } = useOverscrollNav(contentBodyRef, tree, currentSection);
+  const { overscrollPull, siblingInfo } = useOverscrollNav(contentBodyRef, activeTree, currentSection);
   const llmResize = useLlmResize(mainContentRef);
   const titleRef = useTitleFit(currentSection?.id, currentSection?.title);
 
@@ -95,8 +144,8 @@ export function ContentArea() {
     );
   }
 
-  // --- No project ---
-  if (!currentProject) {
+  // --- No project and no user section ---
+  if (!currentProject && !isUserSection) {
     return <NoProjectState mainContentRef={mainContentRef} llmResize={llmResize} />;
   }
 
@@ -111,7 +160,7 @@ export function ContentArea() {
       <div className="content-area-wrap">
         <div className="main-content" ref={mainContentRef}>
           <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "200px", opacity: 0.5 }}>
-            Загрузка...
+            {tca("loading")}
           </div>
         </div>
         {llmPanelOpen && (
@@ -139,10 +188,10 @@ export function ContentArea() {
         canGoForward={canGoForward}
         goBack={goBack}
         goForward={goForward}
-        projectName={currentProject.name}
+        projectName={isUserSection ? userFolderLabel : currentProject?.name}
         breadcrumbs={breadcrumbs}
         currentTitle={currentSection.title}
-        onBreadcrumbClick={selectSection}
+        onBreadcrumbClick={activeNavigate}
         llmPanelOpen={llmPanelOpen}
         toggleLlmPanel={toggleLlmPanel}
         quickIdeaOpen={quickIdeaOpen}
@@ -151,8 +200,8 @@ export function ContentArea() {
       {externalChangePending && currentSection && currentSection.type !== "knowledge_graph" && (
         <div className="external-change-banner">
           <RefreshCw size={14} />
-          <span>Документация обновлена внешним процессом</span>
-          <button className="external-change-banner-btn" onClick={refreshCurrentSection}>Обновить</button>
+          <span>{tca("externalChangeMessage")}</span>
+          <button className="external-change-banner-btn" onClick={refreshCurrentSection}>{tca("refresh")}</button>
           <button className="external-change-banner-btn external-change-banner-dismiss" onClick={dismissExternalChange}>
             <X size={14} />
           </button>
@@ -203,7 +252,7 @@ export function ContentArea() {
         )}
         {!["folder", "kanban", "drawing", "idea", "knowledge_graph"].includes(currentSection.type) && (
           <div className="editor-sticky-top">
-            {editorInstance && <EditorToolbar editor={editorInstance} />}
+            {editorInstance && <EditorToolbar editor={editorInstance} sectionId={currentSection.type === "file" ? (activeEditorSectionId || undefined) : undefined} sectionTitle={currentSection.type === "file" ? (activeEditorSectionTitle || undefined) : undefined} />}
             <EditorSearchBar />
           </div>
         )}
@@ -216,22 +265,31 @@ export function ContentArea() {
                 <div className="todo-progress-fill" style={{ width: `${pct}%` }} />
               </div>
               <span className="todo-progress-text">{stats.checked}/{stats.total} ({pct}%)</span>
+              {autoCommit.isAvailable && (
+                <button
+                  className={`auto-commit-toggle ${autoCommit.isEnabled ? "active" : ""}`}
+                  onClick={autoCommit.toggle}
+                  title={tca("autoCommitTooltip")}
+                >
+                  {tca("autoCommitToggle")}
+                </button>
+              )}
             </div>
           );
         })()}
         {currentSection.type === "folder" ? (
           <FolderSummary
             folderId={currentSection.id}
-            tree={tree}
-            projectName={currentProject.name}
-            onNavigate={selectSection}
+            tree={activeTree}
+            projectName={isUserSection ? tca("userFolder.title" as any) : currentProject!.name}
+            onNavigate={activeNavigate}
           />
         ) : currentSection.type === "file" ? (
           <FileView
             key={currentSection.id}
             fileId={currentSection.id}
             fileTitle={currentSection.title}
-            onActiveEditorChange={setEditorInstance}
+            onActiveEditorChange={handleActiveEditorChange}
           />
         ) : currentSection.type === "kanban" ? (
           <KanbanBoard
@@ -239,6 +297,7 @@ export function ContentArea() {
             sectionId={currentSection.id}
             title={currentSection.title}
             initialContent={currentSection.content}
+            autoCommit={autoCommit}
           />
         ) : currentSection.type === "drawing" ? (
           <DrawingCanvas
@@ -256,11 +315,11 @@ export function ContentArea() {
           <IdeaChat
             key={currentSection.id}
             section={currentSection}
-            tree={tree}
-            onNavigate={selectSection}
+            tree={activeTree}
+            onNavigate={activeNavigate}
           />
         ) : (
-          <div className={currentSection.type === "section" && findTreeNode(tree, currentSection.id)?.children?.length > 0 ? "has-children" : ""}>
+          <div className={currentSection.type === "section" && findTreeNode(activeTree, currentSection.id)?.children?.length > 0 ? "has-children" : ""}>
             <TipTapEditor
               key={currentSection.id}
               sectionId={currentSection.id}
@@ -268,13 +327,14 @@ export function ContentArea() {
               title={currentSection.title}
               showToolbar={false}
               onEditorReady={setEditorInstance}
+              onTaskChecked={currentSection.type === "todo" ? handleTaskChecked : undefined}
             />
             {currentSection.type === "section" && (
               <>
                 <ChildSections
                   parentId={currentSection.id}
-                  tree={tree}
-                  onNavigate={selectSection}
+                  tree={activeTree}
+                  onNavigate={activeNavigate}
                 />
               </>
             )}
@@ -286,7 +346,7 @@ export function ContentArea() {
           <button
             className="section-nav-btn"
             disabled={!siblingInfo.prev}
-            onClick={() => siblingInfo.prev && selectSection(siblingInfo.prev.id)}
+            onClick={() => siblingInfo.prev && activeNavigate(siblingInfo.prev.id)}
           >
             {"\u2190"} {siblingInfo.prev?.title || ""}
           </button>
@@ -294,7 +354,7 @@ export function ContentArea() {
           <button
             className="section-nav-btn"
             disabled={!siblingInfo.next}
-            onClick={() => siblingInfo.next && selectSection(siblingInfo.next.id)}
+            onClick={() => siblingInfo.next && activeNavigate(siblingInfo.next.id)}
           >
             {siblingInfo.next?.title || ""} {"\u2192"}
           </button>
@@ -311,6 +371,25 @@ export function ContentArea() {
           />
         )}
       <LlmPanel width={llmPanelWidth} onClick={llmResize.handleLlmPanelClick} />
+      <CommitConfirmModal
+        isOpen={autoCommit.modal.isOpen}
+        taskText={autoCommit.modal.taskText}
+        commitMessage={autoCommit.modal.commitMessage}
+        isLoading={autoCommit.modal.isLoading}
+        changes={autoCommit.modal.changes}
+        unversioned={autoCommit.modal.unversioned}
+        checkedFiles={autoCommit.modal.checkedFiles}
+        fileDiff={autoCommit.modal.fileDiff}
+        onToggleFile={autoCommit.toggleFile}
+        onToggleGroup={autoCommit.toggleGroup}
+        onRollbackFile={autoCommit.rollbackFile}
+        onAddToVcs={autoCommit.addToVcs}
+        onAddToGitignore={autoCommit.addToGitignore}
+        onShowFileDiff={autoCommit.showFileDiff}
+        onConfirm={autoCommit.confirmCommit}
+        onCancel={autoCommit.cancelCommit}
+      />
+      <SectionSnapshotsPanel />
     </div>
   );
 }

@@ -11,8 +11,7 @@
  * - Search: cosine similarity (= dot product for L2-normalized vectors)
  */
 
-import { readFileSync, statSync } from "fs";
-import { readdir } from "fs/promises";
+import { readdir, stat, readFile } from "fs/promises";
 import { join, extname } from "path";
 import type { IEmbeddingProvider } from "@ccdoc/core";
 import { cosineSimilarity } from "@ccdoc/core";
@@ -67,7 +66,7 @@ export interface SemanticIndexStats {
 
 const MIN_CHUNK_TOKENS = 30;
 const MAX_CHUNK_TOKENS = 500;
-const MAX_CHUNKS = 10_000;
+const MAX_CHUNKS = 30_000;
 const EMBED_BATCH_SIZE = 16;
 
 export type YieldFn = () => Promise<void>;
@@ -136,7 +135,7 @@ export class SemanticIndex {
   /**
    * Index all code files in a project directory.
    */
-  async indexCodeProject(projectPath: string, yieldFn?: YieldFn, opts: IndexingOptions = DEFAULT_INDEXING_OPTIONS): Promise<number> {
+  async indexCodeProject(projectPath: string, yieldFn?: YieldFn, opts: IndexingOptions = DEFAULT_INDEXING_OPTIONS, pathPrefix?: string): Promise<number> {
     const start = Date.now();
     const files = await walkSourceFiles(projectPath, opts.excludedDirs, opts.codeExts);
     let indexed = 0;
@@ -147,13 +146,14 @@ export class SemanticIndex {
       if (this.isPathExcluded(rel)) continue;
 
       const ext = extname(rel).toLowerCase();
-      this.onProgress?.(rel);
+      const prefixedRel = pathPrefix ? `[${pathPrefix}]/${rel}` : rel;
+      this.onProgress?.(prefixedRel);
       const abs = join(projectPath, rel);
       try {
-        const st = statSync(abs);
+        const st = await stat(abs);
         if (st.size > opts.maxFileSize) continue;
-        const content = readFileSync(abs, "utf-8");
-        const count = await this.indexCodeFile(rel, content, ext);
+        const content = await readFile(abs, "utf-8");
+        const count = await this.indexCodeFile(prefixedRel, content, ext);
         indexed += count;
       } catch { /* skip unreadable */ }
 
@@ -241,7 +241,7 @@ export class SemanticIndex {
   /**
    * Re-index only code files that changed since given mtime.
    */
-  async indexCodeProjectIncremental(projectPath: string, sinceMs: number, opts: IndexingOptions = DEFAULT_INDEXING_OPTIONS): Promise<number> {
+  async indexCodeProjectIncremental(projectPath: string, sinceMs: number, opts: IndexingOptions = DEFAULT_INDEXING_OPTIONS, pathPrefix?: string): Promise<number> {
     const files = await walkSourceFiles(projectPath, opts.excludedDirs, opts.codeExts);
     let reindexed = 0;
 
@@ -250,15 +250,16 @@ export class SemanticIndex {
       if (this.isPathExcluded(rel)) continue;
 
       const ext = extname(rel).toLowerCase();
-      this.onProgress?.(rel);
+      const prefixedRel = pathPrefix ? `[${pathPrefix}]/${rel}` : rel;
+      this.onProgress?.(prefixedRel);
       const abs = join(projectPath, rel);
       try {
-        const st = statSync(abs);
+        const st = await stat(abs);
         if (st.mtimeMs <= sinceMs) continue; // skip unchanged
         if (st.size > opts.maxFileSize) continue;
 
-        const content = readFileSync(abs, "utf-8");
-        const count = await this.indexCodeFile(rel, content, ext);
+        const content = await readFile(abs, "utf-8");
+        const count = await this.indexCodeFile(prefixedRel, content, ext);
         reindexed += count;
       } catch { /* skip unreadable */ }
     }

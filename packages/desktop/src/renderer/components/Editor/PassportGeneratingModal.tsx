@@ -7,7 +7,7 @@ import { useT } from "../../i18n.js";
 export function PassportGeneratingModal({ onClose }: { onClose: () => void }) {
   const bgTasks = useAppStore((s) => s.bgTasks);
   const tl = useT();
-  const isGenerating = bgTasks.some((t) => t.label === "Генерация паспорта проекта");
+  const isGenerating = bgTasks.some((t) => t.label === "Generating project passport");
 
   return createPortal(
     <div className="modal-overlay" onClick={onClose}>

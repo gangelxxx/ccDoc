@@ -9,6 +9,7 @@ export function SearchPanel() {
     ftsQuery, ftsResults, ftsLoading,
     setFtsQuery, searchFts,
     selectSection,
+    selectUserSection,
     setHighlightQuery,
   } = useAppStore();
 
@@ -62,14 +63,23 @@ export function SearchPanel() {
 
         {ftsResults.map((r) => (
           <button
-            key={r.id}
+            key={`${r.source ?? "project"}-${r.id}`}
             className="search-panel-item"
-            onClick={() => { setHighlightQuery(ftsQuery); selectSection(r.id); }}
+            onClick={() => {
+              setHighlightQuery(ftsQuery);
+              if (r.source === "user") selectUserSection(r.id);
+              else selectSection(r.id);
+            }}
           >
             <span
               className="search-panel-item-title"
               dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(r.titleHighlighted || r.title) }}
             />
+            {r.source === "user" && (
+              <span className="search-panel-item-badge" style={{ fontSize: 10, opacity: 0.6, marginLeft: 4 }}>
+                {"\uD83D\uDC64"}
+              </span>
+            )}
             {r.snippet && (
               <span
                 className="search-panel-item-snippet"

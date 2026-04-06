@@ -37,7 +37,6 @@ const AUTH_PERMANENT_PATTERNS = [
   "invalid x-api-key",
   "invalid api key",
   "authentication",
-  "request not allowed",
 ];
 
 /**

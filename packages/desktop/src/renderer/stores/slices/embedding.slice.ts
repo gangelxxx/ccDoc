@@ -35,7 +35,7 @@ export const createEmbeddingSlice: SliceCreator<EmbeddingSlice> = (set, get) => 
     const prev = get().embeddingConfig;
     const next = { ...prev, ...cfg };
     set({ embeddingConfig: next });
-    window.api.settingsPatch({ embedding: next });
+    window.api.settingsPatch({ embedding: next }, "settings:embedding");
     // Hot-swap: notify main process if mode or model changed
     const modeChanged = prev.mode !== next.mode;
     const modelChanged = prev.localModelId !== next.localModelId || prev.onlineModel !== next.onlineModel || prev.onlineProvider !== next.onlineProvider;
@@ -96,7 +96,7 @@ export const createEmbeddingSlice: SliceCreator<EmbeddingSlice> = (set, get) => 
       delete errs[modelId];
       return { embeddingDownloading: { ...s.embeddingDownloading, [modelId]: 0 }, embeddingErrors: errs };
     });
-    const bgTaskId = get().startBgTask(`Загрузка ${modelId}`);
+    const bgTaskId = get().startBgTask(`Downloading ${modelId}`);
     set((s) => ({ embeddingBgTaskIds: { ...s.embeddingBgTaskIds, [modelId]: bgTaskId } }));
     window.api.downloadEmbeddingModel(modelId).catch((err: any) => {
       set((s) => {
@@ -116,7 +116,7 @@ export const createEmbeddingSlice: SliceCreator<EmbeddingSlice> = (set, get) => 
     set((s) => {
       const bgTaskId = s.embeddingBgTaskIds[modelId];
       const bgTasks = bgTaskId
-        ? s.bgTasks.map(t => t.id === bgTaskId ? { ...t, label: `Остановка ${modelId}` } : t)
+        ? s.bgTasks.map(t => t.id === bgTaskId ? { ...t, label: `Cancelling ${modelId}` } : t)
         : s.bgTasks;
       return { embeddingCancelling: { ...s.embeddingCancelling, [modelId]: true }, bgTasks };
     });

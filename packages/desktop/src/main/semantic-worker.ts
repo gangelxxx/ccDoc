@@ -37,24 +37,47 @@ export interface DocSectionInput {
   type: string;
 }
 
+export interface LinkedProjectSource {
+  prefix: string;              // project name — prepended to file paths as [prefix]/
+  projectPath: string | null;  // code source directory
+  docSections: DocSectionInput[];
+}
+
+export interface LinkedSnapshotSource {
+  prefix: string;
+  projectPath: string | null;
+  docTree: any[];
+}
+
+export interface LinkedUpdateSource {
+  prefix: string;
+  projectPath: string | null;
+  codeSinceMs: number;
+  changedDocSections: DocSectionInput[];
+  changedDocIds: string[];
+  deletedFilePaths: string[];
+  deletedSectionIds: string[];
+}
+
 /** Main → Worker */
 export type WorkerCommand =
   | { type: "init"; config: EmbeddingConfig }
   | { type: "update-config"; indexing: IndexingConfigData }
-  | { type: "index"; token: string; projectPath: string | null; docSections: DocSectionInput[] }
+  | { type: "index"; token: string; projectPath: string | null; docSections: DocSectionInput[]; linkedSources?: LinkedProjectSource[] }
   | { type: "search"; reqId: number; token: string; query: string; topK: number; filter: string }
   | { type: "prefetch"; reqId: number; token: string; query: string; maxTokens: number; minScore: number }
   | { type: "stats"; reqId: number; token: string }
   | { type: "status"; reqId: number; token: string }
-  | { type: "snapshot"; reqId: number; token: string; projectPath: string | null; docTree: any[] }
+  | { type: "snapshot"; reqId: number; token: string; projectPath: string | null; docTree: any[]; linkedSources?: LinkedSnapshotSource[] }
   | { type: "clear"; token: string }
   | { type: "invalidate"; token: string }
   | { type: "invalidate-snapshot"; token: string }
-  | { type: "reindex"; reqId: number; token: string; projectPath: string | null; docSections: DocSectionInput[] }
+  | { type: "reindex"; reqId: number; token: string; projectPath: string | null; docSections: DocSectionInput[]; linkedSources?: LinkedProjectSource[] }
   | { type: "index-update"; reqId: number; token: string;
       projectPath: string | null; codeSinceMs: number;
       changedDocSections: DocSectionInput[]; changedDocIds: string[];
-      deletedFilePaths: string[]; deletedSectionIds: string[] }
+      deletedFilePaths: string[]; deletedSectionIds: string[];
+      linkedSources?: LinkedUpdateSource[] }
   | { type: "get-indexed-ids"; reqId: number; token: string }
   | { type: "load-cache"; token: string; chunks: Array<{ id: string; kind: string; embedding: ArrayBuffer; metadata: string; content?: string }> };
 
@@ -168,7 +191,16 @@ function handleInit(config: EmbeddingConfig): void {
 
 const EMPTY_STATS: SemanticIndexStats = { totalChunks: 0, codeChunks: 0, docChunks: 0, indexSizeBytes: 0, indexingTimeMs: 0 };
 
-async function handleIndex(token: string, projectPath: string | null, docSections: DocSectionInput[]): Promise<void> {
+/** Prefix doc section IDs and paths for linked projects to avoid collisions. */
+function prefixDocSections(prefix: string, sections: DocSectionInput[]): DocSectionInput[] {
+  return sections.map(s => ({
+    ...s,
+    id: `${prefix}::${s.id}`,
+    path: `[${prefix}] ${s.path}`,
+  }));
+}
+
+async function handleIndex(token: string, projectPath: string | null, docSections: DocSectionInput[], linkedSources?: LinkedProjectSource[]): Promise<void> {
   // If indexing is disabled, immediately report empty stats
   if (!indexingConfig.enabled) {
     send({ type: "index:done", token, stats: EMPTY_STATS });
@@ -195,14 +227,26 @@ async function handleIndex(token: string, projectPath: string | null, docSection
   index.setOnProgress(item => send({ type: "index:progress", token, item }));
 
   try {
-    // Index code files (yields between chunks so search can be served)
+    // Index main project code files
     if (projectPath) {
       await index.indexCodeProject(projectPath, yieldFn, opts);
     }
 
-    // Index documentation
+    // Index main project documentation
     if (docSections.length > 0) {
       await index.indexDocSections(docSections, yieldFn, opts.docChunkSize);
+    }
+
+    // Index linked project sources
+    if (linkedSources) {
+      for (const ls of linkedSources) {
+        if (ls.projectPath) {
+          await index.indexCodeProject(ls.projectPath, yieldFn, opts, ls.prefix);
+        }
+        if (ls.docSections.length > 0) {
+          await index.indexDocSections(prefixDocSections(ls.prefix, ls.docSections), yieldFn, opts.docChunkSize);
+        }
+      }
     }
 
     indexedTokens.add(token);
@@ -287,22 +331,35 @@ async function handlePrefetch(reqId: number, token: string, query: string, maxTo
   });
 }
 
-async function handleSnapshot(reqId: number, token: string, projectPath: string | null, docTree: any[]): Promise<void> {
+async function handleSnapshot(reqId: number, token: string, projectPath: string | null, docTree: any[], linkedSources?: LinkedSnapshotSource[]): Promise<void> {
   const cached = snapshotCache.get(token);
   if (cached && (Date.now() - cached.ts) < SNAPSHOT_TTL) {
     send({ type: "snapshot:result", reqId, data: cached.snapshot });
     return;
   }
 
+  const excludedDirs = new Set(indexingConfig.excludedDirs);
+  const codeExts = new Set(indexingConfig.codeExtensions);
+
   let codeTree = "";
   if (projectPath) {
-    codeTree = await generateCodeSnapshot(
-      projectPath,
-      new Set(indexingConfig.excludedDirs),
-      new Set(indexingConfig.codeExtensions),
-    );
+    codeTree = await generateCodeSnapshot(projectPath, excludedDirs, codeExts);
   }
-  const docTreeStr = generateDocSnapshot(docTree);
+  let docTreeStr = generateDocSnapshot(docTree);
+
+  // Append linked project snapshots
+  if (linkedSources) {
+    for (const ls of linkedSources) {
+      if (ls.projectPath) {
+        const linkedCode = await generateCodeSnapshot(ls.projectPath, excludedDirs, codeExts);
+        if (linkedCode) codeTree += `\n\n--- [${ls.prefix}] ---\n${linkedCode}`;
+      }
+      if (ls.docTree?.length) {
+        const linkedDoc = generateDocSnapshot(ls.docTree);
+        if (linkedDoc) docTreeStr += `\n\n--- [${ls.prefix}] ---\n${linkedDoc}`;
+      }
+    }
+  }
 
   const snapshot: ProjectSnapshot = { codeTree, docTree: docTreeStr };
   snapshotCache.set(token, { snapshot, ts: Date.now() });
@@ -341,7 +398,7 @@ function handleInvalidate(token: string): void {
   snapshotCache.delete(token);
 }
 
-async function handleReindex(reqId: number, token: string, projectPath: string | null, docSections: DocSectionInput[]): Promise<void> {
+async function handleReindex(reqId: number, token: string, projectPath: string | null, docSections: DocSectionInput[], linkedSources?: LinkedProjectSource[]): Promise<void> {
   if (!indexingConfig.enabled) {
     send({ type: "reindex:done", reqId, stats: null });
     return;
@@ -365,6 +422,15 @@ async function handleReindex(reqId: number, token: string, projectPath: string |
   try {
     if (projectPath) await index.indexCodeProject(projectPath, yieldFn, opts);
     if (docSections.length > 0) await index.indexDocSections(docSections, yieldFn, opts.docChunkSize);
+
+    // Index linked project sources
+    if (linkedSources) {
+      for (const ls of linkedSources) {
+        if (ls.projectPath) await index.indexCodeProject(ls.projectPath, yieldFn, opts, ls.prefix);
+        if (ls.docSections.length > 0) await index.indexDocSections(prefixDocSections(ls.prefix, ls.docSections), yieldFn, opts.docChunkSize);
+      }
+    }
+
     indexedTokens.add(token);
     sendSaveCache(token);
     send({ type: "reindex:done", reqId, stats: index.getStats() });
@@ -381,6 +447,7 @@ async function handleIndexUpdate(
   codeSinceMs: number,
   changedDocSections: DocSectionInput[], changedDocIds: string[],
   deletedFilePaths: string[], deletedSectionIds: string[],
+  linkedSources?: LinkedUpdateSource[],
 ): Promise<void> {
   if (!indexingConfig.enabled) {
     send({ type: "index-update:done", reqId, stats: { totalChunks: 0, codeChunks: 0, docChunks: 0, indexSizeBytes: 0, indexingTimeMs: 0 } });
@@ -394,24 +461,56 @@ async function handleIndexUpdate(
 
   index.setYieldFn(getYieldFn());
   index.setOnProgress(item => send({ type: "index:progress", token, item }));
+  const opts = toIndexingOptions(indexingConfig);
 
   try {
-    // 1. Remove deleted items
+    // 1. Remove deleted items (main project)
     for (const fp of deletedFilePaths) index.removeFileChunks(fp);
     for (const sid of deletedSectionIds) index.removeSectionChunks(sid);
 
-    // 2. Incremental code re-index (skips files with mtime <= codeSinceMs)
+    // 2. Incremental code re-index (main project)
     if (projectPath && codeSinceMs > 0) {
-      await index.indexCodeProjectIncremental(projectPath, codeSinceMs, toIndexingOptions(indexingConfig));
+      await index.indexCodeProjectIncremental(projectPath, codeSinceMs, opts);
     }
 
-    // 3. Incremental doc re-index
+    // 3. Incremental doc re-index (main project)
     if (changedDocSections.length > 0) {
       await index.indexDocSectionsIncremental(changedDocSections, new Set(changedDocIds));
     }
 
+    // 4. Incremental updates for linked projects
+    if (linkedSources) {
+      for (const ls of linkedSources) {
+        try {
+          // Remove deleted items from linked project
+          for (const fp of ls.deletedFilePaths) index.removeFileChunks(`[${ls.prefix}]/${fp}`);
+          for (const sid of ls.deletedSectionIds) index.removeSectionChunks(`${ls.prefix}::${sid}`);
+
+          // Incremental code re-index for linked project
+          if (ls.projectPath && ls.codeSinceMs > 0) {
+            await index.indexCodeProjectIncremental(ls.projectPath, ls.codeSinceMs, opts, ls.prefix);
+          }
+
+          // Incremental doc re-index for linked project
+          if (ls.changedDocSections.length > 0) {
+            const prefixed = prefixDocSections(ls.prefix, ls.changedDocSections);
+            const prefixedIds = ls.changedDocIds.map(id => `${ls.prefix}::${id}`);
+            await index.indexDocSectionsIncremental(prefixed, new Set(prefixedIds));
+          }
+        } catch (err) {
+          console.warn(`[SemanticWorker] Incremental update for linked project [${ls.prefix}] failed:`, err);
+        }
+      }
+    }
+
     // Persist updated cache (include deleted IDs so main process cleans DB)
     const allDeleted = [...deletedFilePaths, ...deletedSectionIds];
+    if (linkedSources) {
+      for (const ls of linkedSources) {
+        allDeleted.push(...ls.deletedFilePaths.map(fp => `[${ls.prefix}]/${fp}`));
+        allDeleted.push(...ls.deletedSectionIds.map(sid => `${ls.prefix}::${sid}`));
+      }
+    }
     sendSaveCache(token, allDeleted);
 
     send({ type: "index-update:done", reqId, stats: index.getStats() });
@@ -492,7 +591,7 @@ parentPort!.on("message", (msg: WorkerCommand) => {
       }
       break;
     case "index":
-      handleIndex(msg.token, msg.projectPath, msg.docSections)
+      handleIndex(msg.token, msg.projectPath, msg.docSections, msg.linkedSources)
         .catch(err => send({ type: "index:error", token: msg.token, error: String(err) }));
       break;
     case "search":
@@ -504,7 +603,7 @@ parentPort!.on("message", (msg: WorkerCommand) => {
         .catch(err => send({ type: "prefetch:result", reqId: msg.reqId, data: null }));
       break;
     case "snapshot":
-      handleSnapshot(msg.reqId, msg.token, msg.projectPath, msg.docTree)
+      handleSnapshot(msg.reqId, msg.token, msg.projectPath, msg.docTree, msg.linkedSources)
         .catch(err => send({ type: "snapshot:result", reqId: msg.reqId, data: null }));
       break;
     case "stats":
@@ -523,12 +622,13 @@ parentPort!.on("message", (msg: WorkerCommand) => {
       snapshotCache.delete(msg.token);
       break;
     case "reindex":
-      handleReindex(msg.reqId, msg.token, msg.projectPath, msg.docSections)
+      handleReindex(msg.reqId, msg.token, msg.projectPath, msg.docSections, msg.linkedSources)
         .catch(() => send({ type: "reindex:done", reqId: msg.reqId, stats: null }));
       break;
     case "index-update":
       handleIndexUpdate(msg.reqId, msg.token, msg.projectPath, msg.codeSinceMs,
-        msg.changedDocSections, msg.changedDocIds, msg.deletedFilePaths, msg.deletedSectionIds)
+        msg.changedDocSections, msg.changedDocIds, msg.deletedFilePaths, msg.deletedSectionIds,
+        msg.linkedSources)
         .catch(err => send({ type: "index-update:done", reqId: msg.reqId, stats: { totalChunks: 0, codeChunks: 0, docChunks: 0, indexSizeBytes: 0, indexingTimeMs: 0 } }));
       break;
     case "get-indexed-ids":

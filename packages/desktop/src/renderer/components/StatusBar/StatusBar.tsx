@@ -170,6 +170,9 @@ export function StatusBar() {
               <Loader2 size={12} className="status-bar-spinner" />
             )}
             <span className="status-bar-label">{task.label}</span>
+            {!task.finishedAt && task.progress !== undefined && (
+              <span className="status-bar-progress">{Math.round(task.progress * 100)}%</span>
+            )}
             {task.tokens && (() => {
               const tk = task.tokens;
               const cr = tk.cacheRead || 0;

@@ -7,11 +7,11 @@ import {
   List, ListOrdered, ListChecks, Quote, SquareCode, Table2, Minus,
   Link2, Unlink, Underline, Highlighter,
   AlignLeft, AlignCenter, AlignRight,
-  Image, Undo2, Redo2, ClipboardCopy, FileDown,
+  Image, Undo2, Redo2, ClipboardCopy, FileDown, History,
 } from "lucide-react";
 import { VoiceButton } from "../../VoiceButton/VoiceButton.js";
 
-export function EditorToolbar({ editor }: { editor: Editor | null }) {
+export function EditorToolbar({ editor, sectionId, sectionTitle }: { editor: Editor | null; sectionId?: string; sectionTitle?: string }) {
   const t = useT();
   const [linkPopup, setLinkPopup] = useState<{ url: string } | null>(null);
 
@@ -112,6 +112,12 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
         <span className="editor-menu-sep" />
         <MenuBtn onClick={copyDocument} icon={ClipboardCopy} title={t("toolbarCopyDoc")} />
         <MenuBtn onClick={exportPdf} icon={FileDown} title={t("toolbarExportPdf")} />
+        <MenuBtn onClick={() => {
+          const store = useAppStore.getState();
+          const id = sectionId || store.currentSection?.id;
+          const title = sectionTitle || store.currentSection?.title || "";
+          if (id) store.openSnapshotsPanel(id, title);
+        }} icon={History} title={t("sectionHistory")} />
         <span className="editor-menu-sep" />
         <VoiceButton
           onTranscript={(text) => editor.commands.insertContent(text)}

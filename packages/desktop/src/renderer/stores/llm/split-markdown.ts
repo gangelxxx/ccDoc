@@ -47,7 +47,7 @@ export function splitMarkdownIntoSections(markdown: string): SplitSection[] {
       if (!seenH2 && preambleLines.length > 0) {
         const preambleContent = preambleLines.join("\n").trim();
         if (isSubstantive(preambleContent)) {
-          sections.push({ title: "Вступление", content: preambleContent, children: [] });
+          sections.push({ title: "Introduction", content: preambleContent, children: [] });
         }
         preambleLines = [];
       }
@@ -82,5 +82,5 @@ export function splitMarkdownIntoSections(markdown: string): SplitSection[] {
   }
   flushH2();
 
-  return sections.length > 0 ? sections : [{ title: "Содержание", content: markdown, children: [] }];
+  return sections.length > 0 ? sections : [{ title: "Contents", content: markdown, children: [] }];
 }

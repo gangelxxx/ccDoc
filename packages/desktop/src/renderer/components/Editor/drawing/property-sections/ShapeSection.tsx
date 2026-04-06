@@ -1,4 +1,5 @@
 import { BG_COLORS, type SectionProps } from "./shared.js";
+import { useT } from "../../../../i18n.js";
 
 interface ShapeSectionProps extends SectionProps {
   hasShapes: boolean;
@@ -6,12 +7,14 @@ interface ShapeSectionProps extends SectionProps {
 }
 
 export function ShapeSection({ firstEl, updateSelectedProps, hasShapes, hasFill }: ShapeSectionProps) {
+  const t = useT();
+
   return (
     <>
       {/* Fill */}
       {hasFill && (
         <>
-          <div className="drawing-sidebar-label">Фон</div>
+          <div className="drawing-sidebar-label">{t("drawFill")}</div>
           <div className="drawing-sidebar-colors">
             {BG_COLORS.map((c) => (
               <button
@@ -34,7 +37,7 @@ export function ShapeSection({ firstEl, updateSelectedProps, hasShapes, hasFill 
       {/* Roundness (shapes) */}
       {hasShapes && (
         <>
-          <div className="drawing-sidebar-label">Края</div>
+          <div className="drawing-sidebar-label">{t("drawCorners")}</div>
           <div className="drawing-sidebar-row">
             {(["sharp", "round"] as const).map((r) => (
               <button

@@ -16,7 +16,7 @@ function makeEmbedding(values: number[]): Float32Array {
 }
 
 describe("EmbeddingRepo.upsert", () => {
-  it("сохраняет embedding для секции", async () => {
+  it("saves embedding for a section", async () => {
     await insertSection(db, "s1", "Test section");
     const emb = makeEmbedding([0.1, 0.2, 0.3]);
 
@@ -27,7 +27,7 @@ describe("EmbeddingRepo.upsert", () => {
     expect(await repo.count()).toBe(1);
   });
 
-  it("повторный upsert обновляет embedding и hash", async () => {
+  it("repeated upsert updates embedding and hash", async () => {
     await insertSection(db, "s1", "Test section");
     const emb1 = makeEmbedding([0.1, 0.2, 0.3]);
     const emb2 = makeEmbedding([0.4, 0.5, 0.6]);
@@ -42,7 +42,7 @@ describe("EmbeddingRepo.upsert", () => {
 });
 
 describe("EmbeddingRepo.getTextHash", () => {
-  it("возвращает хеш для существующей записи", async () => {
+  it("returns hash for an existing entry", async () => {
     await insertSection(db, "s1", "Test");
     await repo.upsert("s1", makeEmbedding([1, 0]), "abc123");
 
@@ -50,14 +50,14 @@ describe("EmbeddingRepo.getTextHash", () => {
     expect(hash).toBe("abc123");
   });
 
-  it("возвращает null для несуществующей секции", async () => {
+  it("returns null for a nonexistent section", async () => {
     const hash = await repo.getTextHash("nonexistent");
     expect(hash).toBeNull();
   });
 });
 
 describe("EmbeddingRepo.getAll", () => {
-  it("возвращает все embeddings для не-удалённых секций", async () => {
+  it("returns all embeddings for non-deleted sections", async () => {
     await insertSection(db, "s1", "Section 1");
     await insertSection(db, "s2", "Section 2");
     await repo.upsert("s1", makeEmbedding([1, 0]), "h1");
@@ -69,7 +69,7 @@ describe("EmbeddingRepo.getAll", () => {
     expect(ids).toEqual(["s1", "s2"]);
   });
 
-  it("исключает удалённые секции", async () => {
+  it("excludes deleted sections", async () => {
     await insertSection(db, "s-active", "Active");
     await insertSection(db, "s-deleted", "Deleted");
     await repo.upsert("s-active", makeEmbedding([1, 0]), "h1");
@@ -85,7 +85,7 @@ describe("EmbeddingRepo.getAll", () => {
     expect(all[0].section_id).toBe("s-active");
   });
 
-  it("корректно восстанавливает Float32Array из BLOB", async () => {
+  it("correctly restores Float32Array from BLOB", async () => {
     await insertSection(db, "s1", "Section");
     const original = makeEmbedding([0.123, -0.456, 0.789, 1.0]);
     await repo.upsert("s1", original, "h1");
@@ -103,7 +103,7 @@ describe("EmbeddingRepo.getAll", () => {
 });
 
 describe("EmbeddingRepo.delete", () => {
-  it("удаляет запись по section_id", async () => {
+  it("deletes entry by section_id", async () => {
     await insertSection(db, "s1", "Section");
     await repo.upsert("s1", makeEmbedding([1, 0]), "h1");
 
@@ -115,7 +115,7 @@ describe("EmbeddingRepo.delete", () => {
 });
 
 describe("EmbeddingRepo.deleteAll", () => {
-  it("очищает все записи", async () => {
+  it("clears all entries", async () => {
     await insertSection(db, "s1", "A");
     await insertSection(db, "s2", "B");
     await repo.upsert("s1", makeEmbedding([1, 0]), "h1");
@@ -128,7 +128,7 @@ describe("EmbeddingRepo.deleteAll", () => {
 });
 
 describe("EmbeddingRepo.count", () => {
-  it("считает только записи с не-NULL embedding", async () => {
+  it("counts only entries with non-NULL embedding", async () => {
     expect(await repo.count()).toBe(0);
 
     await insertSection(db, "s1", "A");

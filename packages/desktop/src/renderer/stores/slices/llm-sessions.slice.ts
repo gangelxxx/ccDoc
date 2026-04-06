@@ -6,6 +6,7 @@ export interface LlmSessionsSlice {
   saveLlmSession: () => void;
   loadLlmSession: (id: string) => void;
   deleteLlmSession: (id: string) => void;
+  bumpSession: (sessionId: string) => void;
 }
 
 export const createLlmSessionsSlice: SliceCreator<LlmSessionsSlice> = (set, get) => ({
@@ -25,19 +26,21 @@ export const createLlmSessionsSlice: SliceCreator<LlmSessionsSlice> = (set, get)
             ? firstUserMsg.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join(" ")
             : ""))
       : "";
-    const title = titleText.slice(0, 60) || "Сессия";
+    const title = titleText.slice(0, 60) || "Session";
 
     const now = Date.now();
     const id = llmCurrentSessionId || (Date.now().toString(36) + Math.random().toString(36).slice(2, 7));
 
     const existingIdx = llmSessions.findIndex(s => s.id === id);
     const bufferState = get().sessionBuffer;
+    const sessionContext = get().llmSessionContext;
     const session: LlmSession = {
       id,
       title,
       messages: llmMessages,
       tokensUsed: { ...llmTokensUsed },
       buffer: Object.keys(bufferState.entries).length > 0 ? bufferState : undefined,
+      context: sessionContext || undefined,
       createdAt: existingIdx >= 0 ? llmSessions[existingIdx].createdAt : now,
       updatedAt: now,
     };
@@ -84,6 +87,7 @@ export const createLlmSessionsSlice: SliceCreator<LlmSessionsSlice> = (set, get)
       llmCurrentSessionId: id,
       llmCurrentPlan: restoredPlan,
       sessionBuffer: session.buffer || { entries: {}, totalChars: 0 },
+      llmSessionContext: session.context || null,
       llmLoading: false,
       llmAborted: llmLoading, // signal stale engine to exit
       llmWaitingForUser: false,
@@ -91,6 +95,18 @@ export const createLlmSessionsSlice: SliceCreator<LlmSessionsSlice> = (set, get)
       llmPendingOptions: null,
       llmResolveUserInput: null,
     });
+  },
+
+  bumpSession: (sessionId: string) => {
+    const { llmSessions } = get();
+    const idx = llmSessions.findIndex(s => s.id === sessionId);
+    if (idx <= 0) return; // not found or already first
+
+    const session = { ...llmSessions[idx], updatedAt: Date.now() };
+    const updated = [session, ...llmSessions.slice(0, idx), ...llmSessions.slice(idx + 1)];
+
+    set({ llmSessions: updated });
+    window.api.sessionsSave(updated).catch(() => {});
   },
 
   deleteLlmSession: (id) => {

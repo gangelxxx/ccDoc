@@ -4,12 +4,11 @@
 
 import type { SetState, GetState } from "./types.js";
 import { estimateInputTokens } from "../../llm-utils.js";
+import { callTierRaw, extractResponseText } from "../llm-engine.js";
 
 interface CompactParams {
   get: GetState;
   set: SetState;
-  llmApiKey: string;
-  model: string;
   llmTaskId: string;
   llmTaskTokens: { input: number; output: number };
 }
@@ -18,7 +17,7 @@ interface CompactParams {
  * Creates a compactMessages function bound to the current session state.
  */
 export function createCompactMessages(params: CompactParams) {
-  const { get, set, llmApiKey, model, llmTaskId, llmTaskTokens } = params;
+  const { get, set, llmTaskId, llmTaskTokens } = params;
 
   return async function compactMessages(msgs: any[]): Promise<any[]> {
     if (msgs.length <= 4) return msgs; // nothing to compact
@@ -49,17 +48,11 @@ export function createCompactMessages(params: CompactParams) {
       const compactMsgs = [{ role: "user", content: middleText.slice(0, 50000) }];
       const estCompact = estimateInputTokens(compactSystem, compactMsgs);
       get().updateBgTask(llmTaskId, { tokens: { input: llmTaskTokens.input + estCompact, output: llmTaskTokens.output } });
-      const summaryData = await window.api.llmChat({
-        apiKey: llmApiKey,
+      const summaryData = await callTierRaw("chatTier", {
         system: compactSystem,
         messages: compactMsgs,
-        model,
-        maxTokens: 2048,
       });
-      const summaryText = (summaryData.content || [])
-        .filter((b: any) => b.type === "text")
-        .map((b: any) => b.text)
-        .join("\n") || "Summary unavailable.";
+      const summaryText = extractResponseText(summaryData) || "Summary unavailable.";
 
       // Track tokens used for compaction
       if (summaryData.usage) {

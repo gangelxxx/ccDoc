@@ -1,4 +1,4 @@
-import type { LlmConfig, LlmEffort } from "./types.js";
+import type { LlmConfig, LlmEffort, ModelTiersConfig } from "./types.js";
 import { DEFAULT_MODEL } from "../llm-utils.js";
 
 // ─── Effort presets ─────────────────────────────────────────
@@ -62,5 +62,44 @@ export const INITIAL_PASSPORT_CONFIG: LlmConfig = {
 
 export const INITIAL_SUMMARY_CONFIG: LlmConfig = {
   model: DEFAULT_MODEL, effort: "low", maxTokens: 2048, temperature: 0, thinking: false, thinkingBudget: 4000,
+};
+
+export const INITIAL_MODEL_TIERS: ModelTiersConfig = {
+  strong: {
+    providerScript: { type: "builtin", builtinId: "anthropic-oauth" },
+    modelId: "claude-sonnet-4-20250514",
+    baseUrl: "https://api.anthropic.com",
+    apiKey: "",
+    effort: "high",
+    thinking: true,
+    thinkingBudget: 10000,
+    maxTokens: 16384,
+    temperature: 1,
+  },
+  medium: {
+    providerScript: { type: "builtin", builtinId: "anthropic-oauth" },
+    modelId: "claude-sonnet-4-20250514",
+    baseUrl: "https://api.anthropic.com",
+    apiKey: "",
+    effort: "medium",
+    thinking: false,
+    thinkingBudget: 5000,
+    maxTokens: 8192,
+    temperature: 0.7,
+  },
+  weak: {
+    providerScript: { type: "builtin", builtinId: "anthropic-oauth" },
+    modelId: "claude-haiku-4-5-20251001",
+    baseUrl: "https://api.anthropic.com",
+    apiKey: "",
+    effort: "low",
+    thinking: false,
+    thinkingBudget: 2000,
+    maxTokens: 4096,
+    temperature: 0,
+  },
+  chatTier: "medium",
+  passportTier: "weak",
+  summaryTier: "weak",
 };
 
